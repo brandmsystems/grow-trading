@@ -328,3 +328,63 @@ def test_replaying_a_day_twice_gives_the_same_trades(clean_alerts):
         with db.engine().connect() as c:
             out.append([(r[0], r[1]) for r in c.execute(text("SELECT signal_ts, exit_reason FROM live_trades WHERE session_id=:s ORDER BY id"), {"s": eng.session_id})])
     assert out[0] and out[0] == out[1]
+
+
+class CountingBroker(PaperBroker):
+    def __init__(self, market):
+        super().__init__(market)
+        self.calls = 0
+
+    def execute(self, *a, **k):
+        self.calls += 1
+        return super().execute(*a, **k)
+
+
+def _run_until(eng, market, d, pred, step=10):
+    market.clock = datetime.combine(d, time(9, 14))
+    while market.clock <= datetime.combine(d, time(15, 31)):
+        eng.tick()
+        if pred():
+            return True
+        market.clock += timedelta(seconds=step)
+    return False
+
+
+def test_live_manual_confirmation_places_nothing_unless_confirmed():
+    d = date(2025, 6, 11)                                   # a day with two in-window signals
+    m = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(d, time(9, 0)))
+    b = CountingBroker(m)
+    eng = le.Engine(le.EngineConfig(trade_mode="live", exec_mode="ATM_BUY", max_daily_loss=0, max_trades_per_day=100), m, b)
+    assert eng.cfg.order_confirmation == "manual"          # the default
+    eng.start(threaded=False)
+    run_days(eng, m, [d])                                   # nobody confirms
+    assert b.calls == 0 and not live_trades()
+    with db.engine().connect() as c:
+        msgs = [r[0] for r in c.execute(text("SELECT message FROM live_events WHERE session_id=:s"), {"s": eng.session_id})]
+    assert any("waiting for your confirmation" in x for x in msgs)
+    assert any("not confirmed in time" in x for x in msgs)
+
+
+def test_live_confirmed_order_is_placed_and_rejected_is_not():
+    d = date(2025, 6, 11)                                   # a day with two in-window signals
+    m = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(d, time(9, 0)))
+    b = CountingBroker(m)
+    eng = le.Engine(le.EngineConfig(trade_mode="live", exec_mode="ATM_BUY", max_daily_loss=0, max_trades_per_day=100), m, b)
+    eng.start(threaded=False)
+    assert _run_until(eng, m, d, lambda: eng.pending is not None)
+    pid = eng.status()["pending_order"]["id"]
+    with pytest.raises(ValueError):
+        eng.confirm_pending("wrong-id")
+    eng.confirm_pending(pid)
+    assert b.calls == 1 and eng.position is not None and len(live_trades()) == 1
+    eng.square_off_now()
+    assert _run_until(eng, m, d, lambda: eng.pending is not None)
+    eng.reject_pending(eng.pending["id"])
+    assert eng.pending is None and b.calls == 2              # 1 entry + 1 square-off exit; nothing for the rejected one
+
+
+def test_paper_mode_never_waits_for_confirmation():
+    d = date(2025, 6, 11)                                   # a day with two in-window signals
+    eng, market = make({"timeframe": 15}, start_day=d)
+    run_days(eng, market, [d])
+    assert eng.pending is None and live_trades()

@@ -99,6 +99,20 @@ def stop() -> dict:
         return _engine.status()
 
 
+def confirm_order(pid: str) -> dict:
+    if not _engine or _engine.state == "stopped":
+        raise RuntimeError("Engine is not running")
+    _engine.confirm_pending(pid)
+    return _engine.status()
+
+
+def reject_order(pid: str) -> dict:
+    if not _engine or _engine.state == "stopped":
+        raise RuntimeError("Engine is not running")
+    _engine.reject_pending(pid)
+    return _engine.status()
+
+
 def square_off() -> dict:
     if not _engine or _engine.state == "stopped":
         raise RuntimeError("Engine is not running")

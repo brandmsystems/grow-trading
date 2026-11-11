@@ -79,6 +79,25 @@ def live_start():
         return api_error(exc)
 
 
+@bp.post("/api/live/confirm")
+def live_confirm():
+    """Place the live entry order the engine is holding for confirmation. Body: {"id": ...}."""
+    pid = (request.get_json(force=True) or {}).get("id", "")
+    try:
+        return jsonify({"ok": True, "data": live_manager.confirm_order(pid)})
+    except (RuntimeError, ValueError) as exc:
+        return api_error(exc, 409)
+
+
+@bp.post("/api/live/reject")
+def live_reject():
+    pid = (request.get_json(force=True) or {}).get("id", "")
+    try:
+        return jsonify({"ok": True, "data": live_manager.reject_order(pid)})
+    except (RuntimeError, ValueError) as exc:
+        return api_error(exc, 409)
+
+
 @bp.post("/api/live/stop")
 def live_stop():
     try:

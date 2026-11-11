@@ -62,6 +62,7 @@ class EngineConfig:
     signal_mode: str = "cross"         # cross: every crossover | prediction: scored signals only
     strategy: str = "ema_9_21"         # prediction mode: whose crosses are scored
     min_score: float = 50.0            # prediction mode: minimum score to open a trade
+    order_confirmation: str = "manual" # live mode: manual = you confirm each entry order; auto = engine places it
     costs: dict = field(default_factory=lambda: costs.DEFAULT_COSTS.to_dict())
 
     def validate(self) -> "EngineConfig":
@@ -80,6 +81,8 @@ class EngineConfig:
             raise ValueError("lots must be >= 1")
         self.max_daily_loss = float(self.max_daily_loss)
         self.max_trades_per_day = int(self.max_trades_per_day)
+        if self.order_confirmation not in ("manual", "auto"):
+            raise ValueError("order_confirmation must be manual or auto")
         if self.signal_mode not in ("cross", "prediction"):
             raise ValueError("signal_mode must be cross or prediction")
         if self.strategy not in strategies.STRATEGIES:
@@ -121,6 +124,7 @@ class Engine:
         self._regime: tuple[date, object] | None = None
         self._ref_minute: datetime | None = None
         self.last_spot: dict | None = None        # {"ts", "price"} latest NIFTY quote
+        self.pending: dict | None = None          # live entry order waiting for the user's confirmation
         self.conn_error: str | None = None
 
     # ------------------------------------------------------------ logging / persistence
@@ -265,6 +269,10 @@ class Engine:
                 except Exception as exc:
                     self.conn_error = str(exc) or type(exc).__name__
 
+            if self.pending and now > self.pending["expires"]:
+                self.log(f"Order {self.pending['side']} {self.pending['contract'].trading_symbol} was not confirmed "
+                         f"in time: no order placed", "warn")
+                self.pending = None
             if self.position and now.time() >= st.SQUARE_OFF:
                 self._exit("square_off")
             if self.position and self.position.get("stop_ref") is not None:
@@ -472,6 +480,55 @@ class Engine:
             self.log(f"Contract NIFTY {expiry} {int(strike)} {typ} not found; entry skipped", "error")
             return
         qty = self.cfg.lots * c.lot_size
+        if self.cfg.trade_mode == "live" and self.cfg.order_confirmation == "manual":
+            self._propose(now, leg, c, side, qty, strike, typ, expiry, refs)
+            return
+        self._execute_entry(leg, c, side, qty, strike, typ, expiry, refs)
+
+    # ------------------------------------------------------------ manual confirmation (live mode)
+    def _propose(self, now: datetime, leg, c, side, qty, strike, typ, expiry, refs):
+        """Hold a live entry order until the user confirms it; it lapses with the signal."""
+        import uuid
+        dirn = "Bullish" if leg.direction > 0 else "Bearish"
+        try:
+            ltp = round(float(self.market.option_ltp(c)), 2)
+        except Exception:
+            ltp = None
+        self.pending = {"id": uuid.uuid4().hex[:10], "leg": leg, "contract": c, "side": side, "qty": qty,
+                        "strike": strike, "typ": typ, "expiry": expiry, "refs": refs, "ltp": ltp, "created": now,
+                        "expires": leg.entry_ts + timedelta(seconds=self.cfg.stale_entry_sec)}
+        self.log(f"{dirn} signal (bar closed {leg.entry_ts:%H:%M}): {side} {c.trading_symbol} x{qty} is waiting for "
+                 f"your confirmation until {self.pending['expires']:%H:%M:%S}")
+        r = refs or {}
+        self._alert(f"{side} {typ}", leg.entry_ts, direction=dirn, nifty=round(leg.signal_close, 2), strike=strike,
+                    opt_type=typ, symbol=c.trading_symbol, expiry=expiry.isoformat(), qty=qty, entry_price=ltp,
+                    status="awaiting your confirmation", stop=r.get("stop_ref"), target=r.get("target_ref"),
+                    score=r.get("score"))
+
+    def confirm_pending(self, pid: str) -> None:
+        with self._lock:
+            p = self.pending
+            if not p or p["id"] != pid:
+                raise ValueError("That order is no longer waiting for confirmation.")
+            now = self.market.now()
+            if now > p["expires"]:
+                self.pending = None
+                raise ValueError("The signal expired before you confirmed: no order was placed.")
+            if self.state in ("halted", "error") or self.position:
+                self.pending = None
+                raise ValueError("The engine can't enter now (halted, error or a position is open). No order placed.")
+            self.pending = None
+            self.log(f"You confirmed {p['side']} {p['contract'].trading_symbol} x{p['qty']}")
+            self._execute_entry(p["leg"], p["contract"], p["side"], p["qty"], p["strike"], p["typ"], p["expiry"], p["refs"])
+
+    def reject_pending(self, pid: str) -> None:
+        with self._lock:
+            if self.pending and self.pending["id"] == pid:
+                self.log(f"You rejected {self.pending['side']} {self.pending['contract'].trading_symbol}: no order placed")
+                self.pending = None
+
+    def _execute_entry(self, leg, c, side, qty, strike, typ, expiry, refs=None):
+        dirn = "Bullish" if leg.direction > 0 else "Bearish"
         self.log(f"{dirn} crossover (bar closed {leg.entry_ts:%H:%M}, NIFTY {leg.signal_close:.2f}) → "
                  f"{side} {c.trading_symbol} x{qty}")
         try:
@@ -590,13 +647,21 @@ class Engine:
                        "ltp": ltp, "mtm": self._pnl(p, ltp)["net"] if ltp else None,
                        "exit_failures": self.exit_failures, "score": p.get("score"),
                        "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref")}
+            pend = None
+            if self.pending:
+                q = self.pending
+                pend = {"id": q["id"], "side": q["side"], "trading_symbol": q["contract"].trading_symbol,
+                        "strike": q["strike"], "opt_type": q["typ"], "expiry": q["expiry"].isoformat(), "qty": q["qty"],
+                        "ltp": q["ltp"], "nifty": round(q["leg"].signal_close, 2),
+                        "signal_ts": q["leg"].entry_ts.isoformat(), "expires": q["expires"].isoformat(),
+                        "stop_ref": (q["refs"] or {}).get("stop_ref"), "target_ref": (q["refs"] or {}).get("target_ref")}
             nxt = self._next_bar_close(self.processed_until) if self.day else None
             return {
                 "state": self.state, "halt_reason": self.halt_reason, "session_id": self.session_id,
                 "config": asdict(self.cfg), "now": self.market.now().isoformat(),
                 "day": self.day.isoformat() if self.day else None,
                 "next_eval": nxt.isoformat() if nxt else None,
-                "last_eval": self.last_eval, "position": pos,
+                "last_eval": self.last_eval, "position": pos, "pending_order": pend,
                 "trades_today": self.trades_today, "realised_today": round(self.realised_today, 2),
                 "nifty": {"price": self.last_spot["price"], "ts": self.last_spot["ts"].isoformat()} if self.last_spot else None,
                 "conn_error": self.conn_error,
