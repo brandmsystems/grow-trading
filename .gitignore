@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+keys.txt
+.token_cache.json
+*.log
+data/
+.pytest_cache/

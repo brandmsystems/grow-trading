@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>9/21 EMA Backtester</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<script>try{const t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">9/21</span> EMA Crossover <span class="muted">· NIFTY options</span></div>
+  <nav><a href="/" class="active">Backtest</a><a href="/live">Live / Paper</a><a href="/account">Account</a></nav>
+  <span class="spacer"></span>
+  <span id="datasetBadge" class="badge"></span>
+  <button id="settingsBtn" class="btn">Settings</button>
+  <button id="themeBtn" class="btn icon" aria-label="Toggle light/dark theme">◐</button>
+</header>
+
+<!-- Settings drawer -->
+<aside id="drawer" class="drawer" aria-hidden="true">
+  <div class="drawer-head"><h2>Run settings</h2><button class="btn icon" id="drawerClose" aria-label="Close">✕</button></div>
+  <div class="drawer-body">
+    <label>Dataset
+      <select id="p_dataset">
+        <option value="groww">Groww: real market data</option>
+        <option value="synthetic">Synthetic demo data (not real)</option>
+      </select>
+    </label>
+    <p class="hint" id="datasetInfo"></p>
+    <div class="row2">
+      <label>From<input type="date" id="p_start_date"></label>
+      <label>To<input type="date" id="p_end_date"></label>
+    </div>
+    <label class="check"><input type="checkbox" id="p_roll_on_expiry_day"> Roll to next expiry on expiry day (avoid 0-DTE)</label>
+    <div class="row2">
+      <label>Lot size<input type="number" id="p_lot_size" min="1"></label>
+      <label>Lots<input type="number" id="p_lots" min="1"></label>
+    </div>
+    <label>Starting capital (for drawdown %)<input type="number" id="p_capital" min="1"></label>
+    <h3>Friction</h3>
+    <div class="row2">
+      <label>Slippage %<input type="number" step="0.01" id="c_slippage_pct" data-scale="100"></label>
+      <label>Slippage pts<input type="number" step="0.05" id="c_slippage_pts"></label>
+    </div>
+    <div class="row2">
+      <label>Brokerage / order ₹<input type="number" step="1" id="c_brokerage_per_order"></label>
+      <label>STT on sell %<input type="number" step="0.001" id="c_stt_sell_pct" data-scale="100"></label>
+    </div>
+    <div class="row2">
+      <label>Exchange txn %<input type="number" step="0.00001" id="c_exchange_pct" data-scale="100"></label>
+      <label>SEBI ₹ / crore<input type="number" step="1" id="c_sebi_per_crore"></label>
+    </div>
+    <div class="row2">
+      <label>Stamp duty (buy) %<input type="number" step="0.0001" id="c_stamp_buy_pct" data-scale="100"></label>
+      <label>GST %<input type="number" step="1" id="c_gst_pct" data-scale="100"></label>
+    </div>
+    <p class="hint">Verify charge rates against your latest Groww contract note; they change with exchange and budget revisions.</p>
+  </div>
+  <div class="drawer-foot">
+    <button class="btn" id="downloadBtn">Download / refresh data</button>
+    <button class="btn primary" id="runBtn">Run backtest</button>
+  </div>
+</aside>
+<div id="scrim" class="scrim"></div>
+
+<main>
+  <!-- Filter bar -->
+  <section class="filters" aria-label="Filters">
+    <div class="fgroup"><span class="flabel">Timeframe</span><div class="seg" id="f_tf"></div></div>
+    <div class="fgroup"><span class="flabel">Entry from</span><select id="f_start"></select></div>
+    <div class="fgroup"><span class="flabel">Time cut</span><select id="f_cutoff"></select></div>
+    <div class="fsep"></div>
+    <div class="fgroup"><span class="flabel">Mode</span><div class="seg" id="f_mode"></div></div>
+    <div class="fgroup"><span class="flabel">Outcome</span>
+      <select id="f_outcome"><option value="all">All</option><option value="win">Winners</option><option value="loss">Losers</option></select></div>
+    <div class="fgroup"><span class="flabel">Cross #</span>
+      <select id="f_ordinal"><option value="all">All</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th+</option></select></div>
+    <div class="fgroup"><span class="flabel">Exit</span>
+      <select id="f_exit"><option value="all">All</option><option value="opposite_cross">Opposite cross</option><option value="square_off">15:00 square-off</option><option value="open">Still open</option><option value="whipsaw">Whipsaws only</option></select></div>
+  </section>
+
+  <div id="banner" class="banner" role="alert"></div>
+  <div id="progress" class="progress" hidden><div class="pbar"><div id="pfill"></div></div><span id="pmsg"></span></div>
+
+  <!-- Empty state -->
+  <section id="empty" class="empty" hidden>
+    <h2 id="emptyTitle">No results yet</h2>
+    <p id="emptyMsg"></p>
+    <div class="empty-actions"><button class="btn" id="emptyDownload">Download data</button><button class="btn primary" id="emptyRun">Run backtest</button></div>
+  </section>
+
+  <div id="content" hidden>
+    <!-- KPI row -->
+    <section class="kpis" id="kpis"></section>
+    <section class="kpis small" id="kpis2"></section>
+
+    <!-- Mode comparison -->
+    <section class="card compare">
+      <div class="card-head"><h2>Execution modes compared</h2><span class="muted" id="runInfo"></span></div>
+      <div class="compare-body">
+        <div class="table-wrap"><table id="compareTable"></table></div>
+        <div class="equity"><div class="legend" id="eqLegend"></div><div id="equityChart" class="chart-sm"></div></div>
+      </div>
+    </section>
+
+    <!-- Trade viewer -->
+    <section class="viewer">
+      <div class="card list">
+        <div class="card-head"><h2>Trades <span class="muted" id="listCount"></span></h2><span class="kbd-hint"><kbd>↑</kbd><kbd>↓</kbd></span></div>
+        <div id="tradeList" class="trade-list" tabindex="0" role="listbox" aria-label="Trades"></div>
+      </div>
+      <div class="detail">
+        <div class="card meta" id="metaBar"></div>
+        <div class="card chart-card">
+          <div class="card-head"><h2>NIFTY spot <span class="muted" id="spotTf"></span></h2>
+            <div class="legend"><span class="sw s1"></span>EMA 9 <span class="sw s2"></span>EMA 21</div></div>
+          <div id="spotChart" class="chart"></div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-head"><h2>Option premium <span class="muted" id="optSym"></span></h2><span class="muted">1-minute</span></div>
+          <div id="optChart" class="chart-sm"></div>
+        </div>
+        <div class="card" id="costCard"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <details><summary><h2>No-trade days &amp; skipped trades <span class="muted" id="ntCount"></span></h2></summary>
+        <div class="nt-grid"><div id="noTradeList"></div><div id="skippedList"></div></div>
+      </details>
+    </section>
+  </div>
+</main>
+
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

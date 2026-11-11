@@ -1,0 +1,6 @@
+# Copy this file to keys.txt and fill in your Groww TOTP credentials.
+# Get them from Groww: Profile > Settings > Trading APIs > Generate TOTP token.
+API_KEY=paste-your-totp-api-key-here
+TOTP_SECRET=paste-your-totp-secret-here
+# Or, for an approval-type key, use this line instead of TOTP_SECRET:
+# API_SECRET=paste-your-api-secret-here
