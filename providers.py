@@ -1,7 +1,8 @@
-"""Data providers: real Groww data and a clearly-labelled synthetic demo dataset.
+"""Data providers: real Groww data, and a synthetic dataset used only by automated tests.
 
 Both write into the same Postgres tables but under different symbol namespaces,
 so synthetic data can never be mistaken for (or mixed with) real market data.
+The web app refuses the synthetic dataset.
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ def _first_list(resp) -> list:
     return []
 
 
-def parse_candles(resp) -> pd.DataFrame:
+def parse_candles(resp, dedupe: bool = True) -> pd.DataFrame:
     """Normalise Groww candle rows [ts, o, h, l, c, v, (oi)] to an IST-naive DataFrame."""
     rows = _first_list(resp)
     out = []
@@ -64,11 +65,14 @@ def parse_candles(resp) -> pd.DataFrame:
     df = pd.DataFrame(out, columns=["ts", "open", "high", "low", "close", "volume", "oi"])
     if not df.empty:
         df["ts"] = pd.to_datetime(df["ts"])
-        df = df.drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
+        if dedupe:
+            df = df.drop_duplicates("ts")
+        df = df.sort_values("ts").reset_index(drop=True)
     return df
 
 
 OPT_RE = re.compile(r"-(\d+(?:\.\d+)?)-(CE|PE)$", re.I)
+EXPIRY_RE = re.compile(r"-(\d{2}[A-Za-z]{3}\d{2})-")
 
 
 class Provider:
@@ -96,7 +100,6 @@ class GrowwProvider(Provider):
     spot_symbol = "NSE-NIFTY"
     EXCHANGE = "NSE"
     REQ_GAP = 0.12          # seconds between API calls (stay well under rate limits)
-    SPOT_CHUNK_DAYS = 7
 
     def __init__(self):
         import groww_client
@@ -104,50 +107,38 @@ class GrowwProvider(Provider):
         self._last = 0.0
 
     def _call(self, fn, **kw):
-        wait = self.REQ_GAP - (_time.monotonic() - self._last)
-        if wait > 0:
-            _time.sleep(wait)
-        try:
-            return self._gc.call(fn, timeout=20, **kw)
-        finally:
-            self._last = _time.monotonic()
+        import data_manager
+        for attempt in range(1, 4):
+            wait = self.REQ_GAP - (_time.monotonic() - self._last)
+            if wait > 0:
+                _time.sleep(wait)
+            try:
+                return self._gc.call(fn, timeout=20, **kw)
+            except Exception as exc:
+                # Permission and bad-request errors won't change on retry.
+                if data_manager._fatal(exc) or "400" in str(exc) or attempt == 3:
+                    raise
+                log.warning("%s failed (attempt %d): %s", fn, attempt, exc)
+                _time.sleep(2 ** attempt)
+            finally:
+                self._last = _time.monotonic()
 
-    def _candles(self, segment: str, symbol: str, a: datetime, b: datetime) -> pd.DataFrame:
+    def _candles(self, segment: str, symbol: str, a: datetime, b: datetime, dedupe: bool = True) -> pd.DataFrame:
         resp = self._call("get_historical_candles", exchange=self.EXCHANGE, segment=segment,
                           groww_symbol=symbol, start_time=a.strftime("%Y-%m-%d %H:%M:%S"),
                           end_time=b.strftime("%Y-%m-%d %H:%M:%S"), candle_interval="1minute")
-        return parse_candles(resp)
+        return parse_candles(resp, dedupe=dedupe)
 
     def ensure_spot(self, start: date, end: date, progress=None) -> dict:
-        d = start
-        total_rows = 0
-        chunks = max(1, math.ceil(((end - start).days + 1) / self.SPOT_CHUNK_DAYS))
-        i = 0
-        while d <= end:
-            chunk_end = min(end, d + timedelta(days=self.SPOT_CHUNK_DAYS - 1))
-            days = [d + timedelta(days=k) for k in range((chunk_end - d).days + 1)]
-            need = [x for x in days if x.weekday() < 5 and
-                    (x >= date.today() - timedelta(days=1) or not db.fetched(self.spot_symbol, x))]
-            if need:
-                df = self._candles("CASH", self.spot_symbol,
-                                   datetime.combine(d, time(9, 15)), datetime.combine(chunk_end, time(15, 30)))
-                db.upsert_candles(self.spot_symbol, df)
-                total_rows += len(df)
-                counts = df.groupby(df["ts"].dt.date).size().to_dict() if not df.empty else {}
-                for x in days:
-                    if x.weekday() < 5 and x < date.today():
-                        db.mark_fetched(self.spot_symbol, x, int(counts.get(x, 0)))
-            i += 1
-            if progress:
-                progress(i / chunks, f"NIFTY spot {d:%d %b} – {chunk_end:%d %b %Y}")
-            d = chunk_end + timedelta(days=1)
-        return {"rows": total_rows}
+        import data_manager
+        return data_manager.download(start, end, fetch=lambda seg, sym, a, b: self._candles(seg, sym, a, b, dedupe=False),
+                                     progress=progress, symbol=self.spot_symbol)
 
     def ensure_expiries(self, start: date, end: date) -> list[date]:
         have = set(db.load_expiries(self.dataset))
         months = set()
         d = date(start.year, start.month, 1)
-        last = end + timedelta(days=45)
+        last = min(end + timedelta(days=45), date(date.today().year, 12, 31))   # Groww rejects future years
         while d <= last:
             months.add((d.year, d.month))
             d = (d + timedelta(days=32)).replace(day=1)
@@ -170,16 +161,33 @@ class GrowwProvider(Provider):
                 if m:
                     rows.append((s, expiry, float(m.group(1)), m.group(2).upper()))
             db.save_contracts(self.dataset, rows)
-        return db.find_contract(self.dataset, expiry, strike, typ)
+        # Groww's list for an expired expiry can miss strikes that did trade; their candles
+        # are still served under the standard name. If none exist, the trade is skipped.
+        return (db.find_contract(self.dataset, expiry, strike, typ)
+                or f"NSE-NIFTY-{expiry:%d%b%y}-{int(strike)}-{typ}")
 
     def ensure_option_day(self, symbol: str, day: date) -> None:
+        """Fetch the contract from `day` to its expiry (up to 30 days) in one request.
+
+        A weekly contract is usually needed on several days, so this is one call per
+        contract instead of one per day. Only regular-session candles are stored.
+        """
         if db.fetched(symbol, day):
             return
-        df = self._candles("FNO", symbol, datetime.combine(day, time(9, 15)),
-                           datetime.combine(day, time(15, 30)))
+        m = EXPIRY_RE.search(symbol)
+        expiry = datetime.strptime(m.group(1), "%d%b%y").date() if m else day
+        today = date.today()
+        last = min(max(expiry, day), day + timedelta(days=29), today)
+        df = self._candles("FNO", symbol, datetime.combine(day, time(9, 15)), datetime.combine(last, time(15, 30)))
+        if not df.empty:
+            df = df[df["ts"].dt.time.between(time(9, 15), time(15, 29)) & (df["ts"] + pd.Timedelta(minutes=1) <= datetime.now())]
         db.upsert_candles(symbol, df)
-        if day < date.today():
-            db.mark_fetched(symbol, day, len(df))
+        counts = df.groupby(df["ts"].dt.date).size().to_dict() if not df.empty else {}
+        d = day
+        while d <= last:
+            if d.weekday() < 5 and d < today:
+                db.mark_fetched(symbol, d, int(counts.get(d, 0)))
+            d += timedelta(days=1)
 
 
 # ====================================================================== Synthetic

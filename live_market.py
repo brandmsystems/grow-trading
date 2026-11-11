@@ -55,7 +55,8 @@ def _completed(df: pd.DataFrame, now: datetime) -> pd.DataFrame:
 
 # ====================================================================== Groww
 class GrowwMarket:
-    HISTORY_DAYS = 12
+    HISTORY_DAYS = 40      # enough for the slowest indicator to settle
+    spot_symbol = "NSE-NIFTY"
 
     def __init__(self):
         import groww_client
@@ -65,6 +66,7 @@ class GrowwMarket:
         self._hist: tuple[date, pd.DataFrame] | None = None
         self._exp: tuple[date, list[date]] | None = None
         self._instr: tuple[date, pd.DataFrame] | None = None
+        self._fut: tuple[date, str | None, pd.DataFrame] | None = None
 
     def now(self) -> datetime:
         return datetime.now(IST).replace(tzinfo=None, microsecond=0)
@@ -93,6 +95,25 @@ class GrowwMarket:
         today = _completed(today, now)
         if not today.empty:
             db.upsert_candles(self._prov.spot_symbol, today)
+        return pd.concat([hist, today], ignore_index=True)
+
+    def futures_1m(self, day: date) -> pd.DataFrame:
+        """Near-month NIFTY futures: stored history + today's completed candles (VWAP, volume)."""
+        import data_manager
+        if not (self._fut and self._fut[0] == day):
+            exps = data_manager.monthly_expiries(day - timedelta(days=45), day + timedelta(days=45))
+            front = next((e for e in exps if e > day), None)
+            data_manager.download_futures(day - timedelta(days=self.HISTORY_DAYS), day - timedelta(days=1))
+            hist = data_manager.futures_1m(day - timedelta(days=self.HISTORY_DAYS), day - timedelta(days=1))
+            self._fut = (day, data_manager.fut_symbol(front) if front else None, hist)
+        _, sym, hist = self._fut
+        if not sym:
+            return hist
+        now = self.now()
+        today = self._prov._candles("FNO", sym, datetime.combine(day, time(9, 15)), min(now, datetime.combine(day, time(15, 30))))
+        today = _completed(today, now)
+        if not today.empty:
+            today = today[today["ts"].dt.time.between(time(9, 15), time(15, 29))]
         return pd.concat([hist, today], ignore_index=True)
 
     # -------------------------------------------------- quotes
@@ -249,7 +270,9 @@ class ReplayMarket:
         self.history_from = history_from
         self.clock = start
         self._spot: pd.DataFrame | None = None
+        self._fut: pd.DataFrame | None = None
         self._opt: dict[str, pd.DataFrame] = {}
+        self.spot_symbol = self.prov.spot_symbol
 
     def now(self) -> datetime:
         return self.clock
@@ -267,6 +290,16 @@ class ReplayMarket:
         df = self._all_spot()
         return _completed(df[df["ts"] < datetime.combine(day + timedelta(days=1), time(0))], self.clock)
 
+    def futures_1m(self, day: date) -> pd.DataFrame:
+        if self._fut is None:
+            import data_manager
+            self._fut = (data_manager.futures_1m(self.history_from, self.clock.date() + timedelta(days=1))
+                         if self.prov.dataset == "groww" else pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume", "oi"]))
+        df = self._fut
+        if df.empty:
+            return df
+        return _completed(df[df["ts"] < datetime.combine(day + timedelta(days=1), time(0))], self.clock)
+
     def _minute_open(self, df: pd.DataFrame) -> float:
         m = pd.Timestamp(self.clock).floor("min")
         row = df[df["ts"] >= m].head(1)
@@ -276,8 +309,11 @@ class ReplayMarket:
         return float(row["open"].iloc[0])
 
     def spot_ltp(self) -> float:
-        df = self._all_spot()
-        return self._minute_open(df[df["ts"].dt.date == self.clock.date()])
+        day = self.clock.date()
+        if getattr(self, "_spot_day", (None,))[0] != day:
+            df = self._all_spot()
+            self._spot_day = (day, df[df["ts"].dt.date == day])
+        return self._minute_open(self._spot_day[1])
 
     def option_ltp(self, c: Contract) -> float:
         sym, day = c.groww_symbol, self.clock.date()

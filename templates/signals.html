@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='research.css') }}">
+<script>try{const t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">9/21</span> EMA Crossover <span class="muted">· NIFTY options</span></div>
+  <nav><a href="/">Backtest</a><a href="/compare">Compare</a><a href="/signals" class="active">Signals</a><a href="/live">Live / Paper</a><a href="/data">Data</a><a href="/history">History</a><a href="/account">Account</a></nav>
+  <span class="spacer"></span>
+  <button id="themeBtn" class="btn icon" aria-label="Toggle light/dark theme">◐</button>
+</header>
+<main>
+  <section class="filters">
+    <div class="fgroup"><label class="flabel" for="f_strategy">Strategy</label><select id="f_strategy"></select></div>
+    <div class="fgroup"><span class="flabel">Timeframe</span><div class="seg" id="f_tf"></div></div>
+    <div class="fgroup"><span class="flabel">Analysis</span><button class="btn primary" id="buildBtn">Build / refresh</button></div>
+  </section>
+  <div id="banner" class="banner" role="alert"></div>
+  <div id="progress" class="progress" hidden><div class="pbar"><div id="pfill"></div></div><span id="ptext"></span></div>
+  <section id="empty" class="empty" hidden><h2>No analysis yet</h2><p>Build the analysis for this strategy and timeframe. It takes a few seconds.</p></section>
+
+  <div id="content" hidden>
+    <section class="kpis" id="kpis"></section>
+    <div class="sig-grid">
+      <section class="card" id="detail"></section>
+      <section class="card">
+        <div class="card-head"><h2>Confidence vs actual outcomes</h2><span class="muted">out-of-sample only</span></div>
+        <div class="bars" id="relBars"></div>
+        <div class="table-wrap"><table class="matrix" id="bands"></table></div>
+        <p class="hint pad" id="calNote"></p>
+      </section>
+    </div>
+    <section class="card">
+      <div class="card-head"><h2>Signal history <span class="muted" id="sigCount"></span></h2><span class="muted">newest first · select a row for details</span></div>
+      <div class="table-wrap" style="max-height:480px;overflow-y:auto"><table class="matrix" id="sigTable"></table></div>
+    </section>
+    <div class="two-col">
+      <section class="card"><div class="card-head"><h2>Walk-forward folds</h2></div><div class="table-wrap"><table class="matrix" id="folds"></table></div></section>
+      <section class="card"><div class="card-head"><h2>What drives the score</h2><span class="muted">model trained on all labelled signals</span></div><div class="table-wrap"><table class="matrix" id="weights"></table></div></section>
+    </div>
+    <section class="card">
+      <div class="card-head"><h2>How the score works</h2></div>
+      <ul class="notes">
+        <li><b>Outcome:</b> a signal is a hit if NIFTY reaches the target (2 × ATR) before the stop (1 × ATR), between the signal bar's close and 15:00. A minute touching both counts as a stop.</li>
+        <li><b>Score:</b> a logistic model of the indicators. Every year is scored by a model trained only on earlier years, so the hit rates shown are out-of-sample.</li>
+        <li><b>The score is not a guaranteed probability.</b> Compare it with the hit rate actually achieved in its band. Bands with few signals are unreliable.</li>
+        <li><b>Strong alert:</b> score of at least 70, at least 3 supporting indicators, and at least 30 past signals in that band. Each signal appears once, so it can't repeat.</li>
+        <li><b>Not used:</b> option-chain OI, IV and Greeks. Groww has no historical option-chain snapshots, so they can't be tested against past outcomes.</li>
+      </ul>
+    </section>
+  </div>
+</main>
+<script src="{{ url_for('static', filename='signals.js') }}"></script>
+</body>
+</html>

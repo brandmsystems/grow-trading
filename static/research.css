@@ -1,0 +1,50 @@
+/* Compare and Signals pages */
+.pad{padding:12px 14px}
+.two-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.chart-md{height:300px;position:relative}
+.matrix{font-size:12px;min-width:640px}
+.matrix th{font-weight:500;color:var(--muted);padding:8px 10px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap}
+.matrix th:first-child,.matrix td:first-child{text-align:left}
+.matrix td{padding:7px 10px;border-bottom:1px solid var(--border);text-align:right;vertical-align:top;white-space:nowrap}
+.matrix tr:last-child td{border-bottom:0}
+.matrix .sub{display:block;font-size:11px;color:var(--muted)}
+.matrix td.cell{cursor:pointer}
+.matrix td.cell:hover{background:var(--surface-2)}
+.matrix td.best{box-shadow:inset 0 0 0 2px var(--accent)}
+.matrix td.missing{color:var(--muted)}
+.matrix input[type=checkbox]{min-height:auto;margin:0 6px 0 0;vertical-align:-2px}
+.matrix .lbl{font-weight:600;color:var(--text)}
+.bars{padding:10px 14px 14px;display:flex;flex-direction:column;gap:8px}
+.bar-row{display:grid;grid-template-columns:150px minmax(0,1fr) 84px;gap:10px;align-items:center;font-size:12px}
+.bar-row .name{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-row .track{height:12px;background:var(--surface-2);border-radius:4px;position:relative}
+.bar-row .fill{position:absolute;inset:0 auto 0 0;border-radius:0 4px 4px 0;background:var(--s1)}
+.bar-row .fill.dd{background:var(--loss)}
+.bar-row .mark{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text)}
+.bar-row .val{text-align:right;font-family:"JetBrains Mono",monospace}
+.notes{margin:0;padding:12px 14px 14px 32px;color:var(--text-2);font-size:13px;line-height:1.6}
+.sw.s1{background:var(--s1)} .sw.s2{background:var(--s2)} .sw.s3{background:var(--s3)} .sw.s4{background:var(--s4)}
+.legend .sw{width:10px;height:10px;border-radius:3px;display:inline-block;margin:0 4px 0 10px;vertical-align:-1px}
+/* signals */
+.sig-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:12px}
+.sig-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border)}
+.call{font-weight:700;font-size:18px}
+.call.bull{color:var(--gain)} .call.bear{color:var(--loss)} .call.flat{color:var(--text-2)}
+.score{font-family:"JetBrains Mono",monospace;font-size:18px;font-weight:600}
+.cat{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--text-2)}
+.cat.c50{background:var(--accent-soft);color:var(--accent)} .cat.c70{background:var(--gain-soft);color:var(--gain)} .cat.c85{background:var(--gain);color:#fff}
+.refs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid var(--border)}
+.refs div{padding:10px 14px;border-right:1px solid var(--border)} .refs div:last-child{border-right:0}
+.refs .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.refs .v{font-family:"JetBrains Mono",monospace;font-weight:600}
+.ind{list-style:none;margin:0;padding:6px 14px 12px}
+.ind li{display:grid;grid-template-columns:22px 130px minmax(0,1fr);gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px}
+.ind li:last-child{border-bottom:0}
+.ind .y{color:var(--gain);font-weight:700} .ind .n{color:var(--loss);font-weight:700} .ind .z{color:var(--muted)}
+.reason{padding:10px 14px;color:var(--text-2);font-size:13px;border-bottom:1px solid var(--border)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;padding:10px 14px;font-size:13px}
+.kv dt{color:var(--muted)} .kv dd{margin:0}
+#sigTable tbody tr{cursor:pointer} #sigTable tbody tr:hover{background:var(--surface-2)} #sigTable tbody tr.sel{background:var(--accent-soft)}
+.o-hit{color:var(--gain)} .o-miss{color:var(--loss)} .o-pending,.o-not{color:var(--muted)}
+@media (max-width:1000px){.two-col,.sig-grid{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:640px){.refs{grid-template-columns:repeat(2,minmax(0,1fr))}.bar-row{grid-template-columns:110px minmax(0,1fr) 70px}}

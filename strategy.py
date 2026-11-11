@@ -64,9 +64,9 @@ def add_emas(bars: pd.DataFrame) -> pd.DataFrame:
     return bars
 
 
-def find_crosses(bars: pd.DataFrame) -> pd.DataFrame:
+def find_crosses(bars: pd.DataFrame, fast: str = "ema9", slow: str = "ema21") -> pd.DataFrame:
     """Return the cross bars with a `direction` column (+1 bullish, -1 bearish)."""
-    diff = bars["ema9"] - bars["ema21"]
+    diff = bars[fast] - bars[slow]
     sign = np.sign(diff).replace(0, np.nan).ffill()
     prev = sign.shift(1)
     is_cross = sign.notna() & prev.notna() & (sign != prev)
@@ -94,13 +94,16 @@ def _t(ts) -> time:
     return pd.Timestamp(ts).time()
 
 
-def generate_legs(bars: pd.DataFrame, trade_days: set[date], start: time, cutoff: time) -> tuple[list[Leg], dict[date, str]]:
+def generate_legs(bars: pd.DataFrame, trade_days: set[date], start: time, cutoff: time,
+                  fast: str = "ema9", slow: str = "ema21", confirm: bool = False) -> tuple[list[Leg], dict[date, str]]:
     """Walk crosses day by day and build the trade sequence.
 
     `bars` must already contain EMAs (computed with warm-up history).
+    With `confirm`, a cross opens a trade only if the bar's `bull_ok`/`bear_ok` column
+    agrees; an unconfirmed cross still exits an open opposite trade.
     Returns (legs, no_trade_reasons) for days in `trade_days`.
     """
-    crosses = find_crosses(bars)
+    crosses = find_crosses(bars, fast, slow)
     bar_close_index = {pd.Timestamp(t): i for i, t in enumerate(bars["close_ts"])}
     legs: list[Leg] = []
     no_trade: dict[date, str] = {}
@@ -109,6 +112,7 @@ def generate_legs(bars: pd.DataFrame, trade_days: set[date], start: time, cutoff
         day_crosses = by_day.get(d)
         open_leg: Leg | None = None
         ordinal = 0
+        unconfirmed = 0
         day_legs: list[Leg] = []
         if day_crosses is not None:
             for _, cx in day_crosses.iterrows():
@@ -122,7 +126,10 @@ def generate_legs(bars: pd.DataFrame, trade_days: set[date], start: time, cutoff
                     open_leg = None
                 if in_window:
                     ordinal += 1
-                    if open_leg is None:
+                    ok = not confirm or bool(cx["bull_ok"] if cx["direction"] > 0 else cx["bear_ok"])
+                    if not ok:
+                        unconfirmed += 1
+                    if open_leg is None and ok:
                         open_leg = Leg(day=d, direction=int(cx["direction"]),
                                        entry_ts=pd.Timestamp(cx["close_ts"]).to_pydatetime(),
                                        signal_close=float(cx["close"]),
@@ -142,7 +149,8 @@ def generate_legs(bars: pd.DataFrame, trade_days: set[date], start: time, cutoff
                 leg.bars_held = int((pd.Timestamp(leg.exit_ts) - pd.Timestamp(leg.entry_ts)) / tf)
         legs.extend(day_legs)
         if not day_legs:
-            no_trade[d] = "No crossover inside the entry window"
+            no_trade[d] = (f"{unconfirmed} crossover(s) in the window, none confirmed" if unconfirmed
+                           else "No crossover inside the entry window")
     return legs, no_trade
 
 
@@ -179,12 +187,24 @@ def option_for(mode: str, direction: int, spot: float, step: int = STRIKE_STEP) 
     return strike, typ, side
 
 
-def pick_expiry(day: date, expiries: list[date], roll_on_expiry_day: bool = True) -> date | None:
-    """Nearest expiry on/after `day`; on expiry day itself optionally roll to the next one."""
-    for e in sorted(expiries):
-        if e > day or (e == day and not roll_on_expiry_day):
-            return e
-    return None
+EXPIRY_RULES = {"nearest": "Nearest weekly", "next": "Next weekly", "monthly": "Nearest monthly"}
+
+
+def pick_expiry(day: date, expiries: list[date], roll_on_expiry_day: bool = True, rule: str = "nearest") -> date | None:
+    """Expiry on/after `day` by rule; on expiry day itself optionally roll to the next one.
+
+    nearest: the first eligible expiry. next: the one after it.
+    monthly: the first eligible expiry that is the last expiry of its calendar month.
+    """
+    exps = sorted(expiries)
+    eligible = [e for e in exps if e > day or (e == day and not roll_on_expiry_day)]
+    if rule == "monthly":
+        last_of_month = {}
+        for e in exps:
+            last_of_month[(e.year, e.month)] = e
+        eligible = [e for e in eligible if last_of_month[(e.year, e.month)] == e]
+    idx = 1 if rule == "next" else 0
+    return eligible[idx] if len(eligible) > idx else None
 
 
 def price_at(df1m: pd.DataFrame, ts: datetime, max_wait_min: int = 3, fallback_prev: bool = False):

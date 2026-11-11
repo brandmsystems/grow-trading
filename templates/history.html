@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Historical Data</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='data.css') }}">
+<script>try{const t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">9/21</span> EMA Crossover <span class="muted">· NIFTY options</span></div>
+  <nav><a href="/">Backtest</a><a href="/compare">Compare</a><a href="/signals">Signals</a><a href="/live">Live / Paper</a><a href="/data">Data</a><a href="/history" class="active">History</a><a href="/account">Account</a></nav>
+  <span class="spacer"></span>
+  <button id="themeBtn" class="btn icon" aria-label="Toggle light/dark theme">◐</button>
+</header>
+
+<main>
+  <div id="banner" class="banner" role="alert"></div>
+  <div class="filters">
+    <div class="fgroup"><label class="flabel" for="h_from">From</label><input type="date" id="h_from"></div>
+    <div class="fgroup"><label class="flabel" for="h_to">To</label><input type="date" id="h_to"></div>
+    <div class="fgroup"><span class="flabel">Timeframe</span>
+      <div class="seg" id="h_tf">
+        <button type="button" data-v="1">1m</button><button type="button" data-v="5">5m</button><button type="button" data-v="15">15m</button><button type="button" data-v="30">30m</button>
+      </div>
+    </div>
+    <div class="fgroup"><span class="flabel">Navigate</span>
+      <div class="navbtns">
+        <button class="btn" id="prevBtn" title="Earlier (left arrow)">← Earlier</button>
+        <button class="btn" id="nextBtn" title="Later (right arrow)">Later →</button>
+        <button class="btn" id="latestBtn">Latest</button>
+      </div>
+    </div>
+  </div>
+
+  <section class="card" id="chartCard">
+    <div class="card-head"><h2>NIFTY 50</h2><span id="ohlc" class="ohlc num"></span></div>
+    <div class="chart-box"><div id="chart"></div><div id="chartMsg" class="chart-msg" hidden></div></div>
+  </section>
+  <div id="empty" class="empty" hidden>
+    <h2 id="emptyTitle">No market data yet</h2>
+    <p id="emptyMsg"></p>
+    <div class="empty-actions"><a class="btn primary" href="/data">Open Data page</a></div>
+  </div>
+</main>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='history.js') }}"></script>
+</body>
+</html>

@@ -12,7 +12,7 @@
 <body>
 <header class="topbar">
   <div class="brand"><span class="logo">9/21</span> EMA Crossover <span class="muted">· NIFTY options</span></div>
-  <nav><a href="/" class="active">Backtest</a><a href="/live">Live / Paper</a><a href="/account">Account</a></nav>
+  <nav><a href="/" class="active">Backtest</a><a href="/compare">Compare</a><a href="/signals">Signals</a><a href="/live">Live / Paper</a><a href="/data">Data</a><a href="/history">History</a><a href="/account">Account</a></nav>
   <span class="spacer"></span>
   <span id="datasetBadge" class="badge"></span>
   <button id="settingsBtn" class="btn">Settings</button>
@@ -26,7 +26,6 @@
     <label>Dataset
       <select id="p_dataset">
         <option value="groww">Groww: real market data</option>
-        <option value="synthetic">Synthetic demo data (not real)</option>
       </select>
     </label>
     <p class="hint" id="datasetInfo"></p>
@@ -34,6 +33,7 @@
       <label>From<input type="date" id="p_start_date"></label>
       <label>To<input type="date" id="p_end_date"></label>
     </div>
+    <label>Expiry<select id="p_expiry_rule"></select></label>
     <label class="check"><input type="checkbox" id="p_roll_on_expiry_day"> Roll to next expiry on expiry day (avoid 0-DTE)</label>
     <div class="row2">
       <label>Lot size<input type="number" id="p_lot_size" min="1"></label>
@@ -69,11 +69,13 @@
 <main>
   <!-- Filter bar -->
   <section class="filters" aria-label="Filters">
+    <div class="fgroup"><label class="flabel" for="f_strategy">Strategy</label><select id="f_strategy"></select></div>
     <div class="fgroup"><span class="flabel">Timeframe</span><div class="seg" id="f_tf"></div></div>
     <div class="fgroup"><span class="flabel">Entry from</span><select id="f_start"></select></div>
     <div class="fgroup"><span class="flabel">Time cut</span><select id="f_cutoff"></select></div>
     <div class="fsep"></div>
     <div class="fgroup"><span class="flabel">Mode</span><div class="seg" id="f_mode"></div></div>
+    <div class="fgroup"><label class="flabel" for="f_year">Year</label><select id="f_year"><option value="all">All</option></select></div>
     <div class="fgroup"><span class="flabel">Outcome</span>
       <select id="f_outcome"><option value="all">All</option><option value="win">Winners</option><option value="loss">Losers</option></select></div>
     <div class="fgroup"><span class="flabel">Cross #</span>
@@ -106,6 +108,15 @@
       </div>
     </section>
 
+    <!-- Returns by period -->
+    <section class="card">
+      <div class="card-head"><h2>Returns by period <span class="muted" id="periodName"></span></h2><span class="muted">net P&amp;L after costs, for the filtered trades</span></div>
+      <div class="periods">
+        <div class="table-wrap"><table class="ptable" id="monthTable"></table></div>
+        <div class="bestworst"><div id="bestDays"></div><div id="worstDays"></div></div>
+      </div>
+    </section>
+
     <!-- Trade viewer -->
     <section class="viewer">
       <div class="card list">
@@ -116,7 +127,7 @@
         <div class="card meta" id="metaBar"></div>
         <div class="card chart-card">
           <div class="card-head"><h2>NIFTY spot <span class="muted" id="spotTf"></span></h2>
-            <div class="legend"><span class="sw s1"></span>EMA 9 <span class="sw s2"></span>EMA 21</div></div>
+            <div class="legend"><span class="sw s1"></span><span id="lgFast">EMA 9</span> <span class="sw s2"></span><span id="lgSlow">EMA 21</span></div></div>
           <div id="spotChart" class="chart"></div>
         </div>
         <div class="card chart-card">

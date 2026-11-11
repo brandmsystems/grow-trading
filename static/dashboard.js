@@ -71,6 +71,7 @@ function readSettings() {
   p.start_date = $("#p_start_date").value;
   p.end_date = $("#p_end_date").value;
   p.roll_on_expiry_day = $("#p_roll_on_expiry_day").checked;
+  p.expiry_rule = $("#p_expiry_rule").value;
   p.lot_size = +$("#p_lot_size").value; p.lots = +$("#p_lots").value; p.capital = +$("#p_capital").value;
   $$("[id^=c_]").forEach(el => {
     const scale = +(el.dataset.scale || 1);
@@ -83,6 +84,8 @@ function writeSettings() {
   $("#p_dataset").value = p.dataset;
   $("#p_start_date").value = p.start_date; $("#p_end_date").value = p.end_date;
   $("#p_roll_on_expiry_day").checked = !!p.roll_on_expiry_day;
+  $("#p_expiry_rule").innerHTML = Object.entries(S.meta.expiry_rules).map(([k, l]) => `<option value="${k}">${l}</option>`).join("");
+  $("#p_expiry_rule").value = p.expiry_rule || "nearest";
   $("#p_lot_size").value = p.lot_size; $("#p_lots").value = p.lots; $("#p_capital").value = p.capital;
   $$("[id^=c_]").forEach(el => {
     const scale = +(el.dataset.scale || 1);
@@ -94,11 +97,10 @@ function updateDatasetInfo() {
   const ds = S.params.dataset, info = S.meta.datasets[ds] || {};
   const badge = $("#datasetBadge");
   badge.className = "badge " + ds;
-  badge.textContent = ds === "synthetic" ? "SYNTHETIC DEMO DATA" : "Groww market data";
+  badge.textContent = "Groww market data";
   let t = info.error ? `Database error: ${info.error}` :
     info.rows ? `${info.days} sessions stored (${info.first.slice(0, 10)} → ${info.last.slice(0, 10)}).` : "No data stored yet.";
   if (ds === "groww" && !S.meta.keys) t += " keys.txt is incomplete: add the TOTP secret to download real data.";
-  if (ds === "synthetic") t += " Generated random-walk prices for trying the app. Not market data; results mean nothing.";
   $("#datasetInfo").textContent = t;
 }
 
@@ -107,6 +109,10 @@ function buildFilters() {
     el.innerHTML = items.map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${String(v) === String(cur)}">${l}</button>`).join("");
     el.onclick = e => { const b = e.target.closest("button"); if (!b) return; $$("button", el).forEach(x => x.setAttribute("aria-pressed", x === b)); on(b.dataset.v); };
   };
+  $("#f_strategy").innerHTML = Object.entries(S.meta.strategies).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("");
+  $("#f_strategy").value = S.params.strategy;
+  $("#f_strategy").onchange = e => { S.params.strategy = e.target.value; store.set("bt_params", S.params); runBacktest(); };
+  $("#f_year").onchange = e => { S.filters.year = e.target.value; S.selId = null; render(); };
   seg($("#f_tf"), S.meta.timeframes.map(t => [t, t + "m"]), S.params.timeframe, v => { S.params.timeframe = +v; store.set("bt_params", S.params); runBacktest(); });
   seg($("#f_mode"), Object.keys(S.meta.modes).map(m => [m, MODE_SHORT[m]]), S.filters.mode, v => { S.filters.mode = v; S.selId = null; render(); });
   $("#f_start").innerHTML = S.meta.starts.map(s => `<option>${s}</option>`).join("");
@@ -149,9 +155,9 @@ async function downloadData() {
     await runBacktest(true);
   } catch (e) {
     banner(e.kind === "keys" || /keys\.txt|TOTP/.test(e.message)
-      ? e.message + " Open keys.txt and add TOTP_SECRET, or switch to the synthetic dataset in Settings."
+      ? e.message + " Open keys.txt and add your credentials."
       : /forbidden/i.test(e.message)
-        ? "Groww refused market data (403). Your API plan doesn't include it yet. Switch to the synthetic dataset in Settings, or enable market data on Groww."
+        ? "Groww refused market data (403). Your API access doesn't include it yet. Activate the Trading API subscription on Groww and generate a new key."
         : "Download failed: " + e.message);
   } finally { progress(null); setBusy(false); }
 }
@@ -159,6 +165,10 @@ async function downloadData() {
 async function loadResult(h) {
   const {data} = await api(`/api/bt/result/${h}`);
   S.result = data; S.hash = h; S.chartCache.clear();
+  const yrs = [...new Set(Object.values(data.trades).flat().map(t => t.day.slice(0, 4)))].sort();
+  if (S.filters.year && S.filters.year !== "all" && !yrs.includes(S.filters.year)) S.filters.year = "all";
+  $("#f_year").innerHTML = `<option value="all">All</option>` + yrs.map(y => `<option>${y}</option>`).join("");
+  $("#f_year").value = S.filters.year || "all";
   if (!S.selId || !findTrade(S.selId)) S.selId = null;
   $("#empty").hidden = true; $("#content").hidden = false;
   render();
@@ -190,6 +200,7 @@ const pfText = v => v == null ? "—" : v === Infinity ? "∞" : num(v);
 function passes(t, ignoreOutcome = false) {
   const f = S.filters;
   if (!ignoreOutcome && f.outcome !== "all" && t.outcome !== f.outcome) return false;
+  if (f.year && f.year !== "all" && t.day.slice(0, 4) !== f.year) return false;
   if (f.ordinal !== "all" && (f.ordinal === "4" ? t.ordinal < 4 : t.ordinal !== +f.ordinal)) return false;
   if (f.exit === "whipsaw" ? !t.whipsaw : f.exit !== "all" && t.exit_reason !== f.exit) return false;
   return true;
@@ -226,12 +237,31 @@ function render() {
     kpi("Max drawdown", inr(-m.dd)) + kpi("Max drawdown %", m.trades ? num(m.ddp) + "%" : "—");
 
   const p = r.params;
-  $("#runInfo").textContent = `${p.start_date} → ${p.end_date} · ${p.timeframe}m · entry ${p.entry_start}–${p.cutoff} · ${r.signals} signals · ${r.trade_days} sessions${r.partial_asof ? ` · today up to ${hhmm(r.partial_asof)}` : ""}`;
+  $("#runInfo").textContent = `${r.strategy_label || "EMA 9/21"} · ${p.start_date} → ${p.end_date} · ${p.timeframe}m · entry ${p.entry_start}–${p.cutoff} · ${r.signals} signals · ${r.trade_days} sessions${r.partial_asof ? ` · today up to ${hhmm(r.partial_asof)}` : ""}`;
   renderCompare();
+  renderPeriods();
   renderList();
   renderNoTrade();
   $("#spotTf").textContent = `· ${p.timeframe}-minute`;
   if (sel) selectTrade(sel.id, false); else renderEmptyDetail();
+}
+
+function renderPeriods() {
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = {}, days = {};
+  for (const t of S.list) { months[t.day.slice(0, 7)] = (months[t.day.slice(0, 7)] || 0) + t.net; days[t.day] = (days[t.day] || 0) + t.net; }
+  const years = [...new Set(Object.keys(months).map(k => k.slice(0, 4)))].sort().reverse();
+  $("#periodName").textContent = `· ${MODE_SHORT[S.filters.mode]}`;
+  const cell = v => v == null ? `<td class="muted">·</td>` : `<td class="${pnlCls(v)}">${inr(v, true).replace(".00", "")}</td>`;
+  $("#monthTable").innerHTML = years.length ? `<thead><tr><th>Year</th>${MON.map(m => `<th>${m}</th>`).join("")}<th>Year total</th></tr></thead><tbody>` +
+    years.map(y => { const vals = MON.map((_, i) => months[`${y}-${String(i + 1).padStart(2, "0")}`]);
+      const tot = vals.reduce((a, v) => a + (v || 0), 0);
+      return `<tr><td>${y}</td>${vals.map(cell).join("")}<td class="tot ${pnlCls(tot)}">${inr(tot, true)}</td></tr>`; }).join("") + "</tbody>"
+    : `<tbody><tr><td class="muted">No trades match the filters.</td></tr></tbody>`;
+  const sorted = Object.entries(days).sort((a, b) => b[1] - a[1]);
+  const row = ([d, v]) => `<div class="row"><span class="num">${dmy(d)}</span><span class="num ${pnlCls(v)}">${inr(v, true)}</span></div>`;
+  $("#bestDays").innerHTML = "<h3>Best days</h3>" + (sorted.slice(0, 5).filter(x => x[1] > 0).map(row).join("") || `<div class="row muted">None</div>`);
+  $("#worstDays").innerHTML = "<h3>Worst days</h3>" + (sorted.slice(-5).reverse().filter(x => x[1] < 0).map(row).join("") || `<div class="row muted">None</div>`);
 }
 
 function renderCompare() {
@@ -290,7 +320,7 @@ function selectTrade(id, scroll = true) {
   if (selK) selK.outerHTML = kpi("Selected trade", inr(t.net, true), pnlCls(t.net), `${dmy(t.day)} · ${hhmm(t.entry_ts)}`);
   const M = (l, v, cls = "") => `<div class="m"><div class="ml">${l}</div><div class="mv num ${cls}">${v}</div></div>`;
   $("#metaBar").innerHTML =
-    M("Symbol", esc(t.symbol.replace(/^SYNTH:/, "SYNTH "))) +
+    M("Symbol", esc(t.symbol)) +
     M("Direction", `${t.direction} · ${t.side}`, t.direction === "Bullish" ? "pos" : "neg") +
     M("NIFTY entry → exit", `${num(t.spot_entry)} → ${num(t.spot_exit)}`) +
     M("Option entry → exit", `${num(t.opt_entry)} → ${num(t.opt_exit)}`) +
@@ -305,7 +335,7 @@ function selectTrade(id, scroll = true) {
     C("Brokerage", inr(-c.brokerage)) + C("STT", inr(-c.stt)) + C("Exchange txn", inr(-c.exchange)) +
     C("SEBI fee", inr(-c.sebi)) + C("Stamp duty", inr(-c.stamp)) + C("GST", inr(-c.gst)) +
     C("Total friction", inr(-t.friction), "total") + C("Net PnL", `<span class="${pnlCls(t.net)}">${inr(t.net, true)}</span>`, "total") + "</div>";
-  $("#optSym").textContent = "· " + t.symbol.replace(/^SYNTH:/, "SYNTH ");
+  $("#optSym").textContent = "· " + t.symbol;
   loadChart(t);
   prefetchAround(id);
 }
@@ -415,6 +445,7 @@ const Charts = (() => {
     const bars = d.spot;
     if (!bars.length) { clear("No spot candles for this day"); return; }
     sCandles.setData(bars.map(b => ({time: toTime(b.t), open: b.o, high: b.h, low: b.l, close: b.c})));
+    $("#lgFast").textContent = d.fast_label || "EMA 9"; $("#lgSlow").textContent = d.slow_label || "EMA 21";
     sE9.setData(bars.map(b => ({time: toTime(b.t), value: b.e9})));
     sE21.setData(bars.map(b => ({time: toTime(b.t), value: b.e21})));
     const barAt = iso => { const ts = toTime(iso); let best = bars[0]; for (const b of bars) if (toTime(b.t) <= ts) best = b; return toTime(best.t); };
@@ -493,12 +524,19 @@ async function boot() {
   }
   const saved = store.get("bt_params", null);
   S.params = {...S.meta.defaults, ...(saved || {}), costs: {...S.meta.defaults.costs, ...(saved?.costs || {})}};
-  if (!saved) {
-    const g = S.meta.datasets.groww || {};
-    S.params.dataset = g.rows ? "groww" : "synthetic";
-  }
+  S.params.dataset = "groww";
   // Unless the user picked an earlier end date, the range always runs to today.
   if (store.get("bt_end_auto", true)) S.params.end_date = S.meta.defaults.end_date;
+  S.params.strategy = S.params.strategy || "ema_9_21"; S.params.expiry_rule = S.params.expiry_rule || "nearest";
+  // Links from the Compare page carry their settings in the URL.
+  const q = new URLSearchParams(location.search);
+  if (q.has("strategy")) {
+    for (const k of ["strategy", "start_date", "end_date", "entry_start", "cutoff"]) if (q.get(k)) S.params[k] = q.get(k);
+    if (q.get("tf")) S.params.timeframe = +q.get("tf");
+    if (q.get("mode")) S.filters.mode = q.get("mode");
+    store.set("bt_end_auto", false);
+    history.replaceState(null, "", "/");
+  }
   writeSettings(); buildFilters();
   const running = S.meta.jobs[0];
   if (running) {
@@ -509,11 +547,7 @@ async function boot() {
   }
   const info = S.meta.datasets[S.params.dataset] || {};
   if (!info.rows) {
-    showEmpty("No market data yet",
-      S.params.dataset === "groww"
-        ? (S.meta.keys ? "Download NIFTY 1-minute data from Groww for the selected range (Settings). Option candles are fetched automatically as trades need them."
-                       : "keys.txt has no TOTP secret yet, so Groww data can't be downloaded. Add it, or switch to the synthetic demo dataset in Settings to explore the app.")
-        : "Generate the synthetic demo dataset to explore the app. It is random-walk data, not market data.");
+    showEmpty("No market data yet", "No real NIFTY data is stored yet. Open the Data page to download it from Groww, then come back to run a backtest.");
     return;
   }
   if (info.stale && S.params.end_date >= S.meta.defaults.end_date) return downloadData();

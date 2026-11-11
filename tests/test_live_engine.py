@@ -77,7 +77,9 @@ def test_engine_matches_backtest(mode, tf):
     run_days(eng, market, days)
     got = live_trades()
 
-    assert len(got) == len(expected)
+    assert len(got) == len(expected), ([(str(g["day"]), g["signal_ts"].strftime("%H:%M"), g["exit_reason"]) for g in got],
+                                       [(e["day"], e["entry_ts"][11:16], e["exit_reason"]) for e in expected],
+                                       [(x["ts"][5:16], x["message"][:90]) for x in list(eng.events)[:12]])
     for g, e in zip(got, expected):
         assert g["status"] == "CLOSED"
         assert g["signal_ts"].isoformat() == e["entry_ts"]
@@ -215,3 +217,113 @@ def test_restart_right_after_reversal_keeps_new_position():
     eng2.tick()
     assert eng2.position is not None and eng2.position["id"] == held["id"]
     assert len(live_trades()) == len([t for t in trades if t["day"] == rev["day"] and t["entry_ts"] <= rev["entry_ts"]])
+
+
+class _StubScorer:
+    """Scores by time of day: crosses after mid-session score >= 50."""
+    built = "test"
+
+    def __init__(self, analysis):
+        pass
+
+    def score(self, feats):
+        return round(feats["time"] * 100, 2)
+
+    def comparable(self, score):
+        return None
+
+
+def test_prediction_mode_filters_by_score_and_exits_at_refs(monkeypatch):
+    import pandas as pd
+    import signals
+    monkeypatch.setattr(le.signals, "latest", lambda *a, **k: {"model": {}})
+    monkeypatch.setattr(le.signals, "Scorer", _StubScorer)
+    days = [d for d in (START + timedelta(days=i) for i in range(5, 26)) if d.weekday() < 5]
+    eng, market = make({"signal_mode": "prediction", "min_score": 50, "timeframe": 15}, start_day=days[0])
+    run_days(eng, market, days)
+    rows = live_trades()
+    assert rows, "need prediction trades"
+    for r in rows:
+        assert r["signal_mode"] == "prediction" and r["score"] >= 50
+        assert r["exit_reason"] in ("stop", "target", "square_off")
+        d = 1 if r["direction"] == "Bullish" else -1
+        assert r["stop_ref"] == pytest.approx(r["signal_close"] - d * r["atr_ref"], abs=0.02)
+        assert r["target_ref"] == pytest.approx(r["signal_close"] + 2 * d * r["atr_ref"], abs=0.02)
+        spot = db.load_candles("SYNTH:NIFTY", datetime.combine(r["day"], time(0)), datetime.combine(r["day"], time(23)))
+        outcome, at = signals._outcome(spot, r["signal_ts"], r["signal_close"], d, r["atr_ref"])
+        expected = {"hit": "target", "miss": "stop" if at else "square_off"}[outcome]
+        assert r["exit_reason"] == expected
+        if at:   # exit happens once the deciding minute has completed
+            assert r["exit_ts"] == pd.Timestamp(at).to_pydatetime() + timedelta(minutes=1)
+    with db.engine().connect() as c:
+        low = c.execute(text("SELECT count(*) FROM live_events WHERE message LIKE '%below 50%no trade%'")).scalar()
+    assert low > 0, "low-score signals must be logged and skipped"
+
+
+def test_prediction_mode_requires_analysis(monkeypatch):
+    monkeypatch.setattr(le.signals, "latest", lambda *a, **k: None)
+    market = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(START, time(9, 0)))
+    eng = le.Engine(le.EngineConfig(signal_mode="prediction"), market, PaperBroker(market))
+    with pytest.raises(ValueError, match="Signals page"):
+        eng.start(threaded=False)
+    with pytest.raises(ValueError):
+        le.EngineConfig(signal_mode="prediction", min_score=120).validate()
+
+
+def _alerts():
+    with db.engine().connect() as c:
+        return [dict(r) for r in c.execute(text("SELECT * FROM live_alerts ORDER BY id")).mappings()]
+
+
+@pytest.fixture
+def clean_alerts():
+    with db.engine().begin() as c:
+        c.execute(text("TRUNCATE live_alerts RESTART IDENTITY"))
+
+
+def test_alerts_follow_entries_and_exits(clean_alerts):
+    days = [d for d in (START + timedelta(days=i) for i in range(5, 12)) if d.weekday() < 5]
+    eng, market = make({"timeframe": 15}, start_day=days[0])
+    run_days(eng, market, days)
+    trades, alerts = live_trades(), _alerts()
+    entries = [a for a in alerts if a["action"] in ("BUY CE", "BUY PE")]
+    exits = [a for a in alerts if a["action"] == "SELL"]
+    assert trades and len(entries) == len(trades) and len(exits) == sum(t["status"] == "CLOSED" for t in trades)
+    for a, t in zip(entries, trades):
+        assert a["action"] == f"BUY {t['opt_type']}"
+        assert a["payload"]["entry_price"] == round(t["entry_price"], 2) and a["payload"]["strike"] == t["strike"]
+        assert a["payload"]["nifty"] == round(t["signal_close"], 2)
+    assert len({a["alert_key"] for a in alerts}) == len(alerts)
+
+
+def test_same_signal_never_alerts_twice(clean_alerts):
+    import live_engine
+    from strategy import Leg
+    eng, market = make({"timeframe": 15})
+    eng.day = START
+    leg = Leg(day=START, direction=1, entry_ts=datetime.combine(START, time(10, 0)), signal_close=22000.0,
+              signal_bar_start=datetime.combine(START, time(9, 45)), ordinal=1)
+    eng._hold(leg, "test"); eng._hold(leg, "test")
+    assert len(_alerts()) == 1
+
+
+def test_market_status():
+    import live_manager as lm
+    assert lm.market_status(datetime(2026, 11, 14, 11, 0))["state"] == "closed"          # Saturday
+    assert lm.market_status(datetime(2026, 11, 12, 9, 5))["state"] == "preopen"
+    assert lm.market_status(datetime(2026, 11, 12, 9, 15))["state"] == "open"
+    assert lm.market_status(datetime(2026, 11, 12, 15, 30))["state"] == "closed"
+
+
+def test_replaying_a_day_twice_gives_the_same_trades(clean_alerts):
+    d = [x for x in (START + timedelta(days=i) for i in range(5, 12)) if x.weekday() < 5][2]
+    out = []
+    for _ in range(2):
+        m = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(d, time(9, 0)))
+        eng = le.Engine(le.EngineConfig(trade_mode="replay", exec_mode="ATM_BUY", max_daily_loss=0, max_trades_per_day=100), m, PaperBroker(m))
+        eng.start(threaded=False)
+        run_days(eng, m, [d])
+        eng.stop(square_off=True, reason="done")
+        with db.engine().connect() as c:
+            out.append([(r[0], r[1]) for r in c.execute(text("SELECT signal_ts, exit_reason FROM live_trades WHERE session_id=:s ORDER BY id"), {"s": eng.session_id})])
+    assert out[0] and out[0] == out[1]

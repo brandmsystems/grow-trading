@@ -142,6 +142,8 @@ def test_data_stale(monkeypatch):
     assert backtest.data_stale(None)
     assert backtest.data_stale(datetime(2026, 11, 10, 15, 29))
     assert not backtest.data_stale(datetime(2026, 11, 11, 11, 59))
+    assert not backtest.data_stale(datetime(2026, 11, 11, 11, 45))       # within 15 minutes
+    assert backtest.data_stale(datetime(2026, 11, 11, 11, 40))
     sunday = datetime(2026, 11, 15, 12, 0)
     monkeypatch.setattr(backtest, "_now", lambda: sunday)
     assert not backtest.data_stale(datetime(2026, 11, 13, 15, 29))

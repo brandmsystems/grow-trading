@@ -4,6 +4,12 @@ The engine re-derives today's trade sequence from CLOSED bars with exactly the
 same code the backtester uses (strategy.generate_legs) and acts on events it has
 not processed yet. Live and backtest logic therefore cannot drift apart.
 
+Prediction mode (signal_mode="prediction"): crosses of the chosen strategy are scored
+with the Signals-page model (same features, signals.features). Only crosses scoring at
+least min_score open a trade. Exits are the signal's NIFTY stop (1 x ATR) or target
+(2 x ATR), judged on completed 1-minute candles exactly like the Signals outcome, or the
+15:00 square-off. Opposite crosses don't exit in this mode.
+
 Event handling per evaluation (after each signal bar closes + a grace period):
   * exit events (opposite cross) are applied before entry events at the same time;
   * entries are skipped if stale (> STALE_ENTRY_SEC after the signal bar closed),
@@ -26,6 +32,8 @@ from sqlalchemy import text
 
 import costs
 import db
+import signals
+import strategies
 import strategy as st
 from live_market import Contract, OrderError, OrderUnknown
 
@@ -36,7 +44,7 @@ MARKET_OPEN, MARKET_CLOSE = time(9, 15), time(15, 30)
 
 @dataclass
 class EngineConfig:
-    trade_mode: str = "paper"          # paper | live | replay (synthetic, simulated clock)
+    trade_mode: str = "paper"          # paper | live | replay (stored real candles, simulated clock)
     exec_mode: str = "ATM_BUY"         # ITM5_BUY | ATM_BUY | ATM_SELL
     timeframe: int = 15
     entry_start: str = "09:30"
@@ -48,6 +56,9 @@ class EngineConfig:
     bar_grace_sec: int = 5             # wait after bar close before evaluating
     max_candle_wait_sec: int = 60      # wait for the bar's last 1m candle to appear
     stale_entry_sec: int = 180         # don't enter if the signal is older than this
+    signal_mode: str = "cross"         # cross: every crossover | prediction: scored signals only
+    strategy: str = "ema_9_21"         # prediction mode: whose crosses are scored
+    min_score: float = 50.0            # prediction mode: minimum score to open a trade
     costs: dict = field(default_factory=lambda: costs.DEFAULT_COSTS.to_dict())
 
     def validate(self) -> "EngineConfig":
@@ -66,6 +77,13 @@ class EngineConfig:
             raise ValueError("lots must be >= 1")
         self.max_daily_loss = float(self.max_daily_loss)
         self.max_trades_per_day = int(self.max_trades_per_day)
+        if self.signal_mode not in ("cross", "prediction"):
+            raise ValueError("signal_mode must be cross or prediction")
+        if self.strategy not in strategies.STRATEGIES:
+            raise ValueError("unknown strategy")
+        self.min_score = float(self.min_score)
+        if not 0 <= self.min_score <= 100:
+            raise ValueError("minimum score must be between 0 and 100")
         self.costs = {**costs.DEFAULT_COSTS.to_dict(), **{k: float(v) for k, v in (self.costs or {}).items()}}
         return self
 
@@ -98,6 +116,11 @@ class Engine:
         self.exit_failures = 0
         self.bars_today: list[dict] = []
         self.last_fill_today: datetime | None = None
+        self.scorer: signals.Scorer | None = None
+        self._regime: tuple[date, object] | None = None
+        self._ref_minute: datetime | None = None
+        self.last_spot: dict | None = None        # {"ts", "price"} latest NIFTY quote
+        self.conn_error: str | None = None
 
     # ------------------------------------------------------------ logging / persistence
     def log(self, msg: str, level: str = "info"):
@@ -110,6 +133,24 @@ class Engine:
                           {"s": self.session_id, "t": ts, "l": level, "m": msg})
         except Exception:
             pass
+
+    def _alert(self, action: str, signal_ts, **data) -> None:
+        """Record a notification. The key makes each signal alert at most once."""
+        key = f"{self.cfg.trade_mode}|{self.day}|{action}|{pd.Timestamp(signal_ts).isoformat()}"
+        if self.cfg.trade_mode == "replay":
+            key += f"|s{self.session_id}"
+        try:
+            with self.dbe.begin() as c:
+                c.execute(text("INSERT INTO live_alerts (alert_key, session_id, trade_mode, day, ts, action, payload) "
+                               "VALUES (:k,:s,:m,:d,:t,:a,CAST(:p AS JSONB)) ON CONFLICT (alert_key) DO NOTHING"),
+                          {"k": key, "s": self.session_id, "m": self.cfg.trade_mode, "d": self.day, "t": self.market.now(),
+                           "a": action, "p": json.dumps({"signal_ts": pd.Timestamp(signal_ts).isoformat(), **data}, default=str)})
+        except Exception as exc:
+            log.warning("alert not stored: %s", exc)
+
+    def _hold(self, leg, why: str, **extra) -> None:
+        self._alert("HOLD", leg.entry_ts, direction="Bullish" if leg.direction > 0 else "Bearish",
+                    nifty=round(leg.signal_close, 2), reason=why, **extra)
 
     def _insert_trade(self, row: dict) -> int:
         cols = ", ".join(row)
@@ -124,9 +165,11 @@ class Engine:
 
     def _load_day_state(self, day: date):
         """Resume after a restart: open position + today's stats for this trade mode."""
+        # A replay is self-contained: earlier replays of the same day must not affect it.
+        own = " AND session_id=:s" if self.cfg.trade_mode == "replay" else ""
         with self.dbe.connect() as c:
-            rows = c.execute(text("SELECT * FROM live_trades WHERE trade_mode=:m AND day=:d ORDER BY id"),
-                             {"m": self.cfg.trade_mode, "d": day}).mappings().all()
+            rows = c.execute(text(f"SELECT * FROM live_trades WHERE trade_mode=:m AND day=:d{own} ORDER BY id"),
+                             {"m": self.cfg.trade_mode, "d": day, "s": self.session_id}).mappings().all()
         self.trades_today = len(rows)
         self.realised_today = sum(r["net"] or 0 for r in rows if r["status"] == "CLOSED")
         fills = [t for r in rows for t in (r["entry_ts"], r["exit_ts"]) if t is not None]
@@ -140,18 +183,27 @@ class Engine:
                 "contract": Contract(r["trading_symbol"], r["groww_symbol"], r["expiry"], r["strike"],
                                      r["opt_type"], r["qty"]),
                 "qty": r["qty"], "entry_price": r["entry_price"], "entry_ts": r["entry_ts"],
+                "signal_ts": r["signal_ts"], "entry_ref": r["signal_close"], "score": r.get("score"),
+                "stop_ref": r.get("stop_ref"), "target_ref": r.get("target_ref"), "atr_ref": r.get("atr_ref"),
             }
             self.log(f"Resumed open {r['side']} position {r['trading_symbol']} x{r['qty']} from earlier", "warn")
         # stale OPEN trades from previous days can't be managed (MIS is auto squared off by the broker)
         with self.dbe.begin() as c:
             n = c.execute(text("UPDATE live_trades SET status='CLOSED', exit_reason='stale_previous_day' "
-                               "WHERE trade_mode=:m AND day<:d AND status='OPEN'"),
-                          {"m": self.cfg.trade_mode, "d": day}).rowcount
+                               f"WHERE trade_mode=:m AND day<:d AND status='OPEN'{own}"),
+                          {"m": self.cfg.trade_mode, "d": day, "s": self.session_id}).rowcount
         if n:
             self.log(f"{n} open trade(s) from a previous day marked closed: verify them in Groww", "warn")
 
     # ------------------------------------------------------------ lifecycle
     def start(self, threaded: bool = True):
+        if self.cfg.signal_mode == "prediction":
+            label = strategies.STRATEGIES[self.cfg.strategy].label
+            analysis = signals.latest(self.cfg.strategy, self.cfg.timeframe, self.cfg.entry_start, self.cfg.cutoff)
+            if not analysis:
+                raise ValueError(f"No Signals analysis for {label} at {self.cfg.timeframe}m. "
+                                 f"Build it on the Signals page first.")
+            self.scorer = signals.Scorer(analysis)
         with self.dbe.begin() as c:
             self.session_id = c.execute(text(
                 "INSERT INTO live_sessions (trade_mode, config) VALUES (:m, CAST(:c AS JSONB)) RETURNING id"),
@@ -160,6 +212,9 @@ class Engine:
         self._stop.clear()
         self.log(f"Engine started in {self.cfg.trade_mode.upper()} mode · {st.MODE_LABELS[self.cfg.exec_mode]} · "
                  f"{self.cfg.timeframe}m · window {self.cfg.entry_start}–{self.cfg.cutoff} · {self.cfg.lots} lot(s)")
+        if self.scorer:
+            self.log(f"Prediction mode: {strategies.STRATEGIES[self.cfg.strategy].label} crosses scoring ≥ {self.cfg.min_score:g} only; "
+                     f"exits at stop (1×ATR), target (2×ATR) or 15:00. Model built {self.scorer.built}.")
         if threaded:
             self._thread = threading.Thread(target=self._run, name="live-engine", daemon=True)
             self._thread.start()
@@ -208,9 +263,17 @@ class Engine:
                 return
             if self.state == "waiting":
                 self.state = "running"
+            if not self.last_spot or (now - self.last_spot["ts"]).total_seconds() >= 5:
+                try:
+                    self.last_spot = {"ts": now, "price": float(self.market.spot_ltp())}
+                    self.conn_error = None
+                except Exception as exc:
+                    self.conn_error = str(exc) or type(exc).__name__
 
             if self.position and now.time() >= st.SQUARE_OFF:
                 self._exit("square_off")
+            if self.position and self.position.get("stop_ref") is not None:
+                self._check_refs(now)
             if self.position and self.exit_failures:
                 self._exit(self.position.get("pending_reason", "retry"))   # retry a failed exit
             self._risk_check(now)
@@ -264,6 +327,8 @@ class Engine:
             return  # candle not published yet, try again next tick
         if not have_last:
             self.log(f"1m candle {last_needed:%H:%M} missing; evaluating {bar_close:%H:%M} bar without it", "warn")
+        if self.cfg.signal_mode == "prediction":
+            return self._evaluate_prediction(now, bar_close, spot)
 
         bars = st.add_emas(st.resample(spot, self.cfg.timeframe))
         bars = bars[bars["close_ts"] <= pd.Timestamp(bar_close)]
@@ -297,19 +362,110 @@ class Engine:
                 self._try_entry(now, leg)
         self.processed_until = bar_close
 
-    def _try_entry(self, now: datetime, leg):
+    # ------------------------------------------------------------ prediction mode
+    def _regime_row(self, spot: pd.DataFrame):
+        if self._regime and self._regime[0] == self.day:
+            return self._regime[1]
+        sym = getattr(self.market, "spot_symbol", "NSE-NIFTY")
+        hist = db.load_candles(sym, datetime.combine(self.day - timedelta(days=420), time(0)),
+                               datetime.combine(self.day, time(0)))
+        reg = signals.daily_regime(pd.concat([hist, spot[spot["ts"].dt.date == self.day]], ignore_index=True))
+        row = reg.loc[self.day] if self.day in reg.index else None
+        self._regime = (self.day, row)
+        return row
+
+    def _evaluate_prediction(self, now: datetime, bar_close: datetime, spot: pd.DataFrame):
+        key, tf = self.cfg.strategy, self.cfg.timeframe
+        fut = self.market.futures_1m(self.day) if hasattr(self.market, "futures_1m") else None
+        bars = signals.signal_bars(spot, fut, tf, key)
+        bars = bars[bars["close_ts"] <= pd.Timestamp(bar_close)].reset_index(drop=True)
+        today = bars[bars["day"] == self.day]
+        self.bars_today = [{"t": r.start.isoformat(), "c_ts": r.close_ts.isoformat(), "o": r.open, "h": r.high,
+                            "l": r.low, "c": r.close, "e9": round(r.fast, 2), "e21": round(r.slow, 2)}
+                           for r in today.itertuples(index=False)]
+        if today.empty:
+            self.log(f"No NIFTY candles for today yet (holiday?) at {bar_close:%H:%M}", "warn")
+            self.processed_until = bar_close
+            return
+        last = today.iloc[-1]
+        self.last_eval = {"bar_close": bar_close.isoformat(), "close": round(float(last["close"]), 2),
+                          "ema9": round(float(last["fast"]), 2), "ema21": round(float(last["slow"]), 2),
+                          "evaluated_at": now.isoformat()}
+        cfg_s = strategies.STRATEGIES[key]
+        lo, hi = pd.Timestamp(self.processed_until), pd.Timestamp(bar_close)
+        start_t, cut_t = _hm(self.cfg.entry_start), _hm(self.cfg.cutoff)
+        crosses = st.find_crosses(bars, "fast", "slow")
+        for _, c in crosses.iterrows():
+            ts = pd.Timestamp(c["close_ts"])
+            if not (lo < ts <= hi) or c["day"] != self.day:
+                continue
+            ts = ts.to_pydatetime()
+            if not (start_t <= ts.time() <= cut_t) or ts.time() >= st.SQUARE_OFF:
+                continue
+            d = int(c["direction"])
+            word = "Bullish" if d > 0 else "Bearish"
+            atr = float(c["atr"]) if pd.notna(c["atr"]) else float("nan")
+            if not atr > 0:
+                self.log(f"{word} cross at {ts:%H:%M}: ATR not available yet, no trade", "warn")
+                continue
+            if cfg_s.confirm and not bool(c["bull_ok"] if d > 0 else c["bear_ok"]):
+                self.log(f"{word} cross at {ts:%H:%M} not confirmed by {cfg_s.confirm.upper()}: no trade")
+                self._alert("HOLD", ts, direction=word, nifty=round(float(c["close"]), 2),
+                            reason=f"not confirmed by {cfg_s.confirm.upper()}")
+                continue
+            feats, _ = signals.features(c, self._regime_row(spot), d, atr, ts)
+            score = self.scorer.score(feats)
+            comp = self.scorer.comparable(score)
+            hist_txt = f"; past hit rate in this band {comp['hit_rate']}% (n={comp['n']})" if comp and comp["hit_rate"] is not None else ""
+            entry = float(c["close"])
+            stop, target = entry - d * signals.STOP_ATR * atr, entry + d * signals.TARGET_ATR * atr
+            if score < self.cfg.min_score:
+                self.log(f"{word} signal {ts:%H:%M} scored {score:.1f} ({signals.band(score)}){hist_txt}: below {self.cfg.min_score:g}, no trade")
+                self._alert("HOLD", ts, direction=word, nifty=round(entry, 2), score=round(score, 1),
+                            band=signals.band(score), reason=f"score {score:.1f} below your minimum {self.cfg.min_score:g}")
+                continue
+            self.log(f"{word} signal {ts:%H:%M} scored {score:.1f} ({signals.band(score)}){hist_txt}. "
+                     f"NIFTY ref {entry:.2f}, stop {stop:.2f}, target {target:.2f}")
+            leg = st.Leg(day=self.day, direction=d, entry_ts=ts, signal_close=entry,
+                         signal_bar_start=pd.Timestamp(c["start"]).to_pydatetime(), ordinal=0)
+            self._try_entry(now, leg, refs={"score": round(score, 2), "stop_ref": round(stop, 2),
+                                            "target_ref": round(target, 2), "atr_ref": round(atr, 4)})
+        self.processed_until = bar_close
+
+    def _check_refs(self, now: datetime):
+        """Exit at the NIFTY stop or target, judged once per completed minute."""
+        minute = now.replace(second=0, microsecond=0)
+        if self._ref_minute == minute:
+            return
+        self._ref_minute = minute
+        p = self.position
+        spot = self.market.spot_1m(self.day)
+        day_df = spot[spot["ts"].dt.date == self.day]
+        outcome, at = signals._outcome(day_df, pd.Timestamp(p["signal_ts"]).to_pydatetime(), float(p["entry_ref"]),
+                                       p["direction"], float(p["atr_ref"]))
+        if outcome == "hit":
+            self.log(f"NIFTY reached the target {p['target_ref']:.2f} (minute {at[11:16]}): exiting")
+            self._exit("target")
+        elif outcome == "miss" and at:
+            self.log(f"NIFTY hit the stop {p['stop_ref']:.2f} (minute {at[11:16]}): exiting", "warn")
+            self._exit("stop")
+
+    def _try_entry(self, now: datetime, leg, refs: dict | None = None):
         dirn = "Bullish" if leg.direction > 0 else "Bearish"
         if self.state in ("halted", "error"):
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: engine halted ({self.halt_reason})", "warn")
+            self._hold(leg, "engine halted", **(refs or {}))
             return
         if self.position:
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: position still open", "warn")
+            self._hold(leg, "a position is already open", **(refs or {}))
             return
         if (now - leg.entry_ts).total_seconds() > self.cfg.stale_entry_sec:
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} skipped: stale ({int((now - leg.entry_ts).total_seconds())}s old)", "warn")
             return
         if self.cfg.max_trades_per_day and self.trades_today >= self.cfg.max_trades_per_day:
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} skipped: daily trade limit reached", "warn")
+            self._hold(leg, "daily trade limit reached", **(refs or {}))
             return
         strike, typ, side = st.option_for(self.cfg.exec_mode, leg.direction, leg.signal_close)
         expiry = st.pick_expiry(self.day, self.market.expiries(self.day), self.cfg.roll_on_expiry_day)
@@ -337,11 +493,18 @@ class Engine:
             "trading_symbol": c.trading_symbol, "groww_symbol": c.groww_symbol, "strike": strike,
             "opt_type": typ, "expiry": expiry, "qty": qty, "signal_ts": leg.entry_ts,
             "signal_close": leg.signal_close, "entry_ts": fill["ts"], "entry_price": fill["price"],
-            "entry_order_id": fill["order_id"], "status": "OPEN"})
+            "entry_order_id": fill["order_id"], "status": "OPEN", "signal_mode": self.cfg.signal_mode, **(refs or {})})
         self.position = {"id": tid, "direction": leg.direction, "side": side, "contract": c, "qty": qty,
-                         "entry_price": fill["price"], "entry_ts": fill["ts"]}
+                         "entry_price": fill["price"], "entry_ts": fill["ts"], "signal_ts": leg.entry_ts,
+                         "entry_ref": leg.signal_close, **(refs or {})}
         self.trades_today += 1
         self.log(f"ENTERED {side} {c.trading_symbol} x{qty} @ {fill['price']:.2f} ({fill['order_id']})")
+        r = refs or {}
+        self._alert(f"{side} {typ}", leg.entry_ts, direction=dirn, nifty=round(leg.signal_close, 2), strike=strike,
+                    opt_type=typ, symbol=c.trading_symbol, expiry=expiry.isoformat(), qty=qty,
+                    entry_price=round(fill["price"], 2), entry_ts=pd.Timestamp(fill["ts"]).isoformat(),
+                    stop=r.get("stop_ref"), target=r.get("target_ref"), score=r.get("score"),
+                    band=signals.band(r["score"]) if r.get("score") is not None else None)
 
     # ------------------------------------------------------------ exits / risk
     def _exit(self, reason: str):
@@ -371,6 +534,10 @@ class Engine:
                                      "gross": pnl["gross"], "slippage": pnl["slippage"],
                                      "charges": json.dumps(pnl["charges"]), "net": pnl["net"], "status": "CLOSED"})
         self.realised_today += pnl["net"]
+        self._alert("SELL" if p["side"] == "BUY" else "BUY BACK", p.get("signal_ts") or p["entry_ts"],
+                    symbol=p["contract"].trading_symbol, opt_type=p["contract"].opt_type, strike=p["contract"].strike,
+                    entry_price=round(p["entry_price"], 2), exit_price=round(fill["price"], 2), reason=reason,
+                    net=pnl["net"], exit_ts=pd.Timestamp(fill["ts"]).isoformat())
         self.position = None
         self.exit_failures = 0
         self.log(f"EXITED {p['contract'].trading_symbol} @ {fill['price']:.2f} ({reason}) · net {pnl['net']:+,.2f}")
@@ -426,7 +593,8 @@ class Engine:
                        "qty": p["qty"], "strike": c.strike, "opt_type": c.opt_type, "expiry": c.expiry.isoformat(),
                        "entry_price": p["entry_price"], "entry_ts": pd.Timestamp(p["entry_ts"]).isoformat(),
                        "ltp": ltp, "mtm": self._pnl(p, ltp)["net"] if ltp else None,
-                       "exit_failures": self.exit_failures}
+                       "exit_failures": self.exit_failures, "score": p.get("score"),
+                       "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref")}
             nxt = self._next_bar_close(self.processed_until) if self.day else None
             return {
                 "state": self.state, "halt_reason": self.halt_reason, "session_id": self.session_id,
@@ -435,5 +603,7 @@ class Engine:
                 "next_eval": nxt.isoformat() if nxt else None,
                 "last_eval": self.last_eval, "position": pos,
                 "trades_today": self.trades_today, "realised_today": round(self.realised_today, 2),
+                "nifty": {"price": self.last_spot["price"], "ts": self.last_spot["ts"].isoformat()} if self.last_spot else None,
+                "conn_error": self.conn_error,
                 "events": list(self.events)[:120], "bars": self.bars_today,
             }

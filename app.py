@@ -10,11 +10,15 @@ from flask import Flask, jsonify, render_template, request
 
 import backtest
 import config
+import data_manager
 import db
 import groww_client
 import jobs
 import live_manager
 import providers
+import research
+import signals
+import strategies
 import strategy as st
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -25,6 +29,7 @@ app.json.sort_keys = False
 
 try:
     db.init()
+    data_manager.recover_interrupted()
 except Exception as exc:  # app still serves the account page without Postgres
     log.error("Database init failed: %s", exc)
 
@@ -44,6 +49,26 @@ def dashboard():
 @app.get("/account")
 def account():
     return render_template("account.html")
+
+
+@app.get("/data")
+def data_page():
+    return render_template("data.html")
+
+
+@app.get("/history")
+def history_page():
+    return render_template("history.html")
+
+
+@app.get("/compare")
+def compare_page():
+    return render_template("compare.html")
+
+
+@app.get("/signals")
+def signals_page():
+    return render_template("signals.html")
 
 
 # ====================================================================== account API
@@ -115,6 +140,12 @@ def _result(h: str) -> dict | None:
     return _remember(run["result"]) if run else None
 
 
+def _real_only(params: dict) -> dict:
+    if params["dataset"] != "groww":
+        raise ValueError("Only real Groww market data can be used.")
+    return params
+
+
 @app.get("/api/bt/meta")
 def bt_meta():
     try:
@@ -123,10 +154,9 @@ def bt_meta():
     except config.KeysError:
         keys_ok = False
     data = {}
-    for ds in ("groww", "synthetic"):
+    for ds in ("groww",):
         try:
-            data[ds] = db.data_summary(providers.GrowwProvider.spot_symbol if ds == "groww"
-                                       else providers.SyntheticProvider.spot_symbol)
+            data[ds] = db.data_summary(providers.GrowwProvider.spot_symbol)
             last = data[ds].get("last")
             data[ds]["stale"] = backtest.data_stale(pd.Timestamp(last).to_pydatetime() if last else None)
         except Exception as exc:
@@ -137,6 +167,8 @@ def bt_meta():
         "starts": backtest.START_CHOICES,
         "cutoffs": backtest.CUTOFF_CHOICES,
         "modes": st.MODE_LABELS,
+        "strategies": {k: s.label for k, s in strategies.STRATEGIES.items()},
+        "expiry_rules": st.EXPIRY_RULES,
         "keys": keys_ok,
         "datasets": data,
         "jobs": jobs.active(),
@@ -147,7 +179,7 @@ def bt_meta():
 def bt_data():
     params = request.get_json(force=True) or {}
     try:
-        backtest.normalise(params)
+        _real_only(backtest.normalise(params))
     except ValueError as exc:
         return _error(exc, 400)
     jid = jobs.submit("data", backtest.ensure_data, params)
@@ -159,7 +191,7 @@ def bt_run():
     params = request.get_json(force=True) or {}
     force = bool(params.pop("force", False))
     try:
-        p = backtest.normalise(params)
+        p = _real_only(backtest.normalise(params))
     except ValueError as exc:
         return _error(exc, 400)
     h = backtest.param_hash(p)
@@ -205,11 +237,123 @@ def bt_chart(h, trade_id):
     try:
         return jsonify({"ok": True, "data": {
             "trade_id": trade_id,
-            "spot": backtest.spot_bars(res["params"]["dataset"], day, int(res["params"]["timeframe"])),
+            "spot": backtest.spot_bars(res["params"]["dataset"], day, int(res["params"]["timeframe"]),
+                                       res["params"].get("strategy", "ema_9_21")),
+            "fast_label": f"EMA {strategies.STRATEGIES[res['params'].get('strategy', 'ema_9_21')].fast}",
+            "slow_label": f"EMA {strategies.STRATEGIES[res['params'].get('strategy', 'ema_9_21')].slow}",
             "option": backtest.option_candles(trade["symbol"], day),
         }})
     except Exception as exc:
         return _error(exc, 500)
+
+
+# ====================================================================== data management
+def _date_arg(name: str) -> date | None:
+    value = request.args.get(name)
+    return date.fromisoformat(value) if value else None
+
+
+@app.get("/api/data/overview")
+def data_overview():
+    try:
+        return jsonify({"ok": True, "data": {
+            "coverage": data_manager.coverage(_date_arg("from"), _date_arg("to")),
+            "downloads": data_manager.downloads(),
+            "job": next((j for j in jobs.active() if j["kind"] == "download"), None),
+        }})
+    except ValueError as exc:
+        return _error(exc, 400)
+    except Exception as exc:
+        return _error(exc, 500)
+
+
+@app.post("/api/data/download")
+def data_download():
+    body = request.get_json(force=True) or {}
+    if any(j["kind"] == "download" for j in jobs.active()):
+        return jsonify({"ok": False, "error": "A download is already running."}), 409
+    try:
+        start, end = date.fromisoformat(body["from"]), date.fromisoformat(body["to"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Choose a valid from and to date."}), 400
+    if start > end:
+        return jsonify({"ok": False, "error": "Start date is after end date."}), 400
+    return jsonify({"ok": True, "job": jobs.submit("download", data_manager.download_all, start, end)})
+
+
+@app.post("/api/data/stop")
+def data_stop():
+    data_manager.request_stop()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/data/candles")
+def data_candles():
+    try:
+        return jsonify({"ok": True, "data": data_manager.candles(
+            _date_arg("from"), _date_arg("to"), int(request.args.get("tf", 5)))})
+    except (TypeError, ValueError) as exc:
+        return _error(exc, 400)
+    except Exception as exc:
+        return _error(exc, 500)
+
+
+# ====================================================================== research & signals
+def _active(kind: str):
+    return next((j for j in jobs.active() if j["kind"] == kind), None)
+
+
+@app.get("/api/research")
+def research_results():
+    try:
+        data = research.results(request.args.get("entry_start", "09:30"), request.args.get("cutoff", "14:30"))
+        return jsonify({"ok": True, "data": data, "job": _active("research")})
+    except ValueError as exc:
+        return _error(exc, 400)
+    except Exception as exc:
+        return _error(exc, 500)
+
+
+@app.post("/api/research/run")
+def research_run():
+    body = request.get_json(force=True) or {}
+    if _active("research"):
+        return jsonify({"ok": False, "error": "A comparison run is already in progress."}), 409
+    try:
+        research.settings(body.get("entry_start", "09:30"), body.get("cutoff", "14:30"))
+    except ValueError as exc:
+        return _error(exc, 400)
+    return jsonify({"ok": True, "job": jobs.submit("research", research.run_grid, body.get("entry_start", "09:30"),
+                                                   body.get("cutoff", "14:30"), lane="research")})
+
+
+def _signal_args(src) -> tuple[str, int]:
+    key, tf = src.get("strategy", strategies.DEFAULT), int(src.get("tf", 15))
+    if key not in strategies.STRATEGIES or tf not in backtest.TIMEFRAMES:
+        raise ValueError("Unknown strategy or timeframe")
+    return key, tf
+
+
+@app.get("/api/signals")
+def signals_get():
+    try:
+        key, tf = _signal_args(request.args)
+        return jsonify({"ok": True, "data": signals.get(key, tf), "job": _active("signals")})
+    except ValueError as exc:
+        return _error(exc, 400)
+    except Exception as exc:
+        return _error(exc, 500)
+
+
+@app.post("/api/signals/build")
+def signals_build():
+    try:
+        key, tf = _signal_args(request.get_json(force=True) or {})
+    except ValueError as exc:
+        return _error(exc, 400)
+    if _active("signals"):
+        return jsonify({"ok": False, "error": "A signal analysis is already being built."}), 409
+    return jsonify({"ok": True, "job": jobs.submit("signals", signals.build_and_store, key, tf)})
 
 
 # ====================================================================== live / paper engine
@@ -220,7 +364,50 @@ def live_page():
 
 @app.get("/api/live/status")
 def live_status():
-    return jsonify({"ok": True, "data": live_manager.status()})
+    try:
+        tf = int(request.args.get("tf", 15))
+    except ValueError:
+        tf = 15
+    return jsonify({"ok": True, "data": live_manager.status(request.args.get("mode"), tf,
+                                                             request.args.get("strategy", "ema_9_21"))})
+
+
+@app.get("/api/live/dashboard")
+def live_dashboard():
+    """Everything the Live page shows, in one poll: engine status, NIFTY feed, signal, option, size."""
+    import live_feed
+    a = request.args
+    try:
+        tf = int(a.get("tf", 5))
+        if tf not in (5, 15, 30):
+            raise ValueError("timeframe must be 5, 15 or 30")
+        entry_start, cutoff = a.get("entry_start", "09:30"), a.get("cutoff", "14:30")
+        live_feed._hm(entry_start), live_feed._hm(cutoff)
+        capital = float(a["capital"]) if a.get("capital") else None
+        risk_pct = float(a.get("risk_pct", 1))
+        if capital is not None and capital <= 0:
+            raise ValueError("capital must be positive")
+        if not 0 < risk_pct <= 100:
+            raise ValueError("risk % must be between 0 and 100")
+    except (TypeError, ValueError) as exc:
+        return _error(exc, 400)
+    try:
+        config.load_keys()
+        feed = live_feed.feed().dashboard(tf, entry_start, cutoff, a.get("exec_mode", "ATM_BUY"),
+                                          a.get("roll", "1") != "0", capital, risk_pct)
+    except config.KeysError as exc:
+        feed = {"error": str(exc), "kind": "keys"}
+    except Exception as exc:
+        log.exception("dashboard feed failed")
+        feed = {"error": str(exc) or type(exc).__name__}
+    try:   # after the feed, so a signal it just recorded is in this response
+        s = live_manager.status(a.get("mode"), tf, with_snapshot=False)
+        mode = (s.get("config") or {}).get("trade_mode") if s["state"] != "stopped" else (a.get("mode") or "paper")
+        s["alerts"] = live_manager.recent_alerts((live_feed.SIGNAL_MODE, mode), limit=20)
+    except Exception as exc:
+        return _error(exc, 500)
+    s["feed"] = feed
+    return jsonify({"ok": True, "data": s})
 
 
 @app.post("/api/live/start")

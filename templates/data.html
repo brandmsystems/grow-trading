@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Management</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='data.css') }}">
+<script>try{const t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">9/21</span> EMA Crossover <span class="muted">· NIFTY options</span></div>
+  <nav><a href="/">Backtest</a><a href="/compare">Compare</a><a href="/signals">Signals</a><a href="/live">Live / Paper</a><a href="/data" class="active">Data</a><a href="/history">History</a><a href="/account">Account</a></nav>
+  <span class="spacer"></span>
+  <button id="themeBtn" class="btn icon" aria-label="Toggle light/dark theme">◐</button>
+</header>
+
+<main>
+  <div id="banner" class="banner" role="alert"></div>
+  <div id="progress" class="progress" hidden><div class="pbar"><div id="pfill"></div></div><span id="ptext"></span></div>
+
+  <section class="kpis" id="kpis" aria-label="Data summary"></section>
+
+  <div class="data-grid">
+    <section class="card">
+      <div class="card-head"><h2>Download NIFTY 1-minute data</h2></div>
+      <form id="dlForm" class="dl" onsubmit="return false">
+        <div class="row2">
+          <label>From<input type="date" id="d_from"></label>
+          <label>To<input type="date" id="d_to"></label>
+        </div>
+        <div class="dl-actions">
+          <button id="dlBtn" class="btn primary">Download or resume</button>
+          <button id="stopBtn" class="btn" hidden>Stop</button>
+        </div>
+        <p class="hint">Only days not yet stored are requested, so this is safe to re-run after a failure. Candles are stored exactly as Groww returns them; gaps are reported, never filled.</p>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Five-year availability</h2><span id="verdict" class="badge"></span></div>
+      <div id="verdictBody" class="pad"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head"><h2>Coverage by month</h2>
+      <div class="legend" aria-hidden="true">
+        <span><i class="sw c-full"></i>Complete</span><span><i class="sw c-part"></i>Has gaps</span><span><i class="sw c-none"></i>Not downloaded</span><span><i class="sw c-zero"></i>No candles returned</span>
+      </div>
+    </div>
+    <div class="table-wrap"><table class="months" id="months"></table></div>
+    <p class="hint pad-x">Each cell shows sessions stored / sessions requested or still to download. Select a month to open it in History.</p>
+  </section>
+
+  <div class="data-grid">
+    <section class="card">
+      <div class="card-head"><h2>Missing periods</h2></div>
+      <div id="missing" class="list"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Days with missing candles</h2></div>
+      <div id="partial" class="list"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head"><h2>Download history</h2></div>
+    <div class="table-wrap"><table id="runs"></table></div>
+  </section>
+</main>
+<script src="{{ url_for('static', filename='data.js') }}"></script>
+</body>
+</html>

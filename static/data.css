@@ -1,0 +1,46 @@
+/* Data Management and History pages */
+.data-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.pad{padding:12px 14px}
+.pad-x{padding:0 14px;margin:8px 0 12px}
+.dl{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.dl label{display:flex;flex-direction:column;gap:4px;color:var(--text-2);font-size:12px;min-width:0}
+.dl input{width:100%;min-width:0}
+.dl .hint{margin:0}
+.dl-actions{display:flex;gap:8px}
+.row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.badge.v-none{background:var(--loss-soft);color:var(--loss);font-weight:600}
+.badge.v-partial{background:var(--warn-soft);color:var(--warn);font-weight:600}
+.badge.v-full{background:var(--gain-soft);color:var(--gain);font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--text-2)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.sw{width:10px;height:10px;border-radius:3px;display:inline-block;border:1px solid var(--border-strong)}
+.c-full{background:var(--gain-soft)} .c-part{background:var(--warn-soft)} .c-none{background:var(--surface-2)}
+.c-zero{background:transparent;outline:1px dashed var(--border-strong);outline-offset:-1px;color:var(--muted)!important}
+.months{min-width:720px;font-size:12px;table-layout:fixed}
+.months th{font-weight:500;color:var(--muted);padding:8px 2px;text-align:center}
+.months th:first-child,.months td:first-child{width:56px;color:var(--text-2);font-weight:600;text-align:center}
+.months td{padding:2px;text-align:center}
+.months .cell{display:block;padding:6px 0;border-radius:6px;color:var(--text);text-decoration:none;font-family:"JetBrains Mono",monospace;font-size:11px}
+.months a.cell:hover{outline:1px solid var(--border-strong)}
+.months .blank{color:var(--muted)}
+.list{max-height:320px;overflow-y:auto;font-size:12px}
+.list .row{display:flex;justify-content:space-between;gap:12px;padding:7px 14px;border-bottom:1px solid var(--border)}
+.list .row:last-child{border-bottom:0}
+.list .muted{text-align:right}
+.list .none{padding:24px 14px;color:var(--muted);text-align:center}
+.list h3{margin:0;padding:10px 14px 4px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+#runs{font-size:12px;min-width:640px}
+#runs th{text-align:left;font-weight:500;color:var(--muted);padding:8px 14px;border-bottom:1px solid var(--border)}
+#runs td{padding:7px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+#runs td.num{text-align:left}
+#runs td{white-space:normal}
+#runs .err{color:var(--loss);min-width:260px;max-width:420px}
+.st-done{color:var(--gain)} .st-failed{color:var(--loss)} .st-stopped,.st-interrupted{color:var(--warn)}
+.navbtns{display:flex;flex-wrap:wrap;gap:6px}
+.ohlc{font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.chart-box{position:relative;height:min(62vh,560px);min-height:320px}
+#chart{position:absolute;inset:0}
+.chart-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--surface);color:var(--text-2);text-align:center;padding:20px;border-radius:0 0 12px 12px}
+@media (max-width:900px){.data-grid{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:1100px){main .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){main .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}

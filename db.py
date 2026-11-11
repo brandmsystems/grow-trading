@@ -3,59 +3,28 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
+import psycopg2.extensions
 from psycopg2.extras import execute_values
 from sqlalchemy import create_engine, text
 
 import config
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS candles_1m (
-    symbol TEXT NOT NULL,
-    ts     TIMESTAMP NOT NULL,          -- IST wall-clock candle START time
-    open   DOUBLE PRECISION, high DOUBLE PRECISION,
-    low    DOUBLE PRECISION, close DOUBLE PRECISION,
-    volume DOUBLE PRECISION, oi DOUBLE PRECISION,
-    PRIMARY KEY (symbol, ts)
-);
-CREATE TABLE IF NOT EXISTS expiries (
-    dataset TEXT NOT NULL, expiry DATE NOT NULL, PRIMARY KEY (dataset, expiry)
-);
-CREATE TABLE IF NOT EXISTS contracts (
-    dataset TEXT NOT NULL, symbol TEXT NOT NULL, expiry DATE NOT NULL,
-    strike DOUBLE PRECISION NOT NULL, opt_type TEXT NOT NULL,
-    PRIMARY KEY (dataset, expiry, strike, opt_type)
-);
--- Records (symbol, day) pairs already requested so empty days are not refetched.
-CREATE TABLE IF NOT EXISTS fetch_log (
-    symbol TEXT NOT NULL, day DATE NOT NULL, rows INTEGER NOT NULL,
-    fetched_at TIMESTAMP NOT NULL DEFAULT now(), PRIMARY KEY (symbol, day)
-);
-CREATE TABLE IF NOT EXISTS live_sessions (
-    id SERIAL PRIMARY KEY, trade_mode TEXT NOT NULL, config JSONB NOT NULL,
-    started_at TIMESTAMP NOT NULL DEFAULT now(), stopped_at TIMESTAMP, stop_reason TEXT
-);
-CREATE TABLE IF NOT EXISTS live_trades (
-    id SERIAL PRIMARY KEY, session_id INTEGER, trade_mode TEXT NOT NULL, day DATE NOT NULL,
-    exec_mode TEXT NOT NULL, direction TEXT NOT NULL, side TEXT NOT NULL,
-    trading_symbol TEXT NOT NULL, groww_symbol TEXT, strike DOUBLE PRECISION, opt_type TEXT,
-    expiry DATE, qty INTEGER NOT NULL, signal_ts TIMESTAMP, signal_close DOUBLE PRECISION,
-    entry_ts TIMESTAMP, entry_price DOUBLE PRECISION, entry_order_id TEXT,
-    exit_ts TIMESTAMP, exit_price DOUBLE PRECISION, exit_order_id TEXT, exit_reason TEXT,
-    gross DOUBLE PRECISION, slippage DOUBLE PRECISION, charges JSONB, net DOUBLE PRECISION,
-    status TEXT NOT NULL DEFAULT 'OPEN'          -- OPEN | CLOSED
-);
-CREATE TABLE IF NOT EXISTS live_events (
-    id SERIAL PRIMARY KEY, session_id INTEGER, ts TIMESTAMP NOT NULL,
-    level TEXT NOT NULL, message TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS bt_runs (
-    id SERIAL PRIMARY KEY, param_hash TEXT UNIQUE NOT NULL,
-    params JSONB NOT NULL, result JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-"""
+MIGRATIONS_DIR = config.BASE_DIR / "migrations"
+IST = ZoneInfo("Asia/Kolkata")
+CONNECT_ARGS = {"options": "-c timezone=Asia/Kolkata"}
+
+
+def _cast_timestamptz(value, cur):
+    """Columns hold real instants; the app works in IST wall-clock datetimes."""
+    if value is None:
+        return None
+    return datetime.fromisoformat(value).astimezone(IST).replace(tzinfo=None)
+
+
+psycopg2.extensions.register_type(psycopg2.extensions.new_type((1184,), "TIMESTAMPTZ_IST", _cast_timestamptz))
 
 _engine = None
 
@@ -63,16 +32,24 @@ _engine = None
 def engine(dbname: str | None = None):
     global _engine
     if dbname:
-        return create_engine(config.database_url(dbname), pool_pre_ping=True)
+        return create_engine(config.database_url(dbname), pool_pre_ping=True, connect_args=CONNECT_ARGS)
     if _engine is None:
-        _engine = create_engine(config.database_url(), pool_pre_ping=True)
+        _engine = create_engine(config.database_url(), pool_pre_ping=True, connect_args=CONNECT_ARGS)
     return _engine
 
 
 def init(eng=None) -> None:
+    """Apply any migrations not yet recorded, all in one transaction."""
     eng = eng or engine()
     with eng.begin() as c:
-        c.exec_driver_sql(SCHEMA)
+        c.exec_driver_sql("SELECT pg_advisory_xact_lock(921921)")
+        c.exec_driver_sql("CREATE TABLE IF NOT EXISTS schema_migrations ("
+                          "version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+        done = {r[0] for r in c.exec_driver_sql("SELECT version FROM schema_migrations")}
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            if path.stem not in done:
+                c.exec_driver_sql(path.read_text(encoding="utf-8"))
+                c.execute(text("INSERT INTO schema_migrations (version) VALUES (:v)"), {"v": path.stem})
 
 
 # ---------------------------------------------------------------- candles
@@ -217,6 +194,8 @@ def clear_runs(dataset: str | None = None, eng=None) -> None:
     eng = eng or engine()
     with eng.begin() as c:
         if dataset:
-            c.execute(text("DELETE FROM bt_runs WHERE params->>'dataset'=:d"), {"d": dataset})
+            # Signals analyses stay: they are keyed by their data and prediction mode needs them.
+            c.execute(text("DELETE FROM bt_runs WHERE params->>'dataset'=:d AND coalesce(params->>'kind', '') <> 'signals'"),
+                      {"d": dataset})
         else:
             c.execute(text("DELETE FROM bt_runs"))

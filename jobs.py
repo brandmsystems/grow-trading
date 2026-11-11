@@ -8,13 +8,15 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 log = logging.getLogger("jobs")
-_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="job")
+_pools = {"main": ThreadPoolExecutor(max_workers=1, thread_name_prefix="job"),
+          # Long research runs get their own lane so they don't block downloads and backtests.
+          "research": ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")}
 _jobs: dict[str, dict] = {}
 _ids = itertools.count(1)
 _lock = threading.Lock()
 
 
-def submit(kind: str, fn, *args, **kwargs) -> str:
+def submit(kind: str, fn, *args, lane: str = "main", **kwargs) -> str:
     jid = f"{kind}-{next(_ids)}"
     job = {"id": jid, "kind": kind, "state": "queued", "progress": 0.0, "message": "Queued",
            "result": None, "error": None}
@@ -33,7 +35,7 @@ def submit(kind: str, fn, *args, **kwargs) -> str:
             log.error("job %s failed: %s\n%s", jid, exc, traceback.format_exc())
             job.update(state="error", error=str(exc) or type(exc).__name__)
 
-    _pool.submit(runner)
+    _pools[lane].submit(runner)
     return jid
 
 
