@@ -21,11 +21,11 @@ grow-trading/
 │   ├── pytest.ini
 │   └── requirements.txt
 ├── frontend/                 React 19 + TypeScript + Vite + Tailwind app (served at /app)
-│   ├── src/pages/            LiveDashboard
-│   ├── src/components/       dashboard/, charts/, trading/, common/
-│   ├── src/hooks/            useDashboard (polling, reconnect), useAlerts (sound, notifications)
-│   ├── src/services/api.ts   typed API client
-│   ├── src/context/          SettingsContext (theme, sound, timeframe, capital, risk %, engine form)
+│   ├── src/pages/            Overview, LiveTrading, Signals, Options, Backtest, Compare, MarketData, HistoryCharts, Account
+│   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, charts/, common/
+│   ├── src/context/          SettingsContext (preferences), LiveContext (one shared live poll, alerts, trades)
+│   ├── src/hooks/            useDashboard, useAlerts, useApi (+ waitForJob)
+│   ├── src/services/api.ts   typed client for every API call
 │   ├── src/types/, src/utils/
 │   ├── index.html, vite.config.ts, tsconfig.json, package.json
 │   └── dist/                 production build (git-ignored)

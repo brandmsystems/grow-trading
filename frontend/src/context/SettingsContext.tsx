@@ -9,6 +9,7 @@ export interface Settings {
   capital: number | null;     // for position sizing; empty = use Groww's available margin
   riskPct: number;            // % of capital risked per trade
   engine: EngineConfig;       // last used engine settings
+  sidebarCollapsed: boolean;  // desktop sidebar shows icons only
 }
 
 export const DEFAULT_ENGINE: EngineConfig = {
@@ -16,7 +17,7 @@ export const DEFAULT_ENGINE: EngineConfig = {
   lots: 1, roll_on_expiry_day: true, max_daily_loss: 5000, max_trades_per_day: 6,
   signal_mode: "cross", strategy: "ema_9_21", min_score: 50, order_confirmation: "manual",
 };
-const DEFAULTS: Settings = { theme: "dark", sound: true, timeframe: 5, capital: null, riskPct: 1, engine: DEFAULT_ENGINE };
+const DEFAULTS: Settings = { theme: "dark", sound: true, timeframe: 5, capital: null, riskPct: 1, engine: DEFAULT_ENGINE, sidebarCollapsed: false };
 const KEY = "gt-settings";
 
 function load(): Settings {

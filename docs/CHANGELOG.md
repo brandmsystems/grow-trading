@@ -2,6 +2,30 @@
 
 All dates are 2026, IST.
 
+## 11 Nov: Frontend redesign (frontend only)
+- **New app shell:**
+  - collapsible left sidebar (icon rail on tablets)
+  - phone header with NIFTY price and latest signal, a bottom bar and a menu drawer
+  - header with Groww connection, market status, engine state, notification bell with unread badge, sound and theme
+- **Colour system:** green gains/BUY/CE, red losses/PE, blue spot, purple strategy, orange risk, grey neutral. Light and dark themes.
+- **Nine React pages:** Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, Market Data, Historical Charts, Account & Settings. Every legacy page now has a React equivalent.
+- **Live Trading:**
+  - spot card; large chart with EMA 9/21, crossover arrows, engine entry/exit markers and stop/target lines
+  - separate CE/PE premium panel ("spot = index, premium = contract")
+  - recommendation card; order calculator with tooltips and charge breakdown; trading controls with manual order confirmation
+- **Notification panel:**
+  - signal/trade alerts plus connection and engine events from real state changes
+  - sound, browser notifications, flash, unread badge; no duplicates
+- **One shared live poll** (`LiveContext`) instead of one per page.
+- **Performance figures** now use the engine session's own mode and day: a stopped replay shows as "Last engine session · REPLAY · <day>" instead of being mixed with today's paper trades.
+- **Backend limitations** are stated on the pages rather than worked around: single recommended contract, no option chain or expiry endpoint, no option volume or premium change, NIFTY-only history.
+- **Removed:** `components/dashboard/*` and `pages/LiveDashboard.tsx`, replaced by the new components.
+- **Tests:**
+  - TypeScript check and production build pass
+  - all 9 pages at 1920/1440/1024/768/390/360 px: no overflow, no console errors (54/54)
+  - Paper start/stop and replay notifications checked in a real browser
+  - no backend file changed
+
 ## 11 Nov: Phase 5, React frontend
 - **New `frontend/`:** React 19 + TypeScript + Vite 8 + Tailwind 4 + Lucide + Lightweight Charts 4.2, served by Flask at `/app` (`api/frontend.py`).
 - **Live dashboard:**

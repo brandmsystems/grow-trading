@@ -1,70 +1,117 @@
 # Frontend
 
-## React app (`frontend/`)
-**Stack:** React 19, TypeScript 5, Vite 8, Tailwind CSS 4, Lucide React, TradingView Lightweight Charts 4.2, React Router 7.
+**Stack:** React 19, TypeScript 5, Vite 8, Tailwind CSS 4, Lucide React, TradingView Lightweight Charts 4.2, React Router 7. There are no other dependencies.
 
 **Address:** the app runs under **`/app`**:
 - **Production:** http://127.0.0.1:5000/app, served by Flask from `frontend/dist`.
 - **Development:** http://127.0.0.1:5173/app, via Vite, which proxies `/api` and `/socket.io` to Flask.
 
-| Page | Route | Status |
-|---|---|---|
-| Live dashboard | `/app/` | **Done** (Phase 5) |
-| Backtest, Compare, Signals, Data, History, Account | — | Still the Flask pages at `/`, `/compare`, `/signals`, `/data`, `/history`, `/account`. The header links to them. They will be ported one by one, and each legacy page is removed only after its React version works |
+**Design pass (11 Nov 2026):** the redesign was frontend only. No backend file, route, response, database table or trading rule changed.
 
-### Live dashboard: what it shows
-1. **NIFTY 50:** price, change, OHLC and quote time. Marked live, delayed or closed.
-2. **5-minute candles with EMA 9 (blue) and EMA 21 (orange)** and crossover markers. Bars come from Groww; the forming bar is shown separately.
-3. **Trend:** up, down or flat from EMA 9 vs 21, with the gap and the last closed bar.
-4. **Recommendation:** BUY CE / BUY PE / HOLD with the strategy's reason. For BUY signals:
-   - the verified contract: strike, expiry, Groww symbol
-   - live premium, entry price, stop and target (option price and NIFTY level)
-   - lots and quantity, investment, max risk and profit at target, from your capital and risk % (or Groww's available margin)
-5. **Today's P&L after costs:** open plus realised.
-6. **Notifications:** the last 20 alerts from the strategy and the engine. Each new one plays a sound (toggle in the header), shows a browser notification if allowed, and flashes the recommendation. Each signal alerts once, because the server stores it with a unique key.
-7. **Trading engine:**
-   - **Modes:** Paper, Live or Replay.
-   - **Settings:** option type, timeframe, signal source (every crossover or prediction score), lots, loss and trade limits.
-   - **Controls:** start, stop, square-off; the open position with live P&L.
-8. **Status:** connection (connected, delayed, disconnected) and market status in the header.
-
-### Live order safety
-- **Starting Live** requires typing `LIVE` and is capped by `LIVE_MAX_LOTS`.
-- **Manual confirmation is the default:** each entry order appears as **Confirm live order** with a countdown. Nothing is sent unless you click *Place order*. If the signal expires, nothing is placed.
-- **Automatic entries** need ticking a box before each start. The setting is never restored from a previous session.
-- **Protective exits** (stop, square-off, 15:00, loss limit) run automatically once a position exists.
-
-### Source layout
-| Folder | Contents |
+## Layout and navigation
+| Screen | Navigation |
 |---|---|
-| `src/pages/` | `LiveDashboard.tsx` |
-| `src/components/dashboard/` | `Header`, `MarketSummary` (price, trend, P&L), `SignalCard` (recommendation and sizing), `Notifications` |
-| `src/components/charts/` | `CandleChart` (candles, EMAs, crossover markers) |
-| `src/components/trading/` | `EnginePanel` (settings, controls, position), `PendingOrder` (confirm/skip with countdown) |
-| `src/components/common/` | `Card`, `Stat`, `Pill`, `Dot` |
-| `src/hooks/` | `useDashboard` (polling with backoff and reconnect), `useAlerts` (new-alert detection, sound, notifications) |
-| `src/services/api.ts` | Typed API client |
-| `src/context/SettingsContext.tsx` | Per-browser preferences: theme, sound, timeframe, capital, risk %, engine form |
-| `src/types/api.ts` | Response types matching [API.md](API.md) |
-| `src/utils/format.ts` | ₹ and number formatting, IST times |
+| Desktop (≥1024 px) | Left sidebar with names. It collapses to icons (button at the bottom; the choice is saved) and shows a live NIFTY/signal tile |
+| Tablet (768–1023 px) | Sidebar as an icon rail |
+| Phone (<768 px) | Compact header showing NIFTY price and the latest signal. Bottom bar with Overview, Live, Signals, Backtest and **More**, which opens a drawer with every page |
 
-### Data flow
-- **Endpoint:** `useDashboard` calls `GET /api/live/dashboard` (engine state + Groww feed + alerts).
-- **Polling rate:**
-  - every 2 s while the market is open or the engine runs
-  - every 10 s otherwise
-  - after failures, backs off up to 30 s and recovers by itself
-- **Phase 6:** Socket.IO push will replace polling, with polling kept as the fallback.
+**Header (all sizes):**
+- page title
+- Groww connection (connected, delayed, error, backend offline)
+- market status and engine state
+- notification bell with an unread badge
+- sound toggle and theme toggle (on phones, sound and theme are under Account & Settings)
 
-**Themes:** dark (default) and light, responsive down to phone width.
+## Colour system
+Colours mean the same thing on every page (`src/index.css`):
+
+| Colour | Meaning |
+|---|---|
+| Green | Up moves, BUY signals, CE, profits |
+| Red | Down moves, losses, PE, risk of loss |
+| Blue | NIFTY spot and primary actions |
+| Purple | Strategy and indicators (EMAs, signals) |
+| Orange | Warnings, risk, charges |
+| Grey | Neutral |
+
+Light and dark themes are both supported; dark is the default.
+
+## Pages
+| Page | Route | API calls | Shows |
+|---|---|---|---|
+| Overview | `/app/` | shared live feed + `GET /api/live/trades` | NIFTY spot card, option premium (CE/PE), 9/21 strategy card (EMAs, trend, latest cross, signal), today's or last-session performance (P&L, trades, won, lost, win rate), 5-min chart, recommendation, recent notifications |
+| Live Trading | `/app/live` | shared live feed + trades, `POST /api/live/start, stop, squareoff, confirm, reject` | Spot card; large candle chart (5/15/30 min) with EMA 9/21, crossover arrows, engine entry/exit markers and stop/target lines (zoom, pan, crosshair); CE/PE premium; recommendation; order calculator; trading controls with manual order confirmation; notifications |
+| Trading Signals | `/app/signals` | shared live feed, `GET /api/signals`, `POST /api/signals/build`, `GET /api/bt/meta` | Latest live signal with entry, stop, target, time and EMA confirmation; exit signals; past signals with a strength bar (Weak / Moderate / Strong), outcomes and indicator checklist, labelled as history |
+| Options Analysis | `/app/options` | shared live feed | Spot vs the selected contract (strike, expiry, premium, chain LTP, OI, IV, delta, moneyness), plus a note on what the backend doesn't provide |
+| Backtesting | `/app/backtest` | `GET /api/bt/meta`, `POST /api/bt/run`, `GET /api/jobs/<id>`, `GET /api/bt/result/<h>`, `GET /api/bt/chart/<h>/<id>` | Settings (strategy, timeframe, dates, window, expiry, lots, charges); KPIs (net P&L, win rate, trades, max drawdown, charges, profit factor); equity curves for all three modes; monthly P&L bars; year × month table; best and worst days; trade list with spot and option charts; no-trade days and skipped trades |
+| Strategy Comparison | `/app/compare` | `GET /api/research`, `POST /api/research/run`, `GET /api/bt/meta` | 7 strategies × 4 timeframes coloured green/red by net P&L; tick up to 4 for equity curves; win rate and drawdown bars; year-by-year table; walk-forward table. Clicking a cell opens it in Backtesting |
+| Market Data | `/app/data` | `GET /api/data/overview`, `POST /api/data/download`, `POST /api/data/stop`, `GET /api/jobs/<id>` | Coverage KPIs, instruments, availability, month grid (links to Historical Charts), missing periods, days with gaps, download form with progress and stop, download history |
+| Historical Charts | `/app/history` | `GET /api/data/overview`, `GET /api/data/candles` | Stored NIFTY candles at 1/5/15/30 min with optional EMA 9/21, date range, earlier/later/latest, zoom and pan |
+| Account & Settings | `/app/account` | `GET /api/status, /api/profile, /api/funds`, `POST /api/login` | Groww connection and re-login; funds; profile; theme, sound and browser notification permission; order calculator defaults; links to the legacy pages |
+
+**One shared live poll:** `context/LiveContext.tsx` polls `/api/live/dashboard` once for the whole app, every 2 s while the market is open or the engine runs, otherwise every 10 s, with backoff when the backend is unreachable. The header, Overview, Live Trading, Signals and Options all read that one response, so changing pages never duplicates calls.
+
+## Notifications
+- **Sources:**
+  - signal and trade alerts from the server (`live_alerts`, stored once per signal, so never duplicated)
+  - connection-lost/restored and engine-state-change events, created by the app from real state changes
+- **On a new alert:**
+  - a sound (different tones for entry, exit and warnings)
+  - a browser notification, if permitted
+  - a flash on the recommendation card
+  - the tab title changes while the tab is hidden
+  - the unread badge goes up (cleared when the panel is opened)
+- **Duplicates:** alerts that existed when the page opened never trigger sound or notifications.
+- **Where they're shown:** the bell's panel shows the full history. Overview and Live Trading show the latest.
+
+## Live order safety
+- **Starting Live:** requires typing `LIVE` and is capped by `LIVE_MAX_LOTS`.
+- **Manual confirmation is the default:** each entry appears as **Confirm live order** with a countdown. Nothing is sent unless you click *Place order*.
+- **Automatic entries:** need a checkbox ticked before each start. The setting is never restored from storage.
+- **Protective exits** (stop, square-off, 15:00, loss limit) are automatic.
+
+## Components (`frontend/src`)
+| Folder | Components |
+|---|---|
+| `components/layout/` | `AppLayout` (shell), `Sidebar`, `Topbar`, `MobileNav` (bottom bar + drawer), `NotificationPanel` (+ reusable `AlertList`), `nav.ts` (one list for every navigation) |
+| `components/market/` | `MarketCards`: `SpotCard`, `PremiumCard`, `StrategyCard`, `PerformanceCard` |
+| `components/trading/` | `RecommendationCard`, `OrderCalculator`, `EnginePanel` (controls), `PendingOrder` (confirm with countdown) |
+| `components/charts/` | `CandleChart` (candles, optional EMAs, cross/trade markers, price levels), `SeriesChart`: `LineChart` (equity) and `BarsChart` (monthly P&L) |
+| `components/common/` | `Card` (with colour accent), `Stat`, `InfoTip`, `Pill`, `Dot`, `BigValue`; `Controls`: `Field`, `Segmented`, `Button`, `PageHeader`, `inputCls`/`selectInline`; `States`: `Loading`, `Empty`, `ErrorNote`, `Warning`, `Limitation`, `Progress` |
+| `context/` | `SettingsContext` (theme, sound, timeframe, capital, risk %, engine form, sidebar state; saved per browser), `LiveContext` (shared live poll, today's trades, alerts, status events, unread count) |
+| `hooks/` | `useDashboard` (polling with backoff), `useAlerts` (new-alert detection, sound, notifications, `describe`), `useApi` (load/reload with loading and error) + `waitForJob` |
+| `services/api.ts` | Every API call. `request` returns the full envelope (`data`, `job`, `hash`); `api` returns `data` |
+| `types/api.ts` | Types for every response used |
+| `utils/format.ts` | ₹ (incl. lakh/crore), numbers, %, IST dates and times, chart time |
+
+**Removed in this redesign** (replaced, not duplicated): `components/dashboard/{Header, MarketSummary, SignalCard, Notifications}.tsx` and `pages/LiveDashboard.tsx`.
+
+## Backend limitations (shown on the pages, not worked around)
+| Request | Status |
+|---|---|
+| CE **and** PE premiums at the same time | The live feed returns only the **recommended** contract (none on HOLD). The other side says so |
+| Premium change, volume | Not provided for options (OI, IV and delta are) |
+| Option chain, list of expiries | No frontend endpoint; the backend reads them internally. Options Analysis says so |
+| Historical charts for other instruments | `/api/data/candles` serves NIFTY spot only |
+| EMAs on historical charts | Calculated in the browser on the loaded range (same formula); the first bars differ slightly from the strategy's EMAs, which carry over from earlier days. Labelled on the page |
+| Live strength score | Live crossover signals have no score; strength bars apply to the historical analysis |
+
+## Testing (11 Nov 2026)
+- **Build:** `npm run build` (TypeScript strict type check + production build) passes. Each page loads only when first opened (largest page chunk 16 kB).
+- **Every page at every required width:** a headless check with puppeteer-core and the installed Edge loaded all 9 pages at 1920, 1440, 1024, 768, 390 and 360 px. **54 of 54 had no horizontal overflow and no console errors.** Screenshots of each were reviewed.
+- **Controls and notifications in a real browser:**
+  - Start Paper and Stop (with its confirm dialog) work.
+  - During a replay, the page showed the engine's BUY CE / SELL / BUY PE alerts and the open position from the live API.
+- **Live data:** NIFTY spot, quote time, EMAs and crossovers were checked against Groww data. The market was closed, so a live verified CE/PE premium couldn't be shown; the premium path is the same code as before, and the replay showed real contract prices.
+- **Backend:** unchanged; its test suite was re-run (see CHANGELOG).
 
 ## Build and run
 ```powershell
 cd frontend
 npm install
-npm run build      # type-check + production build to frontend/dist (served at /app)
+npm run build      # type check + production build to frontend/dist (served at /app)
 npm run dev        # development server at http://127.0.0.1:5173/app
 ```
 
 ## Legacy pages (`backend/legacy/`)
-The server-rendered pages (Jinja templates + plain JS) stay in service until React replaces them. Their Live page (`/live`) is superseded by `/app` and will be removed once you've confirmed the React dashboard.
+The old server-rendered pages still exist at `/`, `/live`, `/compare`, `/signals`, `/data`, `/history` and `/account`, but they aren't linked from the React app's navigation (Account & Settings links them). Every one now has a React equivalent, so they can be removed once you've confirmed the new pages.

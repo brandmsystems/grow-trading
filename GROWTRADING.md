@@ -2,7 +2,7 @@
 
 The complete record of Grow Trading: what it does, how it's built, what has been verified, and what's pending. Detailed topics live in [docs/](docs/); this file summarises them and links to each.
 
-*Last updated: 11 Nov 2026, after Phase 5 (React live dashboard).*
+*Last updated: 11 Nov 2026, after the frontend redesign.*
 
 ---
 
@@ -18,7 +18,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Live (real-money) engine | Built with safety rails. **Every entry order waits for your confirmation by default**; tested on replays, no real order placed yet |
 | Alerts | Stored once per signal (`live_alerts`), shown on the Live page |
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
-| React frontend (Phase 5) | **Live dashboard done** at `/app`. The other six pages are still the server-rendered versions |
+| React frontend (Phase 5 + redesign) | **All 9 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. Legacy pages still served until removed |
 | WebSocket updates (Phase 6) | **Not started** |
 | Tests | **140 pass**; React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
@@ -92,10 +92,15 @@ docs/             documentation
 - **Signals page:** entry reference, stop (1 × ATR), target (2 × ATR), indicator checklist, score with the hit rate its band achieved on unseen data, strong-alert rule.
 - **Prediction mode** in the engine trades only signals scoring at or above your minimum. Live scores were verified to match offline scores exactly.
 
-### React live dashboard (`/app`)
-- **Shows:** NIFTY price, 5-minute candles with EMA 9/21 and crossovers, trend, BUY CE / BUY PE / HOLD with the verified contract, live premium, entry/stop/target, lots and quantity, investment and risk, today's P&L, connection and market status.
-- **Notifications:** sound, browser alert and flash, once per signal.
-- **Engine controls:** with live-order confirmation. Details: [docs/FRONTEND.md](docs/FRONTEND.md).
+### React app (`/app`)
+- **Pages:** Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, Market Data, Historical Charts, Account & Settings.
+- **Layout:** collapsible sidebar on desktop, icon rail on tablets, bottom bar and drawer on phones. The header shows Groww connection, market status, engine state and a notification bell.
+- **Colours:** green for gains, BUY and CE; red for losses and PE; blue for spot; purple for strategy; orange for risk.
+- **Live Trading:** spot vs option premium shown separately; chart with EMA 9/21, crossovers, trade markers and stop/target lines; recommendation; order calculator; controls with live-order confirmation.
+- **Notifications:** sound, browser alert, flash and badge, once per signal.
+- **Backend limitations** (single recommended contract, no option chain endpoint, NIFTY-only history) are stated on the pages.
+
+Details: [docs/FRONTEND.md](docs/FRONTEND.md).
 
 ### Live / paper / replay engine
 - **Modes:** Paper (Groww prices, simulated fills), Live (MIS market orders), Replay (stored day, fast clock).
@@ -152,7 +157,10 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 ## 8. Tests
 - **Count:** 140 tests in `backend/tests` (10 files), all passing after Phase 5.
 - **Baseline before the restructure:** 134 passing. Added since: env-var credentials (1), live order confirmation (3), React app serving (2).
-- **Frontend:** `npm run build` (type check + production build) passes.
+- **Frontend:**
+  - `npm run build` (type check + production build) passes
+  - all 9 pages at 6 widths (1920–360 px): no overflow and no console errors
+  - controls and notifications checked in a real browser
 - **What they cover:** credentials, trading rules, charges, providers, backtest end-to-end, data manager, research and signals, live engine (it must equal the backtest), prediction mode, alerts, live feed.
 - **Not yet tested:** WebSocket updates (Phase 6). The React dashboard was checked in a browser at desktop and phone width against live Groww data and a replay.
 
@@ -165,7 +173,7 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 | 2. Dependencies | Mapping from every old file to its new module (see [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md), "Previously" column) |
 | 3. Structure | `backend/`, `frontend/` (pending), `data/`, `scripts/`, `docs/`, `start.py`, `.env.example` |
 | 4. Backend migration | `git mv` + mechanical import rewrite, no logic changes. Then blueprints, brokers/options/notifications split, shared helpers, env credentials, Grow Trading naming. 135 tests pass, and all pages and APIs answer |
-| 5. React | Live dashboard at `/app` with engine controls and live-order confirmation. Other pages next |
+| 5. React | All pages in React after the frontend redesign (sidebar layout, 54/54 responsive checks pass). Live-order confirmation in the UI |
 | 6. WebSockets | Not started |
 | 7. Verification | Backend done; frontend pending |
 | 8. Docs | This file, README and docs/* updated |
@@ -183,9 +191,9 @@ Dated details: [docs/CHANGELOG.md](docs/CHANGELOG.md).
 Full list: [docs/TODO.md](docs/TODO.md).
 
 **Pending:**
-- port the remaining six pages to React
 - Socket.IO push (Phase 6)
-- remove `backend/legacy/` after porting
+- remove `backend/legacy/` once the React pages are confirmed
+- backend endpoints for option chain/expiries and CE+PE premiums (see [docs/TODO.md](docs/TODO.md))
 
 **Known issues:**
 - **Legacy `/live` page:** mixed from two sessions' edits; superseded by `/app`.

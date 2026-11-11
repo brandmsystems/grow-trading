@@ -1,6 +1,6 @@
 # Pending work and known issues
 
-*Updated 11 Nov 2026, after Phase 5 (live dashboard).*
+*Updated 11 Nov 2026, after the frontend redesign.*
 
 ## Restructure phases
 | Phase | Status |
@@ -9,7 +9,7 @@
 | 2. Dependencies and duplicates | Done |
 | 3. New folder structure | Done |
 | 4. Backend migration (no logic changes) | Done |
-| 5. React frontend connected to Flask | **Live dashboard done** (`/app`). Other pages still legacy |
+| 5. React frontend connected to Flask | **Done:** all 9 pages in React (redesign, 11 Nov). Legacy pages still served until removed |
 | 6. WebSocket live updates (Flask-SocketIO, auto-reconnect) | **Not started**; `flask-socketio` not installed yet |
 | 7. Full verification (tests, Groww connectivity, live data, React build) | Pending |
 | 8. Documentation per phase | Ongoing |
@@ -20,12 +20,18 @@
 - **Commit at the end of each phase.**
 
 ## Next
-- Port Backtest, Compare, Signals, Data, History and Account to React; then remove `backend/legacy/`.
-- Remove the legacy `/live` page once you've confirmed the React dashboard.
+- Remove `backend/legacy/` (old server-rendered pages) once you've confirmed the React pages. Every one now has a React equivalent.
+- Backend endpoints the redesigned frontend would use (frontend-only work couldn't add them):
+  - option chain and expiry list for Options Analysis
+  - CE and PE premiums together, with premium change and volume
+  - historical candles for futures and option contracts
+  - EMA values from `/api/data/candles`, so historical EMAs match the strategy exactly
 - Phase 6: Flask-SocketIO push for quotes, signals and alerts.
 
 ## Known issues
-- **Legacy `/live` page:** mixed from two sessions' edits; superseded by `/app`.
+- **Legacy `/live` page:** mixed from two sessions' edits; superseded by `/app/live`.
+- **Polling delay:** with the engine stopped, the app polls every 10 s, so an engine started from elsewhere appears up to 10 s later. Phase 6 (Socket.IO) removes this.
+- **Live premiums not seen during market hours yet:** the redesign was checked after the close. The CE/PE premium panel was checked with HOLD and replay data, not with a live BUY signal.
 - **First live order not yet seen:** manual confirmation is tested on replayed days with a counting broker, but no real Groww order has been placed through it yet.
 - **`_now()` exists in three modules** (backtest engine, history, providers). Tests patch each one separately, so they were left as they are.
 - **Market status:** no holiday calendar, so it shows "open" on NSE holidays.
