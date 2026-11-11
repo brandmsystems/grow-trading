@@ -20,7 +20,15 @@ grow-trading/
 │   ├── tests/                pytest suite
 │   ├── pytest.ini
 │   └── requirements.txt
-├── frontend/                 React app (Phase 5; not built yet)
+├── frontend/                 React 19 + TypeScript + Vite + Tailwind app (served at /app)
+│   ├── src/pages/            LiveDashboard
+│   ├── src/components/       dashboard/, charts/, trading/, common/
+│   ├── src/hooks/            useDashboard (polling, reconnect), useAlerts (sound, notifications)
+│   ├── src/services/api.ts   typed API client
+│   ├── src/context/          SettingsContext (theme, sound, timeframe, capital, risk %, engine form)
+│   ├── src/types/, src/utils/
+│   ├── index.html, vite.config.ts, tsconfig.json, package.json
+│   └── dist/                 production build (git-ignored)
 ├── data/                     Runtime data (git-ignored): historical/, exports/, logs/
 ├── scripts/                  One-off maintenance scripts
 ├── docs/                     This documentation
@@ -41,7 +49,8 @@ grow-trading/
 | `backtest.py` | `/api/bt/*`, `/api/jobs/<id>` |
 | `data.py` | `/api/data/*` |
 | `research.py` | `/api/research*`, `/api/signals*` |
-| `live.py` | `/live`, `/api/live/*` |
+| `live.py` | `/live`, `/api/live/*` (incl. `confirm`, `reject`) |
+| `frontend.py` | `/app`, `/app/<path>`: the built React app |
 
 Details: [API.md](API.md).
 
@@ -91,5 +100,6 @@ Details: [API.md](API.md).
 | test_research.py | Indicators, strategies, signals, walk-forward |
 | test_live_engine.py | Engine = backtest, safety rails, prediction mode, alerts |
 | test_live_feed.py | Live feed, contract checks, sizing |
+| test_frontend.py | React build served at /app, client-route fallback, no files outside dist |
 
 The files under `services/` keep the names other modules and tests import. For example, `feed.py` still exposes `size_position`, and `manager.py` still exposes `recent_alerts`.

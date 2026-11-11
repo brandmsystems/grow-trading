@@ -8,8 +8,9 @@ A NIFTY options trading system built on the Groww Trade API. It covers:
 - paper, live and replay trading engines with safety limits and alerts
 
 **Status (11 Nov 2026):**
-- The Python backend has been restructured into `backend/app` (Phases 1–4), and all 135 tests pass.
-- The React frontend (Phase 5) and WebSocket updates (Phase 6) are not built yet. Until then the existing server-rendered pages are served.
+- The Python backend has been restructured into `backend/app` (Phases 1–4).
+- **The React live dashboard is at http://127.0.0.1:5000/app** (Phase 5). The other pages are still the server-rendered versions until they're ported. WebSocket push (Phase 6) isn't built yet.
+- All 140 tests pass.
 
 [GROWTRADING.md](GROWTRADING.md) has the full record and [docs/TODO.md](docs/TODO.md) the pending work.
 
@@ -18,11 +19,13 @@ A NIFTY options trading system built on the Groww Trade API. It covers:
 cd C:\Amruthesh\grow-trading
 .venv\Scripts\python -m pip install -r backend\requirements.txt
 copy .env.example .env      # set PG_PASSWORD; Groww credentials here or in keys.txt
-python start.py             # http://127.0.0.1:5000
+cd frontend; npm install; npm run build; cd ..   # builds the React app
+python start.py             # http://127.0.0.1:5000  (React dashboard at /app)
 ```
 
 | Page | URL |
 |---|---|
+| **Live dashboard (React)** | http://127.0.0.1:5000/app |
 | Backtest | http://127.0.0.1:5000/ |
 | Compare | http://127.0.0.1:5000/compare |
 | Signals | http://127.0.0.1:5000/signals |
@@ -58,4 +61,4 @@ cd backend
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Dated changes |
 | [docs/TODO.md](docs/TODO.md) | Pending work and known issues |
 
-**Safety:** Live mode places real orders. It needs the `LIVE` confirmation and is capped by `LIVE_MAX_LOTS`. Past backtest results don't predict future returns, and none of the tested strategies was clearly profitable after costs.
+**Safety:** Live mode places real orders. It needs the `LIVE` confirmation, is capped by `LIVE_MAX_LOTS`, and by default asks you to confirm every entry order. Past backtest results don't predict future returns, and none of the tested strategies was clearly profitable after costs.

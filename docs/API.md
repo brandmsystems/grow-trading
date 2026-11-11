@@ -47,6 +47,8 @@
 | GET | `/api/live/status?mode=&tf=&strategy=` | Engine state, position, P&L, config, market status, recent alerts, NIFTY/EMA snapshot |
 | GET | `/api/live/dashboard?tf=&entry_start=&cutoff=&exec_mode=&roll=&capital=&risk_pct=&mode=` | All of the above plus the live feed: quote, chart bars, signal, verified option contract and premium, stop/target, sizing |
 | POST | `/api/live/start` | Body `{"config": {...}, "confirm": "LIVE", "replay_day", "replay_speed"}`. Live mode requires `confirm` and respects `LIVE_MAX_LOTS` |
+| POST | `/api/live/confirm` | Body `{"id"}`: place the live entry order waiting for confirmation (409 if it expired or the engine can't enter) |
+| POST | `/api/live/reject` | Body `{"id"}`: skip it; no order is placed |
 | POST | `/api/live/stop` | Square off and stop |
 | POST | `/api/live/squareoff` | Square off; the engine keeps running |
 | GET | `/api/live/trades?mode=&day=` | Engine trades |
@@ -57,6 +59,12 @@
 - `timeframe` (5, 15, 30), `entry_start`, `cutoff`
 - `lots`, `max_daily_loss`, `max_trades_per_day`, `roll_on_expiry_day`
 - `signal_mode` (cross, prediction), `strategy`, `min_score`
+- `order_confirmation` (manual, auto), default `manual`. It only affects Live mode; Paper and Replay fill automatically.
+
+The status payload includes `pending_order` (id, side, contract, qty, LTP, signal time, `expires`) while a live order waits for confirmation.
+
+## React app (`api/frontend.py`)
+`GET /app`, `/app/<path>` serve the built React app from `frontend/dist`. Unknown paths fall back to `index.html` for client-side routes. Nothing outside `dist` is ever served. If the app hasn't been built, it returns 404 with build instructions.
 
 ## Legacy pages: `api/pages.py`, plus `/live` in `api/live.py`
 `/`, `/compare`, `/signals`, `/data`, `/history`, `/account`, `/live` serve the server-rendered pages until React replaces them.

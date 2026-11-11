@@ -34,7 +34,10 @@
 | Performance reporting | `backtest/metrics.py`, `research.py` |
 
 4. **One source of trading rules:** the backtester, the live/paper engine and the live feed all call `strategy/rules.generate_legs`. A test replays days through the engine and requires the same trades as the backtest.
-5. **Order safety:** only `trading/brokers.LiveBroker` places orders. It is used only when Live mode was started with the `LIVE` confirmation and within `LIVE_MAX_LOTS`. Per-order manual confirmation is planned ([TODO.md](TODO.md)).
+5. **Order safety:** only `trading/brokers.LiveBroker` places orders.
+   - It is used only when Live mode was started with the `LIVE` confirmation and within `LIVE_MAX_LOTS`.
+   - **By default every live entry waits for your confirmation** (`Engine._propose` → `POST /api/live/confirm`), and it lapses with its signal.
+   - Protective exits stay automatic.
 
 ## Data flow
 - **History:**
@@ -51,11 +54,11 @@
   3. An alert is recorded in `live_alerts`
 
 ## Frontend ↔ backend
-- **Now:** the legacy pages poll the JSON API (e.g. the Live page polls `/api/live/dashboard` every few seconds).
-- **Planned (Phases 5–6):**
-  - a React app (Vite) calls the same REST endpoints
-  - Flask-SocketIO pushes live quotes, signals and alerts
-  - the client reconnects automatically
-  - in development, Vite proxies `/api` and `/socket.io` to port 5000
+- **React app** (`frontend/`, served at `/app`):
+  - calls the REST API through `src/services/api.ts`
+  - the live dashboard polls `GET /api/live/dashboard` every 2 s (market open or engine running) or 10 s, with backoff and automatic recovery
+  - in development, Vite (5173) proxies `/api` and `/socket.io` to Flask (5000)
+- **Legacy pages:** they poll the same API.
+- **Planned (Phase 6):** Flask-SocketIO pushes quotes, signals and alerts, with polling kept as the fallback.
 
 See [FRONTEND.md](FRONTEND.md).

@@ -2,6 +2,25 @@
 
 All dates are 2026, IST.
 
+## 11 Nov: Phase 5, React frontend
+- **New `frontend/`:** React 19 + TypeScript + Vite 8 + Tailwind 4 + Lucide + Lightweight Charts 4.2, served by Flask at `/app` (`api/frontend.py`).
+- **Live dashboard:**
+  - NIFTY price
+  - 5-minute candles with EMA 9/21 and cross markers
+  - trend
+  - BUY CE/PE/HOLD recommendation with strike, expiry, live premium, entry/stop/target, lots/qty, investment and risk
+  - today's P&L
+  - notifications with sound and browser alerts
+  - connection and market status
+  - engine controls
+  - Dark/light themes; works at phone width.
+- **Per-order confirmation in Live mode, now the default:**
+  - `EngineConfig.order_confirmation = "manual"`
+  - entry orders wait for `POST /api/live/confirm` and lapse with the signal; `POST /api/live/reject` skips
+  - Paper and Replay are unchanged
+  - 3 new engine tests
+- **Tests:** 2 new tests for serving the React app (including path-traversal protection). **140 tests pass**; the production build and type check pass.
+
 ## 11 Nov: Grow Trading restructure, Phases 1–4
 - **Phase 1–2:** inspected the whole project and recorded a baseline of 134 passing tests. Found no circular imports, plus duplicated helpers (`_hm` ×3, alert storage ×3, quote snapshot ×2) and a Live page left mixed by two sessions.
 - **Commit `25ef0aa`:** all earlier work (Levels 1–2, prediction mode, alerts) committed before moving anything.

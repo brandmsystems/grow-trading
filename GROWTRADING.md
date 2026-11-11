@@ -2,7 +2,7 @@
 
 The complete record of Grow Trading: what it does, how it's built, what has been verified, and what's pending. Detailed topics live in [docs/](docs/); this file summarises them and links to each.
 
-*Last updated: 11 Nov 2026, after restructure Phase 4.*
+*Last updated: 11 Nov 2026, after Phase 5 (React live dashboard).*
 
 ---
 
@@ -15,12 +15,13 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Strategies, backtest, comparison | **Done:** 7 strategies × 4 timeframes, all 28 computed with real option prices |
 | Signal engine | **Done:** scores tested only on years the model hadn't seen |
 | Paper / replay engine (crossover and prediction modes) | **Done and tested** |
-| Live (real-money) engine | Built with safety rails. **Per-order manual confirmation is not built yet** (agreed default) |
+| Live (real-money) engine | Built with safety rails. **Every entry order waits for your confirmation by default**; tested on replays, no real order placed yet |
 | Alerts | Stored once per signal (`live_alerts`), shown on the Live page |
-| Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split; 135 tests pass |
-| React frontend (Phase 5) | **Not started** |
+| Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
+| React frontend (Phase 5) | **Live dashboard done** at `/app`. The other six pages are still the server-rendered versions |
 | WebSocket updates (Phase 6) | **Not started** |
-| Git | `main` has the baseline; branch `level-1-data` has commits `25ef0aa`, `a678fe3`, `a297fb3` plus the docs/config commit |
+| Tests | **140 pass**; React production build and type check pass |
+| Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices and all costs, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m, are close to break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
 
@@ -30,7 +31,8 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 Full steps: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ```powershell
-python start.py                         # backend + current pages at http://127.0.0.1:5000
+cd frontend; npm install; npm run build   # once, and after frontend changes
+python start.py                         # http://127.0.0.1:5000 (React dashboard at /app)
 cd backend; ..\.venv\Scripts\python -m pytest     # tests
 ```
 
@@ -58,16 +60,16 @@ backend/app/
     notifications/  alerts (stored once per signal)
   workers/        background jobs
   utils/          shared helpers
-backend/legacy/   current server-rendered pages (replaced by React in Phase 5)
+backend/legacy/   server-rendered pages, removed as React replaces each one
+frontend/src/     React: pages/, components/{dashboard,charts,trading,common}/, hooks/, services/, context/, types/, utils/
 backend/tests/    pytest suite
-frontend/         React app (Phase 5)
 data/             historical/, exports/, logs/ (git-ignored)
 docs/             documentation
 ```
 
 **Communication:**
-- **Now:** pages poll the REST API ([docs/API.md](docs/API.md)).
-- **Planned:** React + REST + Socket.IO push with automatic reconnection ([docs/FRONTEND.md](docs/FRONTEND.md)).
+- **Now:** the React app calls the REST API. The live dashboard polls `/api/live/dashboard` with backoff and automatic recovery ([docs/API.md](docs/API.md)).
+- **Planned (Phase 6):** Socket.IO push ([docs/FRONTEND.md](docs/FRONTEND.md)).
 
 ---
 
@@ -90,10 +92,16 @@ docs/             documentation
 - **Signals page:** entry reference, stop (1 × ATR), target (2 × ATR), indicator checklist, score with the hit rate its band achieved on unseen data, strong-alert rule.
 - **Prediction mode** in the engine trades only signals scoring at or above your minimum. Live scores were verified to match offline scores exactly.
 
+### React live dashboard (`/app`)
+- **Shows:** NIFTY price, 5-minute candles with EMA 9/21 and crossovers, trend, BUY CE / BUY PE / HOLD with the verified contract, live premium, entry/stop/target, lots and quantity, investment and risk, today's P&L, connection and market status.
+- **Notifications:** sound, browser alert and flash, once per signal.
+- **Engine controls:** with live-order confirmation. Details: [docs/FRONTEND.md](docs/FRONTEND.md).
+
 ### Live / paper / replay engine
 - **Modes:** Paper (Groww prices, simulated fills), Live (MIS market orders), Replay (stored day, fast clock).
 - **Safety:**
   - `LIVE` confirmation and `LIVE_MAX_LOTS`
+  - **each live entry order needs your confirmation** (default; automatic entries are an opt-in for each start)
   - daily loss limit and trades-per-day limit
   - stale-signal skip and restart recovery
   - exit retries, and an ERROR state on unconfirmed orders
@@ -142,10 +150,11 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 ---
 
 ## 8. Tests
-- **Count:** 135 tests in `backend/tests` (9 files), all passing after Phase 4.
-- **Baseline before the restructure:** 134 passing; the extra one tests env-var credentials.
+- **Count:** 140 tests in `backend/tests` (10 files), all passing after Phase 5.
+- **Baseline before the restructure:** 134 passing. Added since: env-var credentials (1), live order confirmation (3), React app serving (2).
+- **Frontend:** `npm run build` (type check + production build) passes.
 - **What they cover:** credentials, trading rules, charges, providers, backtest end-to-end, data manager, research and signals, live engine (it must equal the backtest), prediction mode, alerts, live feed.
-- **Not yet tested:** WebSocket updates and the React build (Phases 5–6).
+- **Not yet tested:** WebSocket updates (Phase 6). The React dashboard was checked in a browser at desktop and phone width against live Groww data and a replay.
 
 ---
 
@@ -156,7 +165,7 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 | 2. Dependencies | Mapping from every old file to its new module (see [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md), "Previously" column) |
 | 3. Structure | `backend/`, `frontend/` (pending), `data/`, `scripts/`, `docs/`, `start.py`, `.env.example` |
 | 4. Backend migration | `git mv` + mechanical import rewrite, no logic changes. Then blueprints, brokers/options/notifications split, shared helpers, env credentials, Grow Trading naming. 135 tests pass, and all pages and APIs answer |
-| 5. React | Not started |
+| 5. React | Live dashboard at `/app` with engine controls and live-order confirmation. Other pages next |
 | 6. WebSockets | Not started |
 | 7. Verification | Backend done; frontend pending |
 | 8. Docs | This file, README and docs/* updated |
@@ -174,12 +183,12 @@ Dated details: [docs/CHANGELOG.md](docs/CHANGELOG.md).
 Full list: [docs/TODO.md](docs/TODO.md).
 
 **Pending:**
-- React frontend
-- Socket.IO
-- per-order manual confirmation for live orders
+- port the remaining six pages to React
+- Socket.IO push (Phase 6)
+- remove `backend/legacy/` after porting
 
 **Known issues:**
-- **Live page:** the legacy Live page is mixed from two sessions' edits.
+- **Legacy `/live` page:** mixed from two sessions' edits; superseded by `/app`.
 - **No holiday calendar.**
 - **Lot size:** fixed for all years.
 - **Prediction rule:** its option P&L hasn't been backtested.

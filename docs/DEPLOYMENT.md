@@ -4,7 +4,7 @@
 - **Windows 10/11** (developed on Windows 11). Linux/macOS work with the usual path changes.
 - **Python 3.14** with a virtual environment in `.venv`.
 - **PostgreSQL 17**, database `groww_trading`.
-- **Node.js 24 / npm 11**, for the frontend (Phase 5).
+- **Node.js 24 / npm 11**, for the frontend.
 - **A Groww account with the paid Trading API plan** (market data needs it).
 
 ## Install
@@ -21,11 +21,19 @@ API_KEY=<TOTP token from Groww>
 TOTP_SECRET=<code shown with the QR>
 ```
 
+**Frontend:**
+```powershell
+cd frontend
+npm install
+npm run build        # frontend/dist, served by Flask at /app
+```
+
 **Database:** created automatically on first start. All migrations run, and existing data is never removed.
 
 ## Run
 ```powershell
-python start.py                 # backend at http://127.0.0.1:5000, log in data\logs\server.log
+python start.py                 # backend at http://127.0.0.1:5000 (React app at /app), log in data\logs\server.log
+python start.py --dev           # plus the Vite dev server at http://127.0.0.1:5173/app
 # or
 cd backend; ..\.venv\Scripts\python app.py
 ```
