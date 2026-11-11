@@ -45,3 +45,14 @@ def test_routes_without_keys(monkeypatch, tmp_path):
 ])
 def test_load_keys_api_secret_survives_empty_totp(tmp_path, text):
     assert config.load_keys(_write(tmp_path, text)) == ("abc", "a)#b-c^$d")
+
+
+def test_env_credentials_take_priority(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROWW_API_KEY", "envkey")
+    monkeypatch.setenv("GROWW_TOTP_SECRET", "JBSW Y3DP")
+    assert config.load_keys() == ("envkey", "JBSWY3DP")
+    monkeypatch.delenv("GROWW_TOTP_SECRET")
+    with pytest.raises(config.KeysError):
+        config.load_keys()
+    monkeypatch.delenv("GROWW_API_KEY")
+    assert config.load_keys(_write(tmp_path, "API_KEY=abc" + chr(10) + "TOTP_SECRET=JBSWY3DP" + chr(10))) == ("abc", "JBSWY3DP")

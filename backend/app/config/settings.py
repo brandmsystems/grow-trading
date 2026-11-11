@@ -38,6 +38,21 @@ class KeysError(RuntimeError):
 
 
 def load_keys(path: Path = KEYS_FILE) -> tuple[str, str]:
+    """Groww credentials: environment variables first, then keys.txt.
+
+    Environment: GROWW_API_KEY plus GROWW_TOTP_SECRET (or GROWW_API_SECRET for an
+    approval-type key). If GROWW_API_KEY isn't set, keys.txt is read as before.
+    """
+    env_key = os.getenv("GROWW_API_KEY", "").strip()
+    if env_key and path == KEYS_FILE:
+        env_secret = (os.getenv("GROWW_TOTP_SECRET") or os.getenv("GROWW_API_SECRET") or "").strip()
+        if not env_secret:
+            raise KeysError("GROWW_API_KEY is set but GROWW_TOTP_SECRET / GROWW_API_SECRET is missing.")
+        return env_key, env_secret.replace(" ", "")
+    return _load_keys_file(path)
+
+
+def _load_keys_file(path: Path) -> tuple[str, str]:
     """Read (api_key, totp_secret) from keys.txt.
 
     Accepted formats:
