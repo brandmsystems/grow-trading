@@ -21,19 +21,20 @@ Everything shown comes from Groww: nothing is sampled or simulated here.
 """
 from __future__ import annotations
 
-import json
 import logging
-import math
 import threading
 import time as _time
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 import pandas as pd
-from sqlalchemy import text
 
+from app.utils.timeutil import parse_hm
+from app.utils.numbers import to_float as _f
+from app.services.notifications import alerts
+from app.services.options.contracts import chain_row
+from app.services.options.sizing import size_position
 from app.services.trading import charges as costs
-from app.database import db
 from app.services.strategy import indicators as ind
 from app.services.strategy import rules as st
 from app.services.strategy.signals import STOP_ATR, TARGET_ATR
@@ -67,17 +68,7 @@ def market_status(now: datetime) -> dict:
     return {"state": "closed", "label": "Closed for the day"}
 
 
-def _hm(s: str) -> time:
-    h, m = str(s).split(":")
-    return time(int(h), int(m))
-
-
-def _f(v) -> float | None:
-    try:
-        v = float(v)
-        return v if math.isfinite(v) else None
-    except (TypeError, ValueError):
-        return None
+_hm = parse_hm   # kept as a module name: other modules and tests call it here
 
 
 def _tick_down(p: float) -> float:
@@ -85,6 +76,8 @@ def _tick_down(p: float) -> float:
 
 
 # ====================================================================== pure logic (tested)
+
+
 def signal_state(bars: pd.DataFrame, day: date, now: datetime, entry_start: str, cutoff: str) -> dict:
     """Current 9/21 EMA position from completed bars, with the event that set it.
 
@@ -143,41 +136,6 @@ def signal_state(bars: pd.DataFrame, day: date, now: datetime, entry_start: str,
             "alert": True, "reason": f"{word} crossover at {hhmm} was {why}, so the strategy does not trade it."}
 
 
-def size_position(entry: float, stop: float, target: float, lot_size: int, capital: float,
-                  risk_pct: float, available: float | None, cfg: costs.CostConfig = costs.DEFAULT_COSTS) -> dict:
-    """Whole lots limited by the risk budget and by the cash/margin available for option buying."""
-    lot_size = int(lot_size)
-    risk_budget = capital * risk_pct / 100
-    lot_risk = (entry - stop) * lot_size + costs.charges(entry, stop, lot_size, cfg)["total"]
-    lot_cost = entry * lot_size + costs.charges(entry, entry, lot_size, cfg)["total"]
-    investable = capital if available is None else min(capital, available)
-    by_risk = int(risk_budget // lot_risk) if lot_risk > 0 else 0
-    by_cash = int(investable // lot_cost) if lot_cost > 0 else 0
-    lots = max(0, min(by_risk, by_cash))
-    limit = "risk" if by_risk <= by_cash else ("margin" if available is not None and available < capital else "capital")
-    qty = lots * lot_size
-    out = {"lots": lots, "lot_size": lot_size, "qty": qty, "limited_by": limit,
-           "risk_budget": round(risk_budget, 2), "risk_per_lot": round(lot_risk, 2), "cost_per_lot": round(lot_cost, 2),
-           "lots_by_risk": by_risk, "lots_by_cash": by_cash, "capital": round(capital, 2),
-           "available": None if available is None else round(available, 2)}
-    if not lots:
-        out["note"] = (f"One lot costs ₹{lot_cost:,.0f} but only ₹{investable:,.0f} is available."
-                       if by_cash == 0 else
-                       f"One lot risks ₹{lot_risk:,.0f}, more than the ₹{risk_budget:,.0f} risk budget "
-                       f"({risk_pct:g}% of ₹{capital:,.0f}).")
-        return out
-    ch_t = costs.charges(entry, target, qty, cfg)
-    ch_s = costs.charges(entry, stop, qty, cfg)
-    out.update({
-        "investment": round(entry * qty, 2),
-        "charges_target": ch_t["total"], "charges_stop": ch_s["total"], "charges_detail": ch_t,
-        "max_risk": round((entry - stop) * qty + ch_s["total"], 2),
-        "target_profit": round((target - entry) * qty - ch_t["total"], 2),
-        "stop_loss": round(-((entry - stop) * qty + ch_s["total"]), 2),
-    })
-    return out
-
-
 def data_checks(today1m: pd.DataFrame, quote: dict, now: datetime) -> list[str]:
     """Problems that make the live data untrustworthy for a recommendation (empty = OK).
 
@@ -198,16 +156,6 @@ def data_checks(today1m: pd.DataFrame, quote: dict, now: datetime) -> list[str]:
         out.append(f"Groww's NIFTY quote ({price:,.2f}) and its latest candle close ({last['close']:,.2f} at "
                    f"{last['ts']:%H:%M}) differ by {abs(price - last['close']) / last['close'] * 100:.2f}%.")
     return out
-
-
-def chain_row(chain: dict, strike: float, opt_type: str) -> dict | None:
-    """The strike's CE/PE entry in a Groww option chain response (keys are strike strings)."""
-    strikes = (chain or {}).get("strikes") or {}
-    for k, v in strikes.items():
-        if _f(k) == float(strike):
-            row = (v or {}).get(opt_type)
-            return row if isinstance(row, dict) else None
-    return None
 
 
 # ====================================================================== feed
@@ -463,14 +411,7 @@ def record_signal(day: date, tf: int, entry_start: str, cutoff: str, sig: dict, 
                "reason": sig["reason"], "timeframe": tf,
                **{k: rec.get(k) for k in ("strike", "opt_type", "expiry", "symbol", "premium", "entry", "stop", "target")
                   if rec.get("verified") and rec.get(k) is not None}}
-    try:
-        with db.engine().begin() as c:
-            c.execute(text("INSERT INTO live_alerts (alert_key, session_id, trade_mode, day, ts, action, payload) "
-                           "VALUES (:k, NULL, :m, :d, :t, :a, CAST(:p AS JSONB)) ON CONFLICT (alert_key) DO NOTHING"),
-                      {"k": key, "m": SIGNAL_MODE, "d": day, "t": now, "a": sig["action"],
-                       "p": json.dumps(payload, default=str)})
-    except Exception as exc:
-        log.warning("signal alert not stored: %s", exc)
+    alerts.store(key, SIGNAL_MODE, day, now, sig["action"], payload)
 
 
 _feed: Feed | None = None

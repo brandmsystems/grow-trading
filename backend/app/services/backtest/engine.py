@@ -9,6 +9,7 @@ from functools import lru_cache
 
 import pandas as pd
 
+from app.utils.timeutil import parse_hm
 from app.services.trading import charges as costs
 from app.database import db
 from app.services.backtest import metrics
@@ -97,9 +98,7 @@ def param_hash(p: dict) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:24]
 
 
-def _hm(s: str) -> time:
-    h, m = s.split(":")
-    return time(int(h), int(m))
+_hm = parse_hm   # kept as a module name: other modules and tests call it here
 
 
 def _day_range(symbol: str, day: date) -> pd.DataFrame:

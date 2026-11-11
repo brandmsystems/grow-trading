@@ -30,12 +30,15 @@ from datetime import date, datetime, time, timedelta
 import pandas as pd
 from sqlalchemy import text
 
+from app.utils.timeutil import parse_hm
+from app.services.notifications import alerts
 from app.services.trading import charges as costs
 from app.database import db
 from app.services.strategy import signals
 from app.services.strategy import strategies
 from app.services.strategy import rules as st
-from app.services.market_data.live import Contract, OrderError, OrderUnknown
+from app.services.market_data.live import Contract
+from app.services.trading.brokers import OrderUnknown
 
 log = logging.getLogger("live.engine")
 
@@ -88,9 +91,7 @@ class EngineConfig:
         return self
 
 
-def _hm(s: str) -> time:
-    h, m = str(s).split(":")
-    return time(int(h), int(m))
+_hm = parse_hm   # kept as a module name: other modules and tests call it here
 
 
 class Engine:
@@ -139,14 +140,8 @@ class Engine:
         key = f"{self.cfg.trade_mode}|{self.day}|{action}|{pd.Timestamp(signal_ts).isoformat()}"
         if self.cfg.trade_mode == "replay":
             key += f"|s{self.session_id}"
-        try:
-            with self.dbe.begin() as c:
-                c.execute(text("INSERT INTO live_alerts (alert_key, session_id, trade_mode, day, ts, action, payload) "
-                               "VALUES (:k,:s,:m,:d,:t,:a,CAST(:p AS JSONB)) ON CONFLICT (alert_key) DO NOTHING"),
-                          {"k": key, "s": self.session_id, "m": self.cfg.trade_mode, "d": self.day, "t": self.market.now(),
-                           "a": action, "p": json.dumps({"signal_ts": pd.Timestamp(signal_ts).isoformat(), **data}, default=str)})
-        except Exception as exc:
-            log.warning("alert not stored: %s", exc)
+        alerts.store(key, self.cfg.trade_mode, self.day, self.market.now(), action,
+                     {"signal_ts": pd.Timestamp(signal_ts).isoformat(), **data}, self.session_id, self.dbe)
 
     def _hold(self, leg, why: str, **extra) -> None:
         self._alert("HOLD", leg.entry_ts, direction="Bullish" if leg.direction > 0 else "Bearish",

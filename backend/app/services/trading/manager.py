@@ -10,10 +10,12 @@ from sqlalchemy import text
 
 import pandas as pd
 
+from app.services.notifications import alerts
 from app.config import settings as config
 from app.database import db
 from app.services.trading import engine as le
-from app.services.market_data.live import GrowwMarket, LiveBroker, PaperBroker, ReplayMarket
+from app.services.market_data.live import GrowwMarket, ReplayMarket
+from app.services.trading.brokers import LiveBroker, PaperBroker
 from app.services.market_data.providers import GrowwProvider
 from app.services.market_data.feed import market_status  # noqa: F401  (one definition, shared with the feed)
 
@@ -132,14 +134,7 @@ def status(mode: str | None = None, tf: int = 15, strategy: str = "ema_9_21", wi
 
 
 # ------------------------------------------------------------------ dashboard helpers
-def recent_alerts(mode: str | tuple, limit: int = 12) -> list[dict]:
-    modes = [mode] if isinstance(mode, str) else list(mode)
-    with db.engine().connect() as c:
-        rows = c.execute(text("SELECT id, ts, day, action, trade_mode, payload FROM live_alerts "
-                              "WHERE trade_mode = ANY(:m) ORDER BY id DESC LIMIT :n"),
-                         {"m": modes, "n": limit}).mappings().all()
-    return [{"id": r["id"], "ts": r["ts"].isoformat(), "day": r["day"].isoformat(), "action": r["action"],
-             "mode": r["trade_mode"], **r["payload"]} for r in rows]
+recent_alerts = alerts.recent   # kept here: the API and tests read alerts through the manager
 
 
 def _ema_labels(key: str) -> dict:

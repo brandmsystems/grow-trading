@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 
 import numpy as np
 import pandas as pd
