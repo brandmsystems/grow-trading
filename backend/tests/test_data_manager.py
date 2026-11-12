@@ -280,7 +280,7 @@ def test_chart_rejects_huge_range():
 
 def test_pages_and_api():
     c = app_module.app.test_client()
-    assert c.get("/data").status_code == 200 and c.get("/history").status_code == 200
+    assert c.get("/data").headers["Location"].endswith("/app/data") and c.get("/history").headers["Location"].endswith("/app/history")
     r = c.get("/api/data/overview?from=2026-03-02&to=2026-03-06")
     assert r.json["ok"] and r.json["data"]["coverage"]["verdict"] == "none"
     assert c.get("/api/data/overview?from=nonsense").status_code == 400

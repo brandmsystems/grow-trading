@@ -47,7 +47,7 @@ Light and dark themes are both supported; dark is the default.
 | Strategy Comparison | `/app/compare` | `GET /api/research`, `POST /api/research/run`, `GET /api/bt/meta` | 7 strategies × 4 timeframes coloured green/red by net P&L; tick up to 4 for equity curves; win rate and drawdown bars; year-by-year table; walk-forward table. Clicking a cell opens it in Backtesting |
 | Market Data | `/app/data` | `GET /api/data/overview`, `POST /api/data/download`, `POST /api/data/stop`, `GET /api/jobs/<id>` | Coverage KPIs, instruments, availability, month grid (links to Historical Charts), missing periods, days with gaps, download form with progress and stop, download history |
 | Historical Charts | `/app/history` | `GET /api/data/overview`, `GET /api/data/candles` | Stored NIFTY candles at 1/5/15/30 min with optional EMA 9/21, date range, earlier/later/latest, zoom and pan |
-| Account & Settings | `/app/account` | `GET /api/status, /api/profile, /api/funds`, `POST /api/login` | Groww connection and re-login; funds; profile; theme, sound and browser notification permission; order calculator defaults; links to the legacy pages |
+| Account & Settings | `/app/account` | `GET /api/status, /api/profile, /api/funds`, `POST /api/login` | Groww connection and re-login; funds; profile; theme, sound and browser notification permission; order calculator defaults |
 
 **One shared live poll:** `context/LiveContext.tsx` polls `/api/live/dashboard` once for the whole app, every 2 s while the market is open or the engine runs, otherwise every 10 s, with backoff when the backend is unreachable. The header, Overview, Live Trading, Signals and Options all read that one response, so changing pages never duplicates calls.
 
@@ -113,5 +113,5 @@ npm run build      # type check + production build to frontend/dist (served at /
 npm run dev        # development server at http://127.0.0.1:5173/app
 ```
 
-## Legacy pages (`backend/legacy/`)
-The old server-rendered pages still exist at `/`, `/live`, `/compare`, `/signals`, `/data`, `/history` and `/account`, but they aren't linked from the React app's navigation (Account & Settings links them). Every one now has a React equivalent, so they can be removed once you've confirmed the new pages.
+## Old pages (removed)
+The old server-rendered pages (`backend/legacy/`) were removed on 12 Nov. The React app is the only interface: http://127.0.0.1:5000 opens it, and old addresses (`/live`, `/compare`, `/signals`, `/data`, `/history`, `/account`) redirect to the matching React page.

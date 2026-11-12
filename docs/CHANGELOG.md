@@ -2,6 +2,12 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: One interface (old pages removed)
+- **Removed:** at your request, `backend/legacy/` (7 Jinja templates, 10 JS/CSS files), the `/live` page route and Flask's static folder.
+- **Redirects:** `api/pages.py` now redirects `/` and the old addresses (`/live`, `/signals`, `/compare`, `/data`, `/history`, `/account`, `/backtest`) to the matching React page under `/app`.
+- **Account & Settings:** the note linking to the old pages was removed.
+- **Tests:** the route tests now expect redirects, and a new test checks every old address and that old page assets are gone.
+
 ## 12 Nov: Phase 0 audit (master programme)
 - Read-only audit; no code changes. Baseline: 140 tests pass, TypeScript check passes.
 - **Found:**

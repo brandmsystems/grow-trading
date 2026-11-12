@@ -10,13 +10,11 @@ from app.database import db
 from app.services.market_data import history as data_manager
 
 log = logging.getLogger("app")
-# Legacy server-rendered pages, served until each one is replaced by the React frontend.
-LEGACY_DIR = config.BACKEND_DIR / "legacy"
 
 
 def create_app() -> Flask:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    app = Flask(__name__, template_folder=str(LEGACY_DIR / "templates"), static_folder=str(LEGACY_DIR / "static"))
+    app = Flask(__name__, static_folder=None)   # the only interface is the React app (frontend/dist at /app)
     app.json.sort_keys = False
     try:
         db.init()

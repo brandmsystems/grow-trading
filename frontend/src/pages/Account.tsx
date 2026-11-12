@@ -5,11 +5,10 @@ import { useSettings } from "../context/SettingsContext";
 import { getCredentialStatus, getFunds, getProfile, relogin } from "../services/api";
 import { Card, Pill, Stat } from "../components/common/Card";
 import { Button, Field, inputCls, PageHeader, Segmented } from "../components/common/Controls";
-import { ErrorNote, Limitation, Loading } from "../components/common/States";
+import { ErrorNote, Loading } from "../components/common/States";
 import { inr } from "../utils/format";
 
 const label = (k: string) => k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-const LEGACY = import.meta.env.DEV ? "http://127.0.0.1:5000" : "";
 
 export default function Account() {
   const { settings, update } = useSettings();
@@ -82,10 +81,6 @@ export default function Account() {
           <p className="mt-2 text-xs text-slate-500">Saved in this browser only.</p>
         </Card>
       </div>
-      <Limitation>
-        The previous server-rendered pages still exist at <a className="text-blue-600 hover:underline" href={`${LEGACY}/`}>/</a>, <a className="text-blue-600 hover:underline" href={`${LEGACY}/live`}>/live</a>,
-        /compare, /signals, /data, /history and /account, until they're removed.
-      </Limitation>
     </div>
   );
 }

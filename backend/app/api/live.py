@@ -1,7 +1,7 @@
 """Live / paper / replay engine: status, dashboard feed, start/stop and broker check."""
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, request
 
 from app.config import settings as config
 from app.services.groww import client as groww_client
@@ -9,11 +9,6 @@ from app.services.trading import manager as live_manager
 from app.api.common import api_error, log
 
 bp = Blueprint("live", __name__)
-
-
-@bp.get("/live")
-def live_page():
-    return render_template("live.html")
 
 
 @bp.get("/api/live/status")

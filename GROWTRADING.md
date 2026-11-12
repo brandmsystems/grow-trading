@@ -18,7 +18,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Live (real-money) engine | Built with safety rails. **Every entry order waits for your confirmation by default**; tested on replays, no real order placed yet |
 | Alerts | Stored once per signal (`live_alerts`), shown on the Live page |
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
-| React frontend (Phase 5 + redesign) | **All 9 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. Legacy pages still served until removed |
+| React frontend (Phase 5 + redesign) | **All 9 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
 | WebSocket updates (Phase 6) | **Not started** |
 | Tests | **140 pass**; React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
@@ -60,7 +60,6 @@ backend/app/
     notifications/  alerts (stored once per signal)
   workers/        background jobs
   utils/          shared helpers
-backend/legacy/   server-rendered pages, removed as React replaces each one
 frontend/src/     React: pages/, components/{dashboard,charts,trading,common}/, hooks/, services/, context/, types/, utils/
 backend/tests/    pytest suite
 data/             historical/, exports/, logs/ (git-ignored)
@@ -179,7 +178,7 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 | 8. Docs | This file, README and docs/* updated |
 
 **Decisions recorded:**
-- Every page is ported to React, and legacy pages are removed one by one.
+- Every page is ported to React; the old server-rendered pages were removed on 12 Nov at your request. `/` and old addresses redirect to `/app`.
 - Live orders need a manual confirmation per order by default.
 - The work is committed at each phase.
 
@@ -237,7 +236,7 @@ Read-only audit before the "master development" programme. No working code was c
 8. **Duplicates:**
    - `manager.snapshot()` (used by `/api/live/status`) and `feed.Feed` both compute a NIFTY quote and EMAs.
    - `_now()` in 3 modules (kept because tests patch each one).
-   - Legacy server-rendered pages still served alongside React.
+   - Legacy server-rendered pages still served alongside React (**removed on 12 Nov**).
 9. **Live trading:** never exercised against Groww with a real order.
 10. **Synthetic test candles** (223k rows) sit in the production database.
 
@@ -257,11 +256,9 @@ Full list: [docs/TODO.md](docs/TODO.md).
 
 **Pending:**
 - Socket.IO push (Phase 6)
-- remove `backend/legacy/` once the React pages are confirmed
 - backend endpoints for option chain/expiries and CE+PE premiums (see [docs/TODO.md](docs/TODO.md))
 
 **Known issues:**
-- **Legacy `/live` page:** mixed from two sessions' edits; superseded by `/app`.
 - **No holiday calendar.**
 - **Lot size:** fixed for all years.
 - **Prediction rule:** its option P&L hasn't been backtested.

@@ -9,7 +9,7 @@ A NIFTY options trading system built on the Groww Trade API. It covers:
 
 **Status (11 Nov 2026):**
 - The Python backend has been restructured into `backend/app` (Phases 1–4).
-- **The React app is at http://127.0.0.1:5000/app**: 9 pages with a sidebar layout that works on desktop, tablet and phone (Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, Market Data, Historical Charts, Account & Settings). The old server-rendered pages still exist until they're removed. WebSocket push (Phase 6) isn't built yet.
+- **The React app is at http://127.0.0.1:5000/app**: 9 pages with a sidebar layout that works on desktop, tablet and phone (Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, Market Data, Historical Charts, Account & Settings). This is the only interface; the old server-rendered pages were removed on 12 Nov. WebSocket push (Phase 6) isn't built yet.
 - All 140 tests pass.
 
 [GROWTRADING.md](GROWTRADING.md) has the full record and [docs/TODO.md](docs/TODO.md) the pending work.
@@ -26,13 +26,17 @@ python start.py             # http://127.0.0.1:5000  (React dashboard at /app)
 | Page | URL |
 |---|---|
 | **Grow Trading app (React, all pages)** | http://127.0.0.1:5000/app |
-| Backtest | http://127.0.0.1:5000/ |
-| Compare | http://127.0.0.1:5000/compare |
-| Signals | http://127.0.0.1:5000/signals |
-| Live / Paper | http://127.0.0.1:5000/live |
-| Data | http://127.0.0.1:5000/data |
-| History | http://127.0.0.1:5000/history |
-| Account | http://127.0.0.1:5000/account |
+| Overview | http://127.0.0.1:5000/app/ |
+| Live Trading | http://127.0.0.1:5000/app/live |
+| Trading Signals | http://127.0.0.1:5000/app/signals |
+| Options Analysis | http://127.0.0.1:5000/app/options |
+| Backtesting | http://127.0.0.1:5000/app/backtest |
+| Strategy Comparison | http://127.0.0.1:5000/app/compare |
+| Market Data | http://127.0.0.1:5000/app/data |
+| Historical Charts | http://127.0.0.1:5000/app/history |
+| Account & Settings | http://127.0.0.1:5000/app/account |
+
+http://127.0.0.1:5000 opens the app. Old addresses like `/live` or `/compare` redirect to the matching page.
 
 **Requirements:**
 - A Groww account with the **paid Trading API plan**. The free plan has no market data.

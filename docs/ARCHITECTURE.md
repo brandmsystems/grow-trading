@@ -58,7 +58,7 @@
   - calls the REST API through `src/services/api.ts`
   - the live dashboard polls `GET /api/live/dashboard` every 2 s (market open or engine running) or 10 s, with backoff and automatic recovery
   - in development, Vite (5173) proxies `/api` and `/socket.io` to Flask (5000)
-- **Legacy pages:** they poll the same API.
+- **One interface:** the old server-rendered pages were removed; `/` and old addresses redirect to `/app`.
 - **Planned (Phase 6):** Flask-SocketIO pushes quotes, signals and alerts, with polling kept as the fallback.
 
 See [FRONTEND.md](FRONTEND.md).

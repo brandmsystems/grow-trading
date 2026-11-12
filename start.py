@@ -1,6 +1,6 @@
 """Start Grow Trading.
 
-    python start.py          backend on http://127.0.0.1:5000 (serves the built frontend if present)
+    python start.py          Grow Trading at http://127.0.0.1:5000 (the React app; build it first with npm run build)
     python start.py --dev    backend + Vite dev server for the frontend (http://127.0.0.1:5173)
 
 The backend runs with the project's virtual environment (.venv). Logs go to data/logs/server.log.
@@ -30,7 +30,7 @@ def main() -> int:
     (ROOT / "data" / "logs").mkdir(parents=True, exist_ok=True)
     log = open(ROOT / "data" / "logs" / "server.log", "a", encoding="utf-8")
     procs = [subprocess.Popen([venv_python(), "app.py"], cwd=BACKEND, stdout=log, stderr=subprocess.STDOUT)]
-    print("Backend:  http://127.0.0.1:5000  (log: data/logs/server.log)")
+    print("Grow Trading: http://127.0.0.1:5000  (log: data/logs/server.log)")
     if dev:
         npm = shutil.which("npm")
         if not npm or not (FRONTEND / "package.json").exists():

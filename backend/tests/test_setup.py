@@ -33,7 +33,8 @@ def test_routes_without_keys(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "TOKEN_CACHE", tmp_path / "tok.json")
     monkeypatch.setattr(config.load_keys, "__defaults__", (tmp_path / "keys.txt",))
     c = app_module.app.test_client()
-    assert c.get("/").status_code == 200
+    r = c.get("/")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/app/")
     assert c.get("/api/status").json["keys"] is False
     r = c.get("/api/profile")
     assert r.status_code == 400 and r.json["kind"] == "keys"

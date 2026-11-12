@@ -16,7 +16,6 @@ grow-trading/
 │   │   ├── services/         All business logic (see below)
 │   │   ├── workers/          Background jobs
 │   │   └── utils/            Small shared helpers
-│   ├── legacy/               Server-rendered pages, served until React replaces each one
 │   ├── tests/                pytest suite
 │   ├── pytest.ini
 │   └── requirements.txt
@@ -44,12 +43,12 @@ grow-trading/
 | File | Routes |
 |---|---|
 | `common.py` | Shared helpers: `api_error`, result cache, `real_only`, `date_arg`, `active_job` |
-| `pages.py` | Legacy pages: `/`, `/account`, `/data`, `/history`, `/compare`, `/signals` |
+| `pages.py` | Redirects `/` and old page addresses to the React app (`/app/...`) |
 | `account.py` | `/api/status`, `/api/login`, `/api/logout`, `/api/profile`, `/api/funds` |
 | `backtest.py` | `/api/bt/*`, `/api/jobs/<id>` |
 | `data.py` | `/api/data/*` |
 | `research.py` | `/api/research*`, `/api/signals*` |
-| `live.py` | `/live`, `/api/live/*` (incl. `confirm`, `reject`) |
+| `live.py` | `/api/live/*` (incl. `confirm`, `reject`) |
 | `frontend.py` | `/app`, `/app/<path>`: the built React app |
 
 Details: [API.md](API.md).
@@ -86,7 +85,6 @@ Details: [API.md](API.md).
 | `workers/jobs.py` | Background jobs with progress; separate lane for long research runs | `jobs.py` |
 | `utils/timeutil.py` | `parse_hm("09:30")`, shared by three modules | three copies of `_hm` |
 | `utils/numbers.py` | `to_float` | from `live_feed.py` |
-| `legacy/templates`, `legacy/static` | Old pages and their JS/CSS | `templates/`, `static/` |
 
 ## Tests (`backend/tests`)
 | File | Covers |

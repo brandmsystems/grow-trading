@@ -21,3 +21,13 @@ def test_missing_build_explains_how_to_build(tmp_path, monkeypatch):
     monkeypatch.setattr(frontend, "DIST", tmp_path / "nothing")
     r = app_module.app.test_client().get("/app/")
     assert r.status_code == 404 and b"npm run build" in r.data
+
+
+def test_old_addresses_redirect_to_the_react_app():
+    """There is one interface: old page URLs and the root go to the matching React page."""
+    from app.api.pages import REDIRECTS
+    c = app_module.app.test_client()
+    for old, new in REDIRECTS.items():
+        r = c.get(old)
+        assert r.status_code == 302 and r.headers["Location"].endswith(new), old
+    assert c.get("/static/app.css").status_code == 404          # old page assets are gone

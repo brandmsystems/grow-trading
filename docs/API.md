@@ -66,8 +66,8 @@ The status payload includes `pending_order` (id, side, contract, qty, LTP, signa
 ## React app (`api/frontend.py`)
 `GET /app`, `/app/<path>` serve the built React app from `frontend/dist`. Unknown paths fall back to `index.html` for client-side routes. Nothing outside `dist` is ever served. If the app hasn't been built, it returns 404 with build instructions.
 
-## Legacy pages: `api/pages.py`, plus `/live` in `api/live.py`
-`/`, `/compare`, `/signals`, `/data`, `/history`, `/account`, `/live` serve the server-rendered pages until React replaces them.
+## Old page addresses (`api/pages.py`)
+`/`, `/live`, `/signals`, `/compare`, `/data`, `/history`, `/account` and `/backtest` redirect (302) to the matching React page under `/app`. The server-rendered pages themselves were removed on 12 Nov.
 
 ## Planned (Phase 6)
 WebSocket events over Flask-SocketIO: `quote`, `signal`, `alert`, `engine`. Not implemented yet.

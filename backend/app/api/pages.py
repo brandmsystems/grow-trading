@@ -1,37 +1,29 @@
-"""Legacy server-rendered pages (removed one by one as React replaces them)."""
+"""Old page addresses. The app has one interface, the React app at /app; these routes
+send the root URL and old bookmarks to the matching React page."""
 from __future__ import annotations
 
-from flask import Blueprint, render_template
-
+from flask import Blueprint, redirect
 
 bp = Blueprint("pages", __name__)
 
-
-@bp.get("/")
-def dashboard():
-    return render_template("dashboard.html")
-
-
-@bp.get("/account")
-def account():
-    return render_template("account.html")
-
-
-@bp.get("/data")
-def data_page():
-    return render_template("data.html")
+# Old address -> React route (under /app).
+REDIRECTS = {
+    "/": "/app/",
+    "/live": "/app/live",
+    "/signals": "/app/signals",
+    "/compare": "/app/compare",
+    "/data": "/app/data",
+    "/history": "/app/history",
+    "/account": "/app/account",
+    "/backtest": "/app/backtest",
+}
 
 
-@bp.get("/history")
-def history_page():
-    return render_template("history.html")
+def _make(target: str):
+    def view():
+        return redirect(target, code=302)
+    return view
 
 
-@bp.get("/compare")
-def compare_page():
-    return render_template("compare.html")
-
-
-@bp.get("/signals")
-def signals_page():
-    return render_template("signals.html")
+for _path, _target in REDIRECTS.items():
+    bp.add_url_rule(_path, endpoint=f"to_{_target.strip('/').replace('/', '_') or 'app'}", view_func=_make(_target))
