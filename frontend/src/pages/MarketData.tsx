@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Database, Download, Square } from "lucide-react";
+import { Database, Download, Layers, Scale, Square } from "lucide-react";
 import { useApi, waitForJob } from "../hooks/useApi";
-import { getDataOverview, startDownload, stopDownload } from "../services/api";
+import { getDataOverview, getLotSizes, getOptionsCoverage, startDownload, startOptionsDownload, stopDownload } from "../services/api";
 import { Card, Pill, Stat } from "../components/common/Card";
 import { Button, Field, inputCls, PageHeader } from "../components/common/Controls";
-import { ErrorNote, Limitation, Loading, Progress } from "../components/common/States";
+import { ErrorNote, Loading, Progress } from "../components/common/States";
 import { dmy, dmyhm, num } from "../utils/format";
 import type { Job, Period } from "../types/api";
 
@@ -15,6 +15,10 @@ const period = (p: Period) => (p.from === p.to ? dmy(p.from) : `${dmy(p.from)} �
 
 export default function MarketData() {
   const ov = useApi(getDataOverview, []);
+  const opt = useApi(getOptionsCoverage, []);
+  const lots = useApi(getLotSizes, []);
+  const [optJob, setOptJob] = useState<Job | null>(null);
+  const [optErr, setOptErr] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -26,6 +30,23 @@ export default function MarketData() {
     if (j && !job) waitForJob(j.id, setJob).then(() => { setJob(null); void ov.reload(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ov.data?.job]);
+
+  useEffect(() => {
+    const j = opt.data?.job;
+    if (j && !optJob) waitForJob(j.id, setOptJob).then(() => { setOptJob(null); void opt.reload(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opt.data?.job]);
+
+  async function downloadOptions() {
+    setOptErr(null);
+    try {
+      const r = await startOptionsDownload(from, to);
+      const j = await waitForJob(String(r.job), setOptJob);
+      setOptJob(null);
+      if (j.state === "error") setOptErr(j.error);
+      await Promise.all([opt.reload(), ov.reload()]);
+    } catch (e) { setOptJob(null); setOptErr((e as Error).message); }
+  }
 
   async function download() {
     setErr(null);
@@ -44,6 +65,8 @@ export default function MarketData() {
   const months = new Map(c!.months.map((m) => [m.month, m]));
   const years = [...new Set(c!.months.map((m) => m.month.slice(0, 4)))].sort().reverse();
   const [vLabel, vTone] = VERDICT[c!.verdict];
+  const ins = ov.data!.instruments;
+  const o = opt.data;
 
   return (
     <div className="space-y-4">
@@ -64,7 +87,7 @@ export default function MarketData() {
             <Field label="To"><input type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} /></Field>
           </div>
           <div className="mt-3 flex gap-2">
-            <Button variant="primary" onClick={download} disabled={!!job}><Download size={15} /> Download or resume</Button>
+            <Button variant="primary" onClick={download} disabled={!!job || !!optJob}><Download size={15} /> Download or resume</Button>
             {job && <Button variant="danger" onClick={() => stopDownload()}><Square size={14} /> Stop</Button>}
           </div>
           {job && <div className="mt-3"><Progress value={job.progress} text={job.message} /></div>}
@@ -72,23 +95,36 @@ export default function MarketData() {
           <p className="mt-3 text-xs text-slate-500">Only missing days are requested, so it's safe to re-run. Candles are stored exactly as Groww returns them; gaps are listed, never filled.</p>
         </Card>
         <Card title="Availability" icon={<Database size={16} className="text-slate-500" />} right={<Pill tone={vTone}>{vLabel}</Pill>} className="lg:col-span-2">
-          <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <div className="font-semibold">Instruments</div>
-              <ul className="mt-1 space-y-1 text-slate-600 dark:text-slate-300">
-                <li><Pill tone="info">NSE-NIFTY</Pill> NIFTY 50 spot: coverage on this page</li>
-                <li><Pill tone="strat">NIFTY FUT</Pill> near-month futures (volume and VWAP), downloaded with the spot</li>
-                <li><Pill tone="neutral">NIFTY options</Pill> each contract's candles, downloaded when a backtest needs it</li>
-              </ul>
+          <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              <Pill tone="info">NIFTY 50 spot</Pill>
+              <div className="mt-2 space-y-0.5 text-slate-600 dark:text-slate-300">
+                <div className="num">{num(ins.spot.sessions, 0)} sessions · {num(ins.spot.candles, 0)} candles</div>
+                <div>{dmy(ins.spot.first)} → <b className="num">{dmyhm(ins.spot.last)}</b></div>
+                <div className="text-xs text-slate-500">Last successful download {dmyhm(ins.spot.last_success)}</div>
+              </div>
             </div>
-            <div className="text-slate-600 dark:text-slate-300">
-              <div>Earliest candle: <b className="num">{dmyhm(s.first)}</b></div>
-              <div>Latest candle: <b className="num">{dmyhm(s.last)}</b></div>
-              <div>{s.no_data} weekdays with no candles (usually holidays){s.special_sessions ? `, ${s.special_sessions} special out-of-hours sessions` : ""}.</div>
-              <div>{s.spikes} price spikes over 5% flagged.</div>
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              <Pill tone="strat">Near-month futures</Pill>
+              <div className="mt-2 space-y-0.5 text-slate-600 dark:text-slate-300">
+                <div className="num">{num(ins.futures.contracts, 0)} contracts · {num(ins.futures.candles, 0)} candles</div>
+                <div>Latest <b className="num">{dmyhm(ins.futures.last)}</b></div>
+                <div className="text-xs text-slate-500">{ins.futures.latest_contract ?? "—"} · volume and VWAP source, downloaded with the spot</div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              <Pill tone="neutral">NIFTY options</Pill>
+              <div className="mt-2 space-y-0.5 text-slate-600 dark:text-slate-300">
+                <div className="num">{num(ins.options.contracts, 0)} contracts · {num(ins.options.candles, 0)} candles</div>
+                <div>{dmy(ins.options.first_day)} → <b className="num">{dmy(ins.options.last_day)}</b></div>
+                <div className="text-xs text-slate-500">Last successful download {dmyhm(ins.options.last_success)}</div>
+              </div>
             </div>
           </div>
-          <div className="mt-3"><Limitation>Coverage reports exist for NIFTY spot only. The backend doesn't report coverage for futures or option contracts.</Limitation></div>
+          <div className="mt-3 space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <div>Intervals: <b>{ins.intervals.map((i) => `${i}m`).join(", ")}</b>. 1-minute candles are stored; the others are built from them, aligned to the 09:15 open.</div>
+            <div>{s.no_data} weekdays with no candles (usually holidays){s.special_sessions ? `, ${s.special_sessions} special out-of-hours sessions` : ""}; {s.spikes} price spikes over 5% flagged.</div>
+          </div>
         </Card>
       </div>
 
@@ -137,6 +173,71 @@ export default function MarketData() {
               </div>
             ))}
           </div>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card title="Option history" icon={<Layers size={16} className="text-violet-600" />} className="lg:col-span-2"
+          right={o && <Pill tone={o.summary.pct >= 99 ? "good" : o.summary.pct > 0 ? "warn" : "bad"}>{o.summary.pct}% downloaded</Pill>}>
+          {opt.loading && !o ? <Loading className="h-24" /> : opt.error && !o ? <ErrorNote>{opt.error}</ErrorNote> : o && (
+            <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                CE and PE within {o.scope.strikes_each_side} strikes of each day's at-the-money strike, for every expiry a backtest can pick
+                (nearest, next, monthly), {dmy(o.scope.from)} → {dmy(o.scope.to)}.
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Contracts in scope" value={num(o.summary.contracts, 0)} sub={`${o.summary.expiries} expiries`} />
+                <Stat label="Contract-days downloaded" value={`${num(o.summary.downloaded_days, 0)} / ${num(o.summary.contract_days, 0)}`} />
+                <Stat label="Candles" value={num(o.summary.candles, 0)} sub="1-minute, in scope" />
+                <Stat label="Days with no trades" value={num(o.summary.empty_days, 0)} sub="Groww returned no candles" />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="primary" onClick={downloadOptions} disabled={!!optJob || !!job}><Download size={15} /> Download or resume options</Button>
+                {optJob && <Button variant="danger" onClick={() => stopDownload()}><Square size={14} /> Stop</Button>}
+              </div>
+              {optJob && <div className="mt-3"><Progress value={optJob.progress} text={optJob.message} /></div>}
+              {optErr && <div className="mt-3"><ErrorNote>{optErr}</ErrorNote></div>}
+              {o.last_run && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Last run {dmyhm(o.last_run.started_at)}: <b>{o.last_run.status}</b>, {num(o.last_run.chunks_done, 0)}/{num(o.last_run.chunks_total, 0)} requests
+                  {o.last_run.rows_rejected ? `, ${o.last_run.rows_rejected} failed` : ""}. Last complete run {dmyhm(o.last_success)}.
+                </p>
+              )}
+              <div className="scroll-thin mt-3 max-h-72 overflow-auto">
+                <table className="w-full min-w-[520px] text-xs">
+                  <thead className="sticky top-0 bg-white text-left text-slate-500 dark:bg-slate-900"><tr><th className="py-1">Month</th><th className="text-right">Contracts</th><th className="text-right">Days downloaded</th><th className="text-right">Candles</th><th className="w-40 pl-3">Coverage</th></tr></thead>
+                  <tbody>
+                    {o.months.slice().reverse().map((m) => (
+                      <tr key={m.month} className="border-t border-slate-100 dark:border-slate-800">
+                        <td className="py-1">{MON[Number(m.month.slice(5)) - 1]} {m.month.slice(0, 4)}</td>
+                        <td className="num text-right">{num(m.contracts, 0)}</td>
+                        <td className="num text-right">{num(m.downloaded_days, 0)}/{num(m.contract_days, 0)}</td>
+                        <td className="num text-right">{num(m.candles, 0)}</td>
+                        <td className="pl-3"><div className="h-2 rounded bg-slate-100 dark:bg-slate-800"><div className={`h-2 rounded ${m.pct >= 99 ? "bg-green-500" : "bg-orange-400"}`} style={{ width: `${m.pct}%` }} /></div></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </Card>
+        <Card title="NIFTY lot sizes (NSE)" icon={<Scale size={16} className="text-orange-600" />}>
+          {lots.loading ? <Loading className="h-24" /> : lots.error ? <ErrorNote>{lots.error}</ErrorNote> : (
+            <>
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-slate-500"><tr><th className="py-1">From expiry</th><th>Cycle</th><th className="text-right">Lot</th></tr></thead>
+                <tbody>
+                  {(lots.data ?? []).slice().reverse().map((l) => (
+                    <tr key={l.cycle + l.first_expiry} className="border-t border-slate-100 dark:border-slate-800" title={l.source}>
+                      <td className="num py-1">{dmy(l.first_expiry)}</td><td className="capitalize">{l.cycle}</td><td className="num text-right font-semibold">{l.lot_size}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-xs text-slate-500">From NSE circulars 47854, 61415, 64625 and 70616 (hover a row for its source). A contract's lot size depends on its expiry date and cycle; the month's last expiry is the monthly one. Backtests use these unless you choose a fixed lot size.</p>
+            </>
+          )}
         </Card>
       </div>
 

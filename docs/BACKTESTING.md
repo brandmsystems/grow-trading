@@ -48,6 +48,6 @@ Signal engine at 15m: base hit rate 26%; scores of 50+ hit 38% (29 signals); AUC
 **These are past results and don't predict future returns.**
 
 ## Limitations
-- **Lot size:** fixed (default 65) for all years.
+- **Lot size:** by default each contract's NSE lot size (`lot_sizes`): 50 until Apr 2024, then 25, then 75 (weeklies from 2 Jan 2025, monthlies from 27 Feb 2025), then 65 (weeklies from 6 Jan 2026, monthlies from 27 Jan 2026). A fixed lot size can still be chosen. Each trade records `lot_size` and `lot_source`.
 - **Holidays:** no holiday calendar.
 - **Option-chain data:** IV, OI and Greeks have no history.

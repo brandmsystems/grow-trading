@@ -2,7 +2,7 @@
 
 The complete record of Grow Trading: what it does, how it's built, what has been verified, and what's pending. Detailed topics live in [docs/](docs/); this file summarises them and links to each.
 
-*Last updated: 12 Nov 2026, Phase 0 audit of the master programme.*
+*Last updated: 12 Nov 2026, Phase 1 (historical data) of the master programme.*
 
 ---
 
@@ -11,7 +11,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Area | Status |
 |---|---|
 | Groww connection | **Working:** paid Trading API plan, TOTP key, token roles include `live_data` and `back_test` |
-| Historical data | **Done:** NIFTY spot and near-month futures, 1-minute, 11 Nov 2021 → today; validated |
+| Historical data | **Done:** NIFTY spot and near-month futures, 1-minute, 11 Nov 2021 → today; validated. Option history (ATM ±10, CE/PE, all expiries) downloading; NSE lot-size history stored |
 | Strategies, backtest, comparison | **Done:** 7 strategies × 4 timeframes, all 28 computed with real option prices |
 | Signal engine | **Done:** scores tested only on years the model hadn't seen |
 | Paper / replay engine (crossover and prediction modes) | **Done and tested** |
@@ -49,7 +49,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PROJECT_STRUCTURE.m
 backend/app/
   api/            Flask blueprints: account, backtest, data, research, live, pages (+ common helpers)
   config/         settings: paths, PostgreSQL, credentials (env first, keys.txt fallback)
-  database/       engine (Asia/Kolkata), migration runner, queries, migrations/0001–0007
+  database/       engine (Asia/Kolkata), migration runner, queries, migrations/0001–0008
   services/
     groww/          Groww login and API calls
     market_data/    history (download/validate), providers, live market, live dashboard feed
@@ -221,15 +221,15 @@ Read-only audit before the "master development" programme. No working code was c
 | Greeks per contract | **Yes** | No |
 | Expired option candles with OI (back to Nov 2021) | **Yes** | Yes, per backtest need |
 | Expired contract lists | Yes, but some strikes are missing | Standard symbol used as fallback |
-| **Historical lot sizes** | **No** (the instrument master knows only current contracts) | A fixed lot size (65) is used for every year |
+| **Historical lot sizes** | **No** (the instrument master knows only current contracts) | Phase 1: taken from NSE circulars (`lot_sizes`) |
 | **Historical option-chain snapshots (IV/Greeks history)** | **No** | n/a |
 | Real-time feed (`GrowwFeed` in the SDK) | **Available, not used** | The app polls instead |
 
 ### Gaps and issues found
-1. **Futures are stale (bug).** 11 Nov futures stop at 14:50 and today's are missing. Automatic refreshes (`GrowwProvider.ensure_spot`) update spot only, so VWAP/volume strategies and signal features read incomplete futures.
+1. **Futures are stale (bug)** (**fixed in Phase 1**). 11 Nov futures stop at 14:50 and today's are missing. Automatic refreshes (`GrowwProvider.ensure_spot`) update spot only, so VWAP/volume strategies and signal features read incomplete futures.
 2. **CE/PE premiums:** the live feed returns one recommended contract. Groww's chain has live CE **and** PE premiums, change, volume, OI, OI change, IV and Greeks, none of which the app exposes yet.
 3. **No option-chain or expiry-list endpoint** for the frontend.
-4. **Historical lot sizes are not modelled:** NIFTY's lot size has changed several times since 2021. Backtest P&L uses one size for every year, so per-year rupee figures are scaled wrong for years with a different lot size. Groww has no lot-size history, so an authoritative source (NSE circulars) is needed.
+4. **Historical lot sizes are not modelled** (**fixed in Phase 1**): NIFTY's lot size has changed several times since 2021. Backtest P&L uses one size for every year, so per-year rupee figures are scaled wrong for years with a different lot size. Groww has no lot-size history, so an authoritative source (NSE circulars) is needed.
 5. **No Telegram integration:** only a mention in `notifications/alerts.py`.
 6. **No WebSockets:** polling every 2 s (open) or 10 s (closed).
 7. **Live chart:** EMA 9/21 only. No VWAP, volume, RSI or MACD panels; no 1-minute live chart (the feed accepts 5/15/30).
@@ -238,7 +238,7 @@ Read-only audit before the "master development" programme. No working code was c
    - `_now()` in 3 modules (kept because tests patch each one).
    - Legacy server-rendered pages still served alongside React (**removed on 12 Nov**).
 9. **Live trading:** never exercised against Groww with a real order.
-10. **Synthetic test candles** (223k rows) sit in the production database.
+10. **Synthetic test candles** (223k rows) sit in the production database (**removed in Phase 1**, backup kept).
 
 ### Proposed plan (each phase stops at its gate for review)
 | Phase | Work | Needs your decision |
@@ -251,6 +251,22 @@ Read-only audit before the "master development" programme. No working code was c
 | 6. Live | Funds/position verification, partial fills, emergency stop-all, logs. First real order only with you present | **Approval for a supervised 1-lot live test** |
 | 7. Final | Full tests, build, browser checks, docs | — |
 
+### Phase 1: historical data (12 Nov 2026)
+Decisions you made at the gate: option scope ATM ±10 strikes, CE and PE, all weekly and monthly expiries; NSE lot-size history used in backtests and the 28 configurations re-run; synthetic rows backed up, then deleted.
+
+| Item | Result |
+|---|---|
+| Synthetic test rows | **Removed:** 223,305 `SYNTH:` candles plus their fetch-log, contract, expiry and cached-run rows, exported first to `data/backups/synthetic_2026-11-12_*.csv.gz` (row counts verified before deleting). 4 synthetic engine trades kept, as trade history is never deleted. A test now checks the production database has no `SYNTH:` candles |
+| Historical lot sizes | **Done:** migration 0008 `lot_sizes`, copied from NSE/FAOP/47854, 61415, 64625 and 70616 (read from the PDFs). NIFTY: 50 → 25 (weekly 2 May 2024, monthly 30 May 2024) → 75 (weekly 2 Jan 2025, monthly 27 Feb 2025) → 65 (weekly 6 Jan 2026, monthly 27 Jan 2026). Groww's current instrument list (18 expiries, all 65) matches |
+| Backtests | Default lot size is now each contract's NSE lot size; a fixed lot size is still available. Each trade records `lot_size` and `lot_source`. All 28 configurations re-run (old fixed-65 results kept) |
+| Option history | **New** `market_data/options_history.py`: for every stored session, CE and PE within 10 strikes of that day's ATM (from the day's spot low/high), for every expiry a backtest can pick. 21,702 contracts, 264 expiries, 172,120 contract-days. Resumable (only never-requested days are fetched), stoppable, failed requests reported and retried on the next run; 0-row days recorded, never filled |
+| Futures freshness | **Fixed:** the daily live refresh now updates futures as well as spot, and today's completed futures candles are stored as they are read |
+| Data page | Spot, futures and options cards (counts, range, latest candle, last successful download), intervals, option coverage by month with download/resume/stop, NSE lot-size table |
+| Contract metadata | Kept in the existing `contracts` and `expiries` tables (no duplicate table); cycle (weekly/monthly) is derived from the expiry list and lot size from `lot_sizes` |
+| Tests | New `tests/test_options_data.py` and two backtest tests (see CHANGELOG for counts) |
+
+**Not available from any source used:** historical IV/Greeks snapshots (Groww has no option-chain history). OI is stored with every option candle.
+
 ## 11. Known issues and pending work
 Full list: [docs/TODO.md](docs/TODO.md).
 
@@ -260,7 +276,6 @@ Full list: [docs/TODO.md](docs/TODO.md).
 
 **Known issues:**
 - **No holiday calendar.**
-- **Lot size:** fixed for all years.
 - **Prediction rule:** its option P&L hasn't been backtested.
 
 **Not a guarantee:** the app supports decisions. Past results don't predict future returns, and no strategy tested here was clearly profitable after costs.

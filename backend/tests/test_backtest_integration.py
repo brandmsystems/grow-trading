@@ -101,6 +101,23 @@ def test_param_validation():
         backtest.normalise({**PARAMS, "timeframe": 7})
     with pytest.raises(ValueError):
         backtest.normalise({**PARAMS, "cutoff": "15:30"})
+    with pytest.raises(ValueError):
+        backtest.normalise({**PARAMS, "lot_size": -1})
+
+
+def test_nse_lot_sizes_used_per_contract(result):
+    """Default lot size 0 = each contract's NSE lot size; mid-2025 NIFTY contracts are 75 (NSE/FAOP/64625)."""
+    assert result["params"]["lot_size"] == 0
+    for trades in result["trades"].values():
+        for t in trades:
+            assert t["lot_size"] == 75 and t["qty"] == 75 * result["params"]["lots"]
+            assert "64625" in t["lot_source"]
+
+
+def test_fixed_lot_size_still_supported():
+    fixed = backtest.run({**PARAMS, "lot_size": 65, "lots": 2}, use_cache=False, save=False)
+    trades = [t for ts in fixed["trades"].values() for t in ts]
+    assert trades and all(t["qty"] == 130 and t["lot_source"] == "fixed" for t in trades)
 
 
 def test_today_partial_session(monkeypatch):

@@ -20,7 +20,7 @@
 |---|---|---|
 | GET | `/api/bt/meta` | Defaults, timeframes, entry/cutoff choices, modes, strategies, expiry rules, stored-data summary |
 | POST | `/api/bt/data` | Download data for a backtest range (job). Body: backtest params |
-| POST | `/api/bt/run` | Run a backtest (job, or `{"hash", "cached": true}`). Body: `strategy`, `timeframe`, `start_date`, `end_date`, `entry_start`, `cutoff`, `expiry_rule`, `roll_on_expiry_day`, `lot_size`, `lots`, `capital`, `costs`, `force` |
+| POST | `/api/bt/run` | Run a backtest (job, or `{"hash", "cached": true}`). Body: `strategy`, `timeframe`, `start_date`, `end_date`, `entry_start`, `cutoff`, `expiry_rule`, `roll_on_expiry_day`, `lot_size` (0 = each contract's NSE lot size, the default; >0 = fixed), `lots`, `capital`, `costs`, `force` |
 | GET | `/api/bt/result/<hash>` | Full result: params, per-mode summary, trades, no-trade days, skipped trades |
 | GET | `/api/bt/chart/<hash>/<trade_id>` | One trade's spot bars (with fast/slow EMA) and option candles |
 | GET | `/api/jobs/<id>` | Job progress |
@@ -28,10 +28,13 @@
 ## Data: `api/data.py`
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/data/overview?from=&to=` | Coverage report, download history, running job |
+| GET | `/api/data/overview?from=&to=` | Spot coverage report, `instruments` (spot, futures and options: counts, first/last candle, last successful download, intervals), download history, running job |
 | POST | `/api/data/download` | Body `{"from", "to"}`: spot + futures download (job) |
 | POST | `/api/data/stop` | Stop the running download after its current request |
 | GET | `/api/data/candles?from=&to=&tf=` | Stored NIFTY candles at 1/5/15/30 minutes |
+| GET | `/api/data/options?from=&to=` | Option history coverage for the ATM ±10 scope: per month contracts, contract-days planned vs downloaded, empty days, candles; last run and last successful run; running job |
+| POST | `/api/data/options/download` | Body `{"from", "to"}`: download option candles still missing (job, own lane; 409 while any download runs). `POST /api/data/stop` stops it |
+| GET | `/api/data/lot-sizes` | NIFTY lot-size history: cycle, first expiry, lot size, NSE circular |
 
 ## Research and signals: `api/research.py`
 | Method | Path | Purpose |

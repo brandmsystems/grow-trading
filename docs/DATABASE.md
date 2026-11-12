@@ -16,16 +16,18 @@
 | 0005_strategy_results | `strategy_results` |
 | 0006_prediction_trades | Score/stop/target/ATR columns on `live_trades` |
 | 0007_live_alerts | `live_alerts` |
+| 0008_lot_sizes | `lot_sizes`, seeded from NSE circulars 47854, 61415, 64625 and 70616 |
 
 ## Tables
 | Table | Key | Holds |
 |---|---|---|
-| `candles_1m` | (symbol, ts) | 1-minute OHLCV + OI. Symbols: `NSE-NIFTY` (spot), `NSE-NIFTY-<ddMonyy>-FUT`, options `NSE-NIFTY-<ddMonyy>-<strike>-<CE/PE>`, and `SYNTH:*` (test data, hidden from the app) |
+| `candles_1m` | (symbol, ts) | 1-minute OHLCV + OI. Symbols: `NSE-NIFTY` (spot), `NSE-NIFTY-<ddMonyy>-FUT`, options `NSE-NIFTY-<ddMonyy>-<strike>-<CE/PE>`. Synthetic `SYNTH:*` rows exist only in the throwaway test databases |
 | `fetch_log` | (symbol, day) | Days already requested from Groww, so they aren't downloaded twice |
 | `expiries` | (dataset, expiry) | Groww expiry dates; dataset `groww_fut` = confirmed monthly futures expiries |
 | `contracts` | (dataset, expiry, strike, opt_type) | Option symbols from Groww's contract lists |
-| `data_downloads` | id | Each download attempt: status, counts, error |
+| `data_downloads` | id | Each download attempt: status, counts, error. Option history runs use symbol `NIFTY-OPTIONS` (chunks = contract requests, `rows_rejected` = failed requests) |
 | `data_day_quality` | (symbol, day) | Candles, missing minutes and ranges, rejected/out-of-hours counts, status |
+| `lot_sizes` | (underlying, cycle, first_expiry) | NIFTY lot size by expiry cycle (weekly/monthly) and first expiry it applies to, with the NSE circular as `source` |
 | `bt_runs` | param_hash | Cached backtest results and signal analyses (JSONB) |
 | `strategy_results` | (strategy, timeframe, settings_hash) | Compact five-year comparison results |
 | `live_sessions` | id | Each engine start: mode, config, stop reason |
@@ -34,13 +36,15 @@
 | `live_alerts` | id, unique `alert_key` | Notifications, stored once per signal |
 | `schema_migrations` | version | Applied migrations |
 
-## Stored data (11 Nov 2026)
+## Stored data (12 Nov 2026)
 | Data | Amount |
 |---|---|
-| NIFTY 1-minute candles | 462,595 (11 Nov 2021 → today) |
-| Monthly futures contracts | 61 |
-| Option contracts cached | ~7,900 |
-| Comparison results | 28 |
+| NIFTY 1-minute candles | 462,805 (11 Nov 2021 → today) |
+| Monthly futures contracts | 63 |
+| Option contracts | 21,702 in the ATM ±10 scope (download in progress; see the Market Data page) |
+| Comparison results | 28 with the fixed lot of 65, plus 28 with NSE lot sizes |
+
+**Synthetic rows removed (12 Nov 2026):** 223,305 `SYNTH:` candles, 515 fetch-log rows, 316 contracts, 18 expiries and 1 cached run were exported to `data/backups/synthetic_2026-11-12_*.csv.gz` and then deleted. The 4 synthetic engine trades in `live_trades` are kept (trade history is never deleted); the app already excludes them.
 
 ## Safety
 - **Nothing is deleted** by the app except cached backtest runs, which are cleared when new data arrives (signal analyses are kept).

@@ -64,5 +64,5 @@ All rates are editable in Backtest settings.
 ## Position sizing (`options/sizing.py`)
 `lots = min(floor(risk budget ÷ risk per lot), floor(available cash ÷ cost per lot))`.
 - **Risk budget:** capital × risk %.
-- **Risk per lot:** (entry − stop) × lot size, plus charges.
+- **Risk per lot:** (entry − stop) × lot size, plus charges. Live and paper use the contract's current lot size from Groww's instrument list; backtests use the NSE lot size of each historical contract.
 - **Cost per lot:** premium × lot size, plus charges.

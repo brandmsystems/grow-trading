@@ -10,7 +10,9 @@ from concurrent.futures import ThreadPoolExecutor
 log = logging.getLogger("jobs")
 _pools = {"main": ThreadPoolExecutor(max_workers=1, thread_name_prefix="job"),
           # Long research runs get their own lane so they don't block downloads and backtests.
-          "research": ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")}
+          "research": ThreadPoolExecutor(max_workers=1, thread_name_prefix="research"),
+          # Option history downloads take hours; they run apart from everything else.
+          "options": ThreadPoolExecutor(max_workers=1, thread_name_prefix="options")}
 _jobs: dict[str, dict] = {}
 _ids = itertools.count(1)
 _lock = threading.Lock()

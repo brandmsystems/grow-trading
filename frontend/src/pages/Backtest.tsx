@@ -153,7 +153,9 @@ export default function Backtest() {
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
             <Field label="Expiry"><select className={inputCls} value={params.expiry_rule} onChange={(e) => set({ expiry_rule: e.target.value })}>
               {Object.entries(md.expiry_rules).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
-            <Field label="Lot size"><input type="number" min={1} className={inputCls} value={params.lot_size} onChange={(e) => set({ lot_size: Number(e.target.value) })} /></Field>
+            <Field label="Lot size"><select className={inputCls} value={params.lot_size ? "fixed" : "nse"} onChange={(e) => set({ lot_size: e.target.value === "nse" ? 0 : 65 })}>
+              <option value="nse">NSE history (per contract)</option><option value="fixed">Fixed</option></select></Field>
+            {params.lot_size > 0 && <Field label="Fixed lot size"><input type="number" min={1} className={inputCls} value={params.lot_size} onChange={(e) => set({ lot_size: Math.max(1, Number(e.target.value)) })} /></Field>}
             <Field label="Lots"><input type="number" min={1} className={inputCls} value={params.lots} onChange={(e) => set({ lots: Number(e.target.value) })} /></Field>
             <Field label="Capital ₹"><input type="number" min={1} className={inputCls} value={params.capital} onChange={(e) => set({ capital: Number(e.target.value) })} /></Field>
             <label className="col-span-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={params.roll_on_expiry_day} onChange={(e) => set({ roll_on_expiry_day: e.target.checked })} /> Roll to next expiry on expiry day</label>
@@ -252,7 +254,8 @@ export default function Backtest() {
                   </Card>
                   <Card title={`Option premium · ${sel.symbol}`} right="1-minute">
                     {chart ? <CandleChart bars={chart.option} markers={optMarkers} showEma={false} dark={dark} height={220} /> : <Loading className="h-[220px]" />}
-                    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
+                      <Stat label="Quantity" value={num(sel.qty, 0)} sub={sel.lot_size ? `lot ${sel.lot_size} · ${sel.lot_source === "fixed" ? "fixed" : sel.lot_source ?? ""}` : undefined} />
                       <Stat label="Premium in → out" value={`${num(sel.opt_entry)} → ${num(sel.opt_exit)}`} />
                       <Stat label="Fills (after slippage)" value={`${num(sel.entry_fill)} → ${num(sel.exit_fill)}`} />
                       <Stat label="Charges" value={inr(-sel.friction)} className="text-orange-600" />

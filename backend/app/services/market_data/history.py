@@ -446,3 +446,33 @@ def candles(start: date, end: date, tf: int, symbol: str = SYMBOL) -> dict:
         raise ValueError(f"That range has {len(bars):,} bars. Choose a shorter range or a larger timeframe.")
     return {"bars": [{"t": r.start.isoformat(), "o": r.open, "h": r.high, "l": r.low, "c": r.close}
                      for r in bars.itertuples(index=False)]}
+
+
+def instruments() -> dict:
+    """What is stored per instrument: spot, near-month futures and option contracts."""
+    spot = db.data_summary(SYMBOL)
+    with db.engine().connect() as c:
+        fut = c.execute(text(
+            "SELECT count(DISTINCT symbol), max(day) FILTER (WHERE rows > 0), sum(rows) FROM fetch_log "
+            "WHERE symbol LIKE 'NSE-NIFTY-%-FUT'")).fetchone()
+        fut_last = c.execute(text(
+            "SELECT symbol, max(ts) FROM candles_1m WHERE symbol = ("
+            "  SELECT symbol FROM fetch_log WHERE symbol LIKE 'NSE-NIFTY-%-FUT' AND rows > 0 ORDER BY day DESC LIMIT 1"
+            ") GROUP BY 1")).fetchone()
+        opt = c.execute(text(
+            "SELECT count(DISTINCT symbol), min(day) FILTER (WHERE rows > 0), max(day) FILTER (WHERE rows > 0), sum(rows) "
+            "FROM fetch_log WHERE symbol LIKE 'NSE-NIFTY-%' AND symbol NOT LIKE '%-FUT'")).fetchone()
+        last_ok = {r[0]: r[1] for r in c.execute(text(
+            "SELECT CASE WHEN symbol = :s THEN 'spot' WHEN symbol LIKE '%-FUT' THEN 'futures' ELSE 'options' END, "
+            "max(finished_at) FROM data_downloads WHERE status = 'done' GROUP BY 1"), {"s": SYMBOL})}
+    iso = lambda v: v.isoformat() if v else None
+    return {
+        "spot": {"symbol": SYMBOL, "first": spot["first"], "last": spot["last"], "candles": spot["rows"],
+                 "sessions": spot["days"], "last_success": iso(last_ok.get("spot"))},
+        "futures": {"contracts": fut[0], "last_day": iso(fut[1]), "candles": int(fut[2] or 0),
+                    "latest_contract": fut_last[0] if fut_last else None, "last": iso(fut_last[1]) if fut_last else None,
+                    "last_success": iso(last_ok.get("futures"))},
+        "options": {"contracts": opt[0], "first_day": iso(opt[1]), "last_day": iso(opt[2]), "candles": int(opt[3] or 0),
+                    "last_success": iso(last_ok.get("options"))},
+        "intervals": [1, 5, 15, 30],
+    }

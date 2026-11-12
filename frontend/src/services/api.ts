@@ -1,7 +1,7 @@
 // Typed client for the Flask API. Every page goes through these functions (no direct fetch elsewhere).
 import type {
   ApiErr, BtChart, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
-  LiveTrade, Research, SignalAnalysis,
+  LiveTrade, LotSize, OptionsCoverage, Research, SignalAnalysis,
 } from "../types/api";
 
 export class ApiError extends Error {
@@ -78,6 +78,9 @@ export const buildSignalAnalysis = (strategy: string, tf: number) => request<nev
 export const getDataOverview = () => api<DataOverview>("/api/data/overview");
 export const startDownload = (from: string, to: string) => request<never>("/api/data/download", { json: { from, to } });
 export const stopDownload = () => request<never>("/api/data/stop", { json: {} });
+export const getOptionsCoverage = () => api<OptionsCoverage>("/api/data/options");
+export const startOptionsDownload = (from: string, to: string) => request<never>("/api/data/options/download", { json: { from, to } });
+export const getLotSizes = () => api<LotSize[]>("/api/data/lot-sizes");
 export const getCandles = (from: string, to: string, tf: number) =>
   api<{ bars: { t: string; o: number; h: number; l: number; c: number }[] }>(`/api/data/candles?${qs({ from, to, tf })}`);
 

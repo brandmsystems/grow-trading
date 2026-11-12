@@ -44,9 +44,14 @@
   1. Data page → `POST /api/data/download` → job → `history.download_all`
   2. Groww candles → validated → `candles_1m`
   3. Quality recorded in `data_day_quality`
+  4. The live market refreshes spot **and** near-month futures once a day, and stores today's completed futures candles as it reads them
+- **Option history:**
+  1. Data page → `POST /api/data/options/download` → job (options lane) → `options_history.download`
+  2. Plan: each stored session's spot low/high → ATM ±10 strikes, CE and PE, for every expiry a backtest can pick
+  3. One Groww request per contract window (≤30 days) → `candles_1m`; each requested day logged in `fetch_log` (0 rows = no trades)
 - **Backtest:**
   1. `POST /api/bt/run` → job → `backtest/engine.run`
-  2. Spot from the DB → strategy legs → option contracts (Groww, cached) → charges → metrics
+  2. Spot from the DB → strategy legs → option contracts (Groww, cached) → NSE lot size of the contract (`lot_sizes`) → charges → metrics
   3. Result cached in `bt_runs`
 - **Live:**
   1. `trading/manager` starts one `Engine(market, broker)`

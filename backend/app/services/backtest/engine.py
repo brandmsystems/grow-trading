@@ -15,6 +15,7 @@ from app.database import db
 from app.services.backtest import metrics
 from app.services.market_data import history as data_manager
 from app.services.market_data import providers
+from app.services.options import lot_sizes
 from app.services.strategy import strategies
 from app.services.strategy import rules as st
 
@@ -32,7 +33,7 @@ DEFAULTS = {
     "entry_start": "09:30",
     "cutoff": "14:30",
     "roll_on_expiry_day": True,
-    "lot_size": 65,
+    "lot_size": 0,          # 0 = each contract's NSE lot size (lot_sizes table); >0 = fixed
     "lots": 1,
     "capital": 100000,
     "costs": costs.DEFAULT_COSTS.to_dict(),
@@ -41,7 +42,7 @@ START_CHOICES = ["09:30", "10:00", "10:30"]
 CUTOFF_CHOICES = ["11:30", "12:00", "12:30", "13:00", "13:30", "14:00", "14:30"]
 TIMEFRAMES = [1, 5, 15, 30]
 HISTORY_DAYS = 40    # calendar days loaded before the range so indicators have settled
-ENGINE_VERSION = 2   # bump to invalidate cached runs when logic changes
+ENGINE_VERSION = 3   # bump to invalidate cached runs when logic changes
 
 
 def _now() -> datetime:
@@ -88,6 +89,8 @@ def normalise(params: dict) -> dict:
     p["roll_on_expiry_day"] = bool(p["roll_on_expiry_day"])
     for k in ("lot_size", "lots"):
         p[k] = int(p[k])
+    if p["lot_size"] < 0 or p["lots"] < 1:
+        raise ValueError("lot size must be 0 (NSE history) or positive, and lots at least 1")
     p["capital"] = float(p["capital"])
     p["costs"] = {k: float(v) for k, v in p["costs"].items()}
     return p
@@ -176,7 +179,6 @@ def run(params: dict, progress=None, use_cache: bool = True, save: bool = True) 
                 leg.bars_held = int((asof - leg.entry_ts) / timedelta(minutes=p["timeframe"]))
 
     expiries = prov.ensure_expiries(s, e)
-    qty = p["lot_size"] * p["lots"]
     cfg = costs.CostConfig(**p["costs"])
     spot_by_day = {d: g for d, g in spot.groupby(spot["ts"].dt.date)}
     contract_days: dict[str, dict[date, pd.DataFrame]] = {}
@@ -214,6 +216,15 @@ def run(params: dict, progress=None, use_cache: bool = True, save: bool = True) 
             if expiry is None:
                 skipped.append({**base, "reason": "No expiry available"})
                 continue
+            if p["lot_size"]:
+                lot, lot_src = p["lot_size"], "fixed"
+            else:
+                try:
+                    lot, lot_src = lot_sizes.lot_size_for(expiry, expiries)
+                except lot_sizes.LotSizeUnknown as exc:
+                    skipped.append({**base, "reason": str(exc)})
+                    continue
+            qty = lot * p["lots"]
             try:
                 sym = prov.option_symbol(expiry, strike, typ)
                 if sym is None:
@@ -245,7 +256,7 @@ def run(params: dict, progress=None, use_cache: bool = True, save: bool = True) 
                 "signal_close": round(leg.signal_close, 2),
                 "spot_entry": spot_in, "spot_exit": spot_out,
                 "opt_entry": round(px_in, 2), "opt_exit": round(px_out, 2),
-                "qty": qty, "ordinal": leg.ordinal, "bars_held": leg.bars_held,
+                "qty": qty, "lot_size": lot, "lot_source": lot_src, "ordinal": leg.ordinal, "bars_held": leg.bars_held,
                 "whipsaw": whipsaw, "outcome": "win" if pnl["net"] > 0 else "loss",
                 **pnl,
             })

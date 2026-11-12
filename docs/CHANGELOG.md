@@ -2,6 +2,16 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: Phase 1, historical data
+- **Synthetic rows:** backed up to `data/backups/synthetic_2026-11-12_*.csv.gz` (counts verified), then deleted from the production database: 223,305 candles, 515 fetch-log rows, 316 contracts, 18 expiries, 1 cached run. 4 synthetic engine trades kept.
+- **Lot sizes:** migration `0008_lot_sizes` with NIFTY lot sizes from NSE/FAOP/47854, 61415, 64625 and 70616, by expiry cycle and first expiry. `services/options/lot_sizes.py` looks up a contract's lot size. Groww's current instrument list matches (65 on all 18 listed expiries).
+- **Backtests:** `lot_size` defaults to 0 = each contract's NSE lot size (`ENGINE_VERSION` 3); a fixed lot size is still accepted. Each trade records `lot_size` and `lot_source`. The Backtesting page offers "NSE history" or "Fixed" and shows quantity per trade.
+- **Replay:** replayed contracts use their NSE lot size too (was a fixed 65), so replay and backtest still produce identical trades.
+- **Option history:** `services/market_data/options_history.py`: ATM ±10 strikes, CE and PE, every expiry a backtest can pick, for every stored session. Resumable, stoppable, failed requests reported and retried next run. New `GET /api/data/options`, `POST /api/data/options/download` (own job lane), `GET /api/data/lot-sizes`; `GET /api/data/overview` gains `instruments`.
+- **Futures freshness:** the daily live refresh updates futures as well as spot, and today's completed futures candles are stored.
+- **Market Data page:** spot/futures/options cards, intervals, option coverage by month with download/resume/stop, NSE lot-size table.
+- **Tests:** `tests/test_options_data.py` (lot sizes at every NSE cutover, plan, windows, resumable download with a failure, stop, API, no synthetic rows in production) and two backtest lot-size tests. **163 passed** (141 before + 22 new). React build passes.
+
 ## 12 Nov: One interface (old pages removed)
 - **Removed:** at your request, `backend/legacy/` (7 Jinja templates, 10 JS/CSS files), the `/live` page route and Flask's static folder.
 - **Redirects:** `api/pages.py` now redirects `/` and the old addresses (`/live`, `/signals`, `/compare`, `/data`, `/history`, `/account`, `/backtest`) to the matching React page under `/app`.

@@ -30,4 +30,6 @@
 - **Pre-open and after-close candles:** Groww returns them (09:00–09:14, 15:30–15:59). They are counted but not stored.
 - **Incomplete contract lists:** the list for an old expiry can miss strikes that traded. The standard symbol (`NSE-NIFTY-06Oct26-22550-CE`) still returns candles, so it is used.
 - **Moved expiries:** holidays move monthly expiries (e.g. 29 Mar 2023, 24 Apr 2025). The futures contract for each month is confirmed against Groww's contract list.
-- **Rate limits:** live data 10/s, non-trading 20/s, orders 10/s, token endpoint 150 per day. Option downloads use 4 parallel requests; the provider retries transient errors with backoff and never retries 403/400.
+- **Rate limits:** live data 10/s, non-trading 20/s, orders 10/s, token endpoint 150 per day. Backtest option prefetch uses 4 parallel requests and the option history download 3; the provider retries transient errors (including "Rate limit has breached") with backoff and never retries 403/400. The history download runs at about 110 contract requests a minute.
+- **Holidays:** a contract requested over a holiday returns no candles for that day (e.g. 10 Nov 2026, Balipratipada). It is recorded with 0 rows; spot has no session that day either.
+- **Lot sizes:** the instrument master (`instrument.csv`) lists only current contracts. Their lot sizes (65 for every listed NIFTY expiry on 12 Nov 2026) match the `lot_sizes` table. Past lot sizes come from NSE circulars, not Groww.

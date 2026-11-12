@@ -69,6 +69,11 @@ class GrowwMarket:
             return self._hist[1]
         start = day - timedelta(days=self.HISTORY_DAYS)
         self._prov.ensure_spot(start, day - timedelta(days=1))
+        try:   # keep near-month futures as current as spot (VWAP, volume, Data page)
+            from app.services.market_data import history as data_manager
+            data_manager.download_futures(start, day - timedelta(days=1))
+        except Exception as exc:
+            log.warning("futures refresh failed: %s", exc)
         df = db.load_candles(self._prov.spot_symbol, datetime.combine(start, time(0)),
                              datetime.combine(day, time(0)))
         self._hist = (day, df)
@@ -102,6 +107,7 @@ class GrowwMarket:
         today = _completed(today, now)
         if not today.empty:
             today = today[today["ts"].dt.time.between(time(9, 15), time(15, 29))]
+            db.upsert_candles(sym, today)
         return pd.concat([hist, today], ignore_index=True)
 
     # -------------------------------------------------- quotes
@@ -236,4 +242,9 @@ class ReplayMarket:
 
     def contract(self, day: date, expiry: date, strike: float, opt_type: str) -> Contract | None:
         sym = self.prov.option_symbol(expiry, strike, opt_type)
-        return Contract(sym, sym, expiry, strike, opt_type, 65) if sym else None
+        if not sym:
+            return None
+        # The replayed contract's own NSE lot size, as in the backtest.
+        from app.services.options import lot_sizes
+        lot, _ = lot_sizes.lot_size_for(expiry, self.prov.ensure_expiries(expiry, expiry))
+        return Contract(sym, sym, expiry, strike, opt_type, lot)

@@ -154,7 +154,7 @@ export interface BtTrade {
   strike: number; opt_type: string; side: string; symbol: string; expiry: string; dte: number;
   exit_reason: string; fill_entry_ts: string; fill_exit_ts: string; signal_close: number;
   spot_entry: number | null; spot_exit: number | null; opt_entry: number; opt_exit: number;
-  entry_fill: number; exit_fill: number; qty: number; ordinal: number; bars_held: number; whipsaw: boolean;
+  entry_fill: number; exit_fill: number; qty: number; lot_size?: number; lot_source?: string; ordinal: number; bars_held: number; whipsaw: boolean;
   outcome: "win" | "loss"; gross: number; slippage: number; charges: Charges; friction: number; net: number;
 }
 
@@ -240,4 +240,22 @@ export interface DownloadRun {
   error: string | null; started_at: string; finished_at: string | null;
 }
 
-export interface DataOverview { coverage: Coverage; downloads: DownloadRun[]; job: Job | null }
+export interface Instruments {
+  spot: { symbol: string; first: string | null; last: string | null; candles: number; sessions: number; last_success: string | null };
+  futures: { contracts: number; last_day: string | null; candles: number; latest_contract: string | null; last: string | null; last_success: string | null };
+  options: { contracts: number; first_day: string | null; last_day: string | null; candles: number; last_success: string | null };
+  intervals: number[];
+}
+export interface DataOverview { coverage: Coverage; instruments: Instruments; downloads: DownloadRun[]; job: Job | null }
+
+export interface OptionMonth {
+  month: string; contracts: number; contract_days: number; downloaded_days: number; empty_days: number;
+  candles: number; complete_contracts: number; pct: number;
+}
+export interface OptionsCoverage {
+  scope: { from: string; to: string; strikes_each_side: number; expiry_rules: string[]; types: string[] };
+  summary: Omit<OptionMonth, "month"> & { expiries: number };
+  months: OptionMonth[];
+  last_run: DownloadRun | null; last_success: string | null; job: Job | null;
+}
+export interface LotSize { cycle: "weekly" | "monthly"; first_expiry: string; lot_size: number; source: string }
