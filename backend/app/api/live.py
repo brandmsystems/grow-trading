@@ -28,8 +28,8 @@ def live_dashboard():
     a = request.args
     try:
         tf = int(a.get("tf", 5))
-        if tf not in (5, 15, 30):
-            raise ValueError("timeframe must be 5, 15 or 30")
+        if tf not in (1, 5, 15, 30):
+            raise ValueError("timeframe must be 1, 5, 15 or 30")
         entry_start, cutoff = a.get("entry_start", "09:30"), a.get("cutoff", "14:30")
         live_feed._hm(entry_start), live_feed._hm(cutoff)
         capital = float(a["capital"]) if a.get("capital") else None

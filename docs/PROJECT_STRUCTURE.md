@@ -44,6 +44,7 @@ grow-trading/
 |---|---|
 | `common.py` | Shared helpers: `api_error`, result cache, `real_only`, `date_arg`, `active_job` |
 | `pages.py` | Redirects `/` and old page addresses to the React app (`/app/...`) |
+| `paper.py` | Paper risk: virtual account, risk calculator, stop-loss edits and history |
 | `account.py` | `/api/status`, `/api/login`, `/api/logout`, `/api/profile`, `/api/funds` |
 | `backtest.py` | `/api/bt/*`, `/api/jobs/<id>` |
 | `data.py` | `/api/data/*` |
@@ -61,6 +62,9 @@ Details: [API.md](API.md).
 | `market_data/providers.py` | Groww candles, expiries, option contracts; synthetic provider (tests only) | `providers.py` |
 | `market_data/options_history.py` | Option history scope (ATM ±10, CE/PE, all expiry rules), resumable download, coverage | new |
 | `options/lot_sizes.py` | NIFTY lot size of a contract from the NSE `lot_sizes` table | new |
+| `strategy/insight.py` | Signal explanations (actual indicator values, confidence) and today's trading plan | new |
+| `strategy/patterns.py` | Candlestick patterns on closed bars (no repainting) | new |
+| `trading/paper_account.py` | Virtual paper account and daily risk monitor | new |
 | `market_data/live.py` | Live market for the engine: clock, completed candles, LTPs, contracts; replay market | `live_market.py` (minus brokers) |
 | `market_data/feed.py` | Live dashboard feed: quote, bars, signal state, verified option recommendation | `live_feed.py` (minus sizing, contracts, alert storage) |
 | `options/contracts.py` | Find a strike's CE/PE in a Groww option chain | from `live_feed.py` |
@@ -83,7 +87,7 @@ Details: [API.md](API.md).
 |---|---|---|
 | `config/settings.py` | Paths (project root), PostgreSQL settings, credentials from env or `keys.txt` | `config.py` |
 | `database/db.py` | Engine (Asia/Kolkata session), migration runner, candles/contracts/runs queries | `db.py` |
-| `database/migrations/` | `0001`–`0008` SQL migrations | `migrations/` |
+| `database/migrations/` | `0001`–`0010` SQL migrations | `migrations/` |
 | `workers/jobs.py` | Background jobs with progress; separate lane for long research runs | `jobs.py` |
 | `utils/timeutil.py` | `parse_hm("09:30")`, shared by three modules | three copies of `_hm` |
 | `utils/numbers.py` | `to_float` | from `live_feed.py` |

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ListChecks, X } from "lucide-react";
-import type { LiveTrade } from "../../types/api";
-import { getPaperTrades } from "../../services/api";
+import type { LiveTrade, StopChange } from "../../types/api";
+import { getPaperTrades, getStopChanges } from "../../services/api";
 import { dmy, hm, inr, num, pnlClass } from "../../utils/format";
 import { Card, Pill, Stat } from "../common/Card";
 import { Button } from "../common/Controls";
@@ -12,6 +12,23 @@ const REASON: Record<string, string> = {
   opposite_cross: "opposite crossover", square_off: "15:00 square-off", stop_loss: "stop-loss", stop: "NIFTY stop",
   target: "target", daily_loss_limit: "daily loss limit", manual_stop: "you stopped", manual_square_off: "you squared off",
 };
+
+function StopHistory({ tradeId }: { tradeId: number }) {
+  const [rows, setRows] = useState<StopChange[] | null>(null);
+  useEffect(() => { getStopChanges(tradeId).then(setRows).catch(() => setRows([])); }, [tradeId]);
+  if (!rows?.length) return null;
+  return (
+    <div className="mt-3 text-xs">
+      <div className="mb-1 font-semibold">Stop-loss history</div>
+      {rows.map((r) => (
+        <div key={r.ts} className="flex flex-wrap justify-between gap-2 border-t border-slate-100 py-1 dark:border-slate-800">
+          <span className="num">{hm(r.ts)} · {r.source === "entry" ? "set at entry" : "changed by you"}</span>
+          <span className="num">{r.old_stop != null ? `₹${num(r.old_stop)} → ` : ""}₹{num(r.new_stop)} · max loss {r.old_max_loss != null ? `₹${num(r.old_max_loss, 0)} → ` : ""}₹{num(r.new_max_loss, 0)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Paper trade history with the risk calculation saved at entry. Click a row for the full detail. */
 export function PaperTrades({ refreshKey }: { refreshKey: unknown }) {
@@ -73,6 +90,7 @@ export function PaperTrades({ refreshKey }: { refreshKey: unknown }) {
             <Stat label="Stop / target premium" value={`${num(sel.stop_premium)} / ${num(sel.target_premium)}`} />
             <Stat label="Net vs max loss" value={sel.net != null && sel.risk?.max_loss ? `${num((sel.net / sel.risk.max_loss) * 100, 0)}%` : "—"} tip="Net P&L as a share of the maximum loss planned at entry (−100% = full stop-loss)." />
           </div>
+          <StopHistory tradeId={sel.id} />
           {sel.risk ? (
             <div className="mt-3">
               <div className="mb-1 flex items-center gap-2 text-sm font-semibold">Risk calculation at entry <Decision r={sel.risk} />

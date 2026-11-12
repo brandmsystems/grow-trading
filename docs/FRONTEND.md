@@ -49,6 +49,31 @@ Light and dark themes are both supported; dark is the default.
 | Historical Charts | `/app/history` | `GET /api/data/overview`, `GET /api/data/candles` | Stored NIFTY candles at 1/5/15/30 min with optional EMA 9/21, date range, earlier/later/latest, zoom and pan |
 | Account & Settings | `/app/account` | `GET /api/status, /api/profile, /api/funds`, `POST /api/login` | Groww connection and re-login; funds; profile; theme, sound and browser notification permission; order calculator defaults |
 
+**Live Trading page order (12 Nov 2026):** the price, high and low, then today's plan, the current prediction, the live chart, and paper positions and stop-loss. On phones, the prediction card moves between the plan and the chart.
+- **NIFTY 50 Spot:**
+  - price, change and change %
+  - day high / low with points from each
+  - previous close
+  - a day-range bar showing where the price sits between low and high
+  - the updated time and age, with clear *Delayed* / *Disconnected* states
+- **Today's Trading Plan:**
+  - previous close, open, high, low, and the bullish and bearish levels
+  - trend, EMA 9/21, VWAP, RSI and volatility
+  - three expandable scenarios (the current one highlighted and open)
+  - support/resistance table and plan-change history (expandable); the creation time and latest change with its reason
+- **Recommended Option → View reason** (expandable):
+  - each check with its actual value, marked supports / against / neutral / unavailable
+  - confidence with its band's out-of-sample hit rate
+  - why the call isn't HOLD (or why it is HOLD and what's needed), and a caution on weak confirmation
+- **Chart:**
+  - 1 / 5 / 15 / 30-minute candles
+  - toggles: VWAP, futures volume, support/resistance lines (pivot R1/S1, previous day high/low, opening range), and RSI & MACD panels time-synced with the chart
+  - markers: crossovers (9/21 ↑/↓), strategy calls (BUY CE / BUY PE / EXIT / HOLD) and engine fills
+  - lines: the signal's entry reference, stop and target (the paper position's premium stop and target as NIFTY levels via delta)
+- **Candle Patterns:** today's patterns on closed candles, each expandable with OHLC, rule, confirmation (RSI, VWAP, EMA), status and effect on the current call. Doji are counted, not listed.
+- **Paper position (Trading Controls):** entry premium, stop, target, R:R, maximum risk ₹ and %, risk budget, stop method, and a **Change stop** field. The backend refuses changes beyond the risk limits, with the reason. Stop-loss methods include fixed premium points.
+- **Paper Trades detail:** stop-loss history (set at entry, each change, maximum loss before and after).
+
 **Paper trading risk (Live Trading page, paper mode):**
 - **Risk Management card** (replaces the Order Calculator in paper mode):
   - presets 0.5/1/1.5/2% or custom

@@ -255,3 +255,128 @@ def test_account_api_and_reset():
     assert c.post("/api/paper/account", json={"capital": 50000}).status_code == 400
     r = c.post("/api/paper/account", json={"capital": 50000, "confirm": "RESET"}).get_json()["data"]
     assert r["capital"] == 50000 and c.get("/api/paper/account").get_json()["data"]["balance"] == 50000
+
+
+# ---------------------------------------------------------------- stop-loss management
+def open_position(cfg, day=None):
+    """Start a paper engine and tick until it holds a position. Returns (engine, market)."""
+    day = day or DAYS[0]
+    market = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(day, time(9, 0)))
+    eng = le.Engine(le.EngineConfig(**{"trade_mode": "paper", "timeframe": 15, "max_trades_per_day": 100,
+                                       "max_daily_loss": 0, **cfg}), market, PaperBroker(market))
+    eng.start(threaded=False)
+    for d in DAYS:
+        market.clock = datetime.combine(d, time(9, 14))
+        while market.clock <= datetime.combine(d, time(14, 50)):
+            eng.tick()
+            if eng.position:
+                return eng, market
+            market.clock += timedelta(seconds=10)
+    raise AssertionError("no paper position opened")
+
+
+def stop_changes(tid):
+    with db.engine().connect() as c:
+        return [dict(r) for r in c.execute(text("SELECT * FROM paper_stop_changes WHERE trade_id=:t ORDER BY id"), {"t": tid}).mappings()]
+
+
+def test_points_stop_mode_and_initial_stop_recorded():
+    paper_account.reset(500000)
+    eng, _ = open_position({"risk_pct": 2.0, "stop_mode": "points", "stop_points": 15, "daily_risk_pct": 0})
+    p = eng.position
+    r = p["risk"]
+    assert p["stop_premium"] == costs._round_tick_down(r["entry"] - 15) and "15 premium points" in r["stop_method"]
+    ch = stop_changes(p["id"])
+    assert len(ch) == 1 and ch[0]["source"] == "entry" and ch[0]["new_stop"] == p["stop_premium"]
+    lv = eng.status()["position"]
+    assert lv["stop_premium"] == p["stop_premium"] and lv["max_loss"] == r["max_loss"]
+    assert lv["max_loss_pct"] == pytest.approx(100 * r["max_loss"] / r["capital"], abs=0.01)
+
+
+def test_edit_stop_tighten_refuse_and_record():
+    paper_account.reset(500000)
+    eng, market = open_position({"risk_pct": 1.0, "stop_mode": "points", "stop_points": 10, "daily_risk_pct": 0})
+    p = eng.position
+    ltp = float(market.option_ltp(p["contract"]))
+    old_loss = p["risk"]["max_loss"]
+    # tighter stop: allowed, max loss recalculated with charges and slippage
+    tighter = round(p["stop_premium"] + 2, 2)
+    if tighter < ltp:
+        res = eng.set_paper_stop(tighter)
+        assert res["new_max_loss"] < old_loss and eng.position["stop_premium"] == tighter
+        assert res["new_max_loss"] == pytest.approx(-costs.round_trip(p["side"], p["entry_price"], tighter, p["qty"])["net"])
+    # looser beyond the trade's risk amount: refused with the reason, nothing changes
+    before = eng.position["stop_premium"]
+    with pytest.raises(ValueError, match="exceeds this trade's risk amount"):
+        eng.set_paper_stop(max(0.05, p["entry_price"] * 0.2))
+    assert eng.position["stop_premium"] == before
+    # on the wrong side of the current premium: refused
+    with pytest.raises(ValueError, match="below the current premium"):
+        eng.set_paper_stop(ltp + 5)
+    ch = stop_changes(p["id"])
+    assert ch[0]["source"] == "entry" and all(c["source"] == "user" for c in ch[1:])
+    with db.engine().connect() as c:
+        assert c.execute(text("SELECT stop_premium FROM live_trades WHERE id=:i"), {"i": p["id"]}).scalar() == before
+
+
+def test_edited_stop_exits_when_premium_reaches_it():
+    paper_account.reset(500000)
+    eng, market = open_position({"risk_pct": 2.0, "stop_mode": "points", "stop_points": 25, "daily_risk_pct": 0})
+    p = eng.position
+    ltp = float(market.option_ltp(p["contract"]))
+    new = costs._round_tick_down(ltp - 0.5)        # just under the current premium
+    if new > p["stop_premium"]:
+        eng.set_paper_stop(new)
+    tid = p["id"]
+    for _ in range(400):
+        market.clock += timedelta(seconds=10)
+        eng.tick()
+        if not eng.position:
+            break
+    with db.engine().connect() as c:
+        t = c.execute(text("SELECT * FROM live_trades WHERE id=:i"), {"i": tid}).mappings().first()
+    assert t["status"] == "CLOSED"
+    if t["exit_reason"] == "stop_loss":
+        assert t["exit_price"] <= t["stop_premium"]
+        assert t["net"] == pytest.approx(-costs.round_trip("BUY", t["entry_price"], t["exit_price"], t["qty"])["friction"]
+                                         + (t["exit_price"] - t["entry_price"]) * t["qty"], abs=0.02)   # charges + slippage in net
+    with db.engine().connect() as c:   # exactly one exit for the trade
+        assert c.execute(text("SELECT count(*) FROM live_events WHERE message LIKE 'EXITED%' AND session_id=:s"),
+                         {"s": eng.session_id}).scalar() == 1
+
+
+def test_stale_premium_never_triggers_stop():
+    paper_account.reset(500000)
+    eng, market = open_position({"risk_pct": 2.0, "stop_mode": "points", "stop_points": 15, "daily_risk_pct": 0})
+    p = eng.position
+    sym = p["contract"].trading_symbol
+    eng.last_ltp[sym] = p["stop_premium"] - 5                     # below the stop...
+    eng.last_ltp_at[sym] = market.now() - timedelta(seconds=60)   # ...but a minute old
+    eng._premium_stop()
+    assert eng.position is p and any("not checked until a fresh price" in e["message"] for e in eng.events)
+    eng.last_ltp_at[sym] = market.now()                           # fresh price below the stop: exits once
+    eng._premium_stop()
+    assert eng.position is None
+    eng._premium_stop()                                            # no second exit
+    with db.engine().connect() as c:
+        assert c.execute(text("SELECT count(*) FROM live_trades WHERE status='CLOSED' AND exit_reason='stop_loss'")).scalar() == 1
+
+
+def test_stop_edit_api_and_live_mode_refused():
+    from app.services.trading import manager
+    c = app_module.app.test_client()
+    assert c.post("/api/paper/position/stop", json={"stop": 50}).status_code == 409   # no paper engine running
+    paper_account.reset(500000)
+    eng, market = open_position({"risk_pct": 2.0, "stop_mode": "points", "stop_points": 15, "daily_risk_pct": 0})
+    old, manager._engine = manager._engine, eng
+    try:
+        assert c.post("/api/paper/position/stop", json={}).status_code == 400
+        r = c.post("/api/paper/position/stop", json={"stop": 0.0})
+        assert r.status_code == 400 and "above zero" in r.get_json()["error"]
+        ch = c.get(f"/api/paper/stop-changes?trade_id={eng.position['id']}").get_json()["data"]
+        assert ch and ch[0]["source"] == "entry"
+    finally:
+        manager._engine = old
+    live = le.Engine(le.EngineConfig(trade_mode="replay"), market, PaperBroker(market))
+    with pytest.raises(ValueError, match="paper positions only"):
+        live.set_paper_stop(10)

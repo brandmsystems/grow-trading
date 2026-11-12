@@ -2,6 +2,19 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: Live market & paper trading improvements (5 items)
+- **NIFTY high / low:** the quote adds `from_high`, `from_low` and `range_pct`. The spot card shows the points from the high and low, change %, previous close, a day-range bar, the updated time and age, and Delayed / Disconnected states.
+- **Prediction explanations:** new `strategy/insight.explain` shows EMA 9/21, VWAP, RSI, MACD, volume and trend with actual values, plus the model confidence with its out-of-sample hit rate, why the call isn't HOLD (or what HOLD needs), and a caution on weak confirmation. It never changes the signal. The *View reason* panel is on the recommendation card.
+- **Paper stop-loss:** fixed-points stop mode; the stop on an open paper position can be edited and is refused beyond the trade's risk amount or the remaining daily loss limit; every stop is logged (`paper_stop_changes`); stale prices (> 15 s) never trigger an exit; one exit per position; the stop and target are drawn on the chart.
+- **Today's Trading Plan:** `insight.trading_plan` adds Groww quote values, calculated pivots, previous day and opening-range levels, trend, EMA, VWAP, volatility, preferred direction and three scenarios. Changes are judged on closed bars and stored with reasons (`trading_plans`).
+- **Candles and patterns:**
+  - 1-minute chart, VWAP (basis-adjusted futures VWAP), futures volume, RSI and MACD panels, support/resistance lines, and BUY CE / BUY PE / EXIT / HOLD markers
+  - `strategy/patterns.py` (10 patterns, closed bars only, no repainting, confirmation status, effect on the signal)
+- **Feed:** bars now come from `strategies.prepare` (the EMAs are identical to before), with futures for VWAP and volume. A feed built around an injected market (tests) never touches the database.
+- **Fix:** the recommendation card could stay dimmed, because its flash and its fade-in fought over the CSS `animation` property; the flash moved to a wrapper.
+- **Migration 0010:** `trading_plans`, `paper_stop_changes`. `test_live_engine.py` cleanup now truncates with CASCADE, because `paper_stop_changes` references `live_trades`; no assertion changed.
+- **Tests:** `tests/test_insight.py` (20) covers high/low against the quote, explanations against the bar values, the BUY/HOLD reasons, model confidence, pivots, opening range, plan changes and their recording, each candle pattern, closed bars only and no repainting, pattern effect, chart bars and markers, the 1-minute chart, and missing candles. 5 stop-management tests cover the points mode, the initial stop record, tighten/refuse/record, exiting at the edited stop with costs, stale prices with no double exit, and the API. **244 passed.** React build (type check) passes. Live page checked at 1440, 768 and 390 px with no overflow or console errors.
+
 ## 12 Nov: Phase 1 complete (option history downloaded)
 - **Option history:** 22,042 requests, 0 failed, about 3 h. Scope coverage 100% (172,120 contract-days; 2,061 with no trades). 67.1 M option candles in total, 53.5 M with OI. Integrity: 0 invalid prices or OHLC, 0 non-minute timestamps; 165 older 15:30 candles flagged, not deleted.
 - **Fix:** the provider now records weekend special sessions (Budget days, Muhurat) in the fetch log when they return candles; back-filled 1,288 rows from stored candles and 32 no-trade days (3 re-checked with Groww).

@@ -20,7 +20,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
 | React frontend (Phase 5 + redesign) | **All 9 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
 | WebSocket updates (Phase 6) | **Not started** |
-| Tests | **140 pass**; React production build and type check pass |
+| Tests | **244 pass**; React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
@@ -49,7 +49,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PROJECT_STRUCTURE.m
 backend/app/
   api/            Flask blueprints: account, backtest, data, research, live, pages (+ common helpers)
   config/         settings: paths, PostgreSQL, credentials (env first, keys.txt fallback)
-  database/       engine (Asia/Kolkata), migration runner, queries, migrations/0001–0008
+  database/       engine (Asia/Kolkata), migration runner, queries, migrations/0001–0010
   services/
     groww/          Groww login and API calls
     market_data/    history (download/validate), providers, live market, live dashboard feed
@@ -125,7 +125,7 @@ Details: [docs/GROWW_API.md](docs/GROWW_API.md).
 ## 6. Database
 Details: [docs/DATABASE.md](docs/DATABASE.md).
 
-**Setup:** PostgreSQL 17 `groww_trading`, 7 migrations, timestamps in IST.
+**Setup:** PostgreSQL 17 `groww_trading`, 10 migrations, timestamps in IST.
 
 **Main tables:**
 
@@ -277,6 +277,16 @@ Decisions you made at the gate: option scope ATM ±10 strikes, CE and PE, all we
 
 ### Paper trading risk management (12 Nov 2026)
 Requested as prompt 13. Paper only; live and replay unchanged. Every paper trade calculates risk %, risk amount, stop-loss, risk per lot (with slippage and charges), lots and quantity **before** the simulated fill and stores it in `live_trades.risk`. Failed checks give NO TRADE with the exact reasons. Premium stop-loss enforced (ATR × delta by default); daily limit halts new entries until the next session; virtual account with a running balance (`paper_accounts`). Details: [docs/STRATEGY.md](docs/STRATEGY.md#paper-trading-risk-management-12-nov-2026), [docs/FRONTEND.md](docs/FRONTEND.md). Tests: 56 new.
+
+### Live market & paper trading improvements (12 Nov 2026)
+The five requested items are done:
+1. NIFTY high/low with points from each, day-range bar, and updated/stale states.
+2. *View reason* explanations with actual EMA/VWAP/RSI/MACD/volume/trend values and model confidence.
+3. Paper stop-loss: ATR, % or fixed points; editable within the risk limits, logged, stale-safe, drawn on the chart.
+4. Today's Trading Plan: Groww quote values, calculated pivot/previous-day/opening-range levels, bias, three scenarios, change history.
+5. Candles: 1-minute chart, VWAP, volume, RSI/MACD panels, support/resistance, BUY/HOLD markers, and 10 candle patterns on closed bars with no repainting.
+
+The strategy's signals are unchanged; explanations, plan and patterns are context. Details: [docs/STRATEGY.md](docs/STRATEGY.md#live-dashboard-insight-12-nov-2026), [docs/FRONTEND.md](docs/FRONTEND.md). Tests: 244 pass.
 
 ## 11. Known issues and pending work
 Full list: [docs/TODO.md](docs/TODO.md).

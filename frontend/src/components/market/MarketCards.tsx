@@ -18,15 +18,28 @@ export function SpotCard({ data, compact = false }: { data: Dashboard; compact?:
           {signed(q?.change)} ({signed(q?.change_pct)}%)
         </span>} />
       {!compact && (
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <Stat label="Day high" value={num(q?.high)} className="text-sm" />
-          <Stat label="Day low" value={num(q?.low)} className="text-sm" />
-          <Stat label="Prev close" value={num(q?.prev_close)} className="text-sm" />
-        </div>
+        <>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <Stat label="Day high" value={num(q?.high)} className="text-sm text-gain" sub={q?.from_high != null ? `${signed(q.from_high)} from high` : undefined} />
+            <Stat label="Day low" value={num(q?.low)} className="text-sm text-loss" sub={q?.from_low != null ? `${signed(q.from_low)} from low` : undefined} />
+            <Stat label="Prev close" value={num(q?.prev_close)} className="text-sm" sub={q?.change_pct != null ? `${signed(q.change_pct)}% today` : undefined} />
+          </div>
+          {q?.range_pct != null && (
+            <div className="mt-3" aria-label="Position in today's range">
+              <div className="flex justify-between text-[11px] text-slate-500"><span>Low {num(q.low)}</span><span>{num(q.range_pct, 0)}% of today's range</span><span>High {num(q.high)}</span></div>
+              <div className="relative mt-1 h-2 rounded-full bg-gradient-to-r from-red-400 via-slate-300 to-green-500 dark:via-slate-600">
+                <div className="absolute -top-1 h-4 w-1.5 -translate-x-1/2 rounded bg-blue-600 ring-2 ring-white dark:ring-slate-900" style={{ left: `${Math.min(100, Math.max(0, q.range_pct))}%` }} />
+              </div>
+            </div>
+          )}
+        </>
       )}
       <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-        Index value · {up ? "rising" : down ? "falling" : "flat"} vs previous close · as of {hms(q?.as_of)}
+        Index value · {up ? "rising" : down ? "falling" : "flat"} vs previous close · updated {hms(q?.as_of)}
+        {q?.age_sec != null && q.state !== "closed" ? ` (${q.age_sec}s ago)` : ""}
       </div>
+      {q && q.state === "delayed" && <p className="mt-1 text-xs font-semibold text-orange-600">Delayed: Groww hasn't answered for {q.age_sec ?? "?"}s. Showing the last good price.</p>}
+      {q && q.state === "unavailable" && <p className="mt-1 text-xs font-semibold text-red-600">Disconnected: no NIFTY price from Groww yet.</p>}
       {q?.error && <p className="mt-1 text-xs text-orange-600">{q.error}</p>}
     </Card>
   );

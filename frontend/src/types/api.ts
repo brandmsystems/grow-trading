@@ -17,9 +17,13 @@ export interface Quote {
   open: number | null; high: number | null; low: number | null; prev_close: number | null;
   state: string;            // live | delayed | closed | unavailable
   as_of: string | null; age_sec: number | null; error: string | null;
+  from_high?: number; from_low?: number; range_pct?: number | null;   // price minus day high / low; position in the day's range
 }
 
-export interface Bar { t: string; o: number; h: number; l: number; c: number; e9?: number; e21?: number; c_ts?: string }
+export interface Bar {
+  t: string; o: number; h: number; l: number; c: number; e9?: number; e21?: number; c_ts?: string;
+  vwap?: number | null; v?: number | null; rsi?: number | null; macd?: number | null; macd_signal?: number | null; macd_hist?: number | null;
+}
 
 export interface Charges {
   brokerage?: number; stt?: number; exchange?: number; sebi?: number; stamp?: number; gst?: number; total: number;
@@ -65,6 +69,8 @@ export interface Feed {
   ema?: { fast: number; slow: number; close: number; bar_close: string; gap: number };
   crosses?: Cross[];
   signal: Signal;
+  markers?: { ts: string; kind: string; action: "BUY CE" | "BUY PE" | "EXIT" | "HOLD" }[];
+  explain?: Explanation; plan?: TradingPlan | null; patterns?: CandlePattern[];
   error?: string; kind?: string;
 }
 
@@ -80,6 +86,9 @@ export interface Position {
   trading_symbol: string; side: string; direction: string; qty: number; strike: number; opt_type: string;
   expiry: string; entry_price: number; entry_ts: string; ltp: number | null; mtm: number | null;
   exit_failures: number; score: number | null; stop_ref: number | null; target_ref: number | null;
+  // paper risk (paper positions only)
+  stop_premium?: number; target_premium?: number | null; max_loss?: number; max_loss_pct?: number | null;
+  risk_amount?: number; risk_reward?: number | null; nifty_stop?: number | null; nifty_target?: number | null; stop_method?: string;
 }
 
 export interface PendingOrder {
@@ -97,7 +106,7 @@ export interface EngineConfig {
   order_confirmation: "manual" | "auto";
   // paper trading risk management (ignored by live and replay)
   risk_pct: number; daily_risk_pct: number; max_open_positions: number; max_lots: number; min_balance: number;
-  stop_mode: "atr" | "pct"; stop_atr: number; stop_pct: number;
+  stop_mode: "atr" | "pct" | "points"; stop_atr: number; stop_pct: number; stop_points: number;
 }
 
 export type EngineState = "stopped" | "waiting" | "running" | "halted" | "error";
@@ -144,7 +153,7 @@ export interface RiskCalc {
 
 export interface PaperRiskSettings {
   risk_pct: number; daily_risk_pct: number; max_daily_loss: number; max_trades_per_day: number; max_open_positions: number;
-  max_lots: number; min_balance: number; stop_mode: "atr" | "pct"; stop_atr: number; stop_pct: number;
+  max_lots: number; min_balance: number; stop_mode: "atr" | "pct" | "points"; stop_atr: number; stop_pct: number; stop_points: number;
 }
 
 export interface PaperAccount {
@@ -291,3 +300,29 @@ export interface OptionsCoverage {
   last_run: DownloadRun | null; last_success: string | null; job: Job | null;
 }
 export interface LotSize { cycle: "weekly" | "monthly"; first_expiry: string; lot_size: number; source: string }
+
+// ------------------------------------------------------------------ live insight (feed)
+export interface ExplainCheck {
+  key: string; label: string; status: "supports" | "against" | "neutral" | "unavailable"; text: string;
+  values: Record<string, number | string | null>;
+}
+export interface Explanation {
+  action?: string; bar_close?: string; direction?: string; summary: string; why?: string; caution?: string | null;
+  bullets?: string[]; checks: ExplainCheck[]; note?: string; atr?: number | null;
+  confidence?: { score: number | null; band?: string; hit_rate?: number | null; n?: number | null; text: string } | null;
+}
+export interface PlanLevel { name: string; price: number; kind: "support" | "resistance" | "pivot"; source: string }
+export interface TradingPlan {
+  day: string; computed_at: string; bar_close: string | null; created_at: string; updated_at: string;
+  prev_close: number | null; prev_close_candles: number | null; open: number | null; high: number | null; low: number | null;
+  trend: string; ema_direction: string | null; vwap_position: string | null; rsi: number | null; volatility: string | null;
+  bullish_level: number | null; bearish_level: number | null; opening_range: { high: number; low: number } | null;
+  levels: PlanLevel[]; preferred: "bullish" | "bearish" | "none"; votes: { bull: number; bear: number };
+  scenarios: { key: string; title: string; active: boolean; conditions: string[] }[];
+  entry_rule: string; note: string; changes: { ts: string; reason: string; preferred: string }[];
+}
+export interface CandlePattern {
+  name: string; bias: "bullish" | "bearish" | "neutral"; why: string; status: string; ts: string; close_ts: string;
+  o: number; h: number; l: number; c: number; confirmation: Record<string, string | number>; effect: string;
+}
+export interface StopChange { ts: string; old_stop: number | null; new_stop: number; old_max_loss: number | null; new_max_loss: number; source: string; note: string | null }

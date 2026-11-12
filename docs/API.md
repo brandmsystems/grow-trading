@@ -48,7 +48,7 @@
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/live/status?mode=&tf=&strategy=` | Engine state, position, P&L, config, market status, recent alerts, NIFTY/EMA snapshot |
-| GET | `/api/live/dashboard?tf=&entry_start=&cutoff=&exec_mode=&roll=&capital=&risk_pct=&mode=` | All of the above plus the live feed: quote, chart bars, signal, verified option contract and premium, stop/target, sizing |
+| GET | `/api/live/dashboard?tf=&entry_start=&cutoff=&exec_mode=&roll=&capital=&risk_pct=&mode=` | All of the above plus the live feed. `tf` 1, 5, 15 or 30. Feed contents:<br>• quote, now with `from_high`, `from_low`, `range_pct`<br>• chart bars with EMA 9/21, `vwap`, `v`, `rsi`, `macd`, `macd_signal`, `macd_hist`<br>• `markers` (BUY CE / BUY PE / EXIT / HOLD)<br>• signal, with `explain` (checks with actual values, confidence, why, caution)<br>• `plan` (today's plan, levels, scenarios, change history)<br>• `patterns` (candle patterns on closed bars, with status and effect)<br>• verified option contract and premium, stop/target, sizing |
 | POST | `/api/live/start` | Body `{"config": {...}, "confirm": "LIVE", "replay_day", "replay_speed"}`. Live mode requires `confirm` and respects `LIVE_MAX_LOTS` |
 | POST | `/api/live/confirm` | Body `{"id"}`: place the live entry order waiting for confirmation (409 if it expired or the engine can't enter) |
 | POST | `/api/live/reject` | Body `{"id"}`: skip it; no order is placed |
@@ -71,6 +71,8 @@ The status payload includes `pending_order` (id, side, contract, qty, LTP, signa
 |---|---|---|
 | GET | `/api/paper/account` | Virtual account (balance, available, starting capital) and today's risk monitor: starting daily capital, P&L, daily limit, remaining risk, consecutive losses, max drawdown, open-position risk, risk used %; presets; current and default risk settings |
 | POST | `/api/paper/account` | Body `{"capital", "confirm": "RESET"}`: start a new virtual account (409 while a paper position is open). Old trades keep their account |
+| POST | `/api/paper/position/stop` | Body `{"stop"}`: change the open paper position's stop-loss. 400 with the reason if it is on the wrong side of the current premium, or would exceed the trade's risk amount or today's remaining loss limit; 409 when no paper engine runs |
+| GET | `/api/paper/stop-changes?trade_id=` | That trade's stop-loss history |
 | POST | `/api/paper/risk-calc` | Body `capital`, `risk_pct`, `entry`, `stop` or `stop_pct`, `lot_size`, `max_lots`, optional `side`, `available`, `min_balance`, `target`: the same calculation the paper engine runs (decision, reason and every figure) |
 
 Engine config adds paper-only fields: `risk_pct` (1), `daily_risk_pct` (3), `max_open_positions` (1), `max_lots` (10), `min_balance` (0), `stop_mode` (`atr`/`pct`), `stop_atr` (1), `stop_pct` (30). `/api/live/trades` rows include `risk`, `stop_premium`, `target_premium`, `paper_account_id`.

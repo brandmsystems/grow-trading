@@ -97,3 +97,49 @@ Paper trading only. Live and replay keep fixed lots and are unchanged; nothing h
 **Daily limit:** the smaller of `max_daily_loss` (₹) and `daily_risk_pct` of the day's starting capital. Realised + open P&L reaching it squares off and halts new entries until the next session.
 
 **Selling (ATM sell):** option-selling margin isn't modelled, so sells are sized by the risk budget and max lots only.
+
+## Live dashboard insight (12 Nov 2026)
+Everything below reads the strategy's own closed bars (`strategies.prepare` via `signals.signal_bars`). **None of it changes a signal:** the 9/21 strategy still enters on every crossover inside the window. A crossover with weak confirmation stays BUY CE / BUY PE, with a caution. Turning it into HOLD would change the trading rules.
+
+**Explanation (`strategy/insight.explain`):** for the signal bar (or the latest closed bar on HOLD), with actual values:
+
+| Check | Rule (same conventions as the strategies and signal engine) |
+|---|---|
+| EMA 9 / EMA 21 | the crossover, the values and the bar time |
+| VWAP | NIFTY futures close vs the futures session VWAP |
+| RSI(14) | above 50 bullish, below 50 bearish, 45–55 neutral |
+| MACD(12,26,9) | histogram sign |
+| Volume | futures bar volume vs the 20-bar average: ≥ 1.2× strong, < 0.8× weak |
+| Trend | daily regime from previous days |
+
+- **Confidence:** the signal engine's model score (`signals.Scorer`, from the latest Signals analysis for that timeframe), with its band's out-of-sample hit rate. It's a model score, not a probability.
+- **"Why X and not HOLD":** the crossover was inside the entry window.
+- **On HOLD:** the exact reason, plus what a new entry needs (the EMA gap now).
+- **Caution:** shown when 2 or more confirmations disagree.
+
+**Today's plan (`insight.trading_plan`):**
+- **From Groww's quote:** previous close, open, high, low.
+- **Calculated from candles (labelled as such; the exchange publishes no support/resistance):** classic pivots (P, R1/R2, S1/S2) from the previous session, previous day high/low, and today's 09:15–09:30 opening range.
+- **Bullish / bearish level:** the opening range high / low once formed, otherwise the previous day high / low.
+- **Preferred direction:** bullish if at least 3 of {EMA 9 > 21, futures above VWAP, price above pivot, daily regime bullish} agree and at most 1 disagrees. Bearish is the mirror; otherwise none.
+- **Scenarios:** bullish (BUY CE), bearish (BUY PE) and sideways (HOLD), each with conditions built from these levels.
+- **Updates:** the plan is judged on closed bars. Each change (direction or levels) is stored in `trading_plans` with its reason.
+
+**Candle patterns (`strategy/patterns.py`):**
+- **Patterns:** doji, hammer, shooting star, bullish/bearish engulfing, morning/evening star, strong bullish/bearish candle, and breakout/breakdown (close beyond the 20-bar high/low). Thresholds are in the module docstring.
+- **Closed bars only:** a pattern is fixed at the bar that completes it.
+- **Status:** "confirmed" when the next closed bar closes beyond the pattern bar in its direction, "awaiting confirmation" while the pattern bar is the latest closed bar, "neutral" for doji. Patterns never repaint (tested).
+- **Effect:** each pattern states whether it agrees or conflicts with the current call; it never changes the call.
+
+**Chart data:**
+- **Per bar:** EMA 9/21, VWAP (futures VWAP shifted by the futures–spot basis), futures volume, RSI and MACD line/signal/histogram.
+- **Markers:** BUY CE / BUY PE / EXIT / HOLD from the strategy's events (HOLD = a crossover outside the window).
+- **Timeframes:** 1, 5, 15 and 30 minutes on the chart. The engine still trades 5, 15 or 30.
+
+## Paper stop-loss management (12 Nov 2026)
+- **Methods:** ATR × delta (default), % of premium, or fixed premium points (`stop_points`).
+- **Calculated before every entry:** the entry premium, stop, target, risk/reward and maximum loss (₹ and % of capital) are stored with the trade. The first stop is logged in `paper_stop_changes` (`source=entry`).
+- **Editing the stop on an open paper position (`Engine.set_paper_stop`, `POST /api/paper/position/stop`):** the stop must sit on the safe side of the current premium. The new maximum loss (with slippage and charges) is recalculated, and a looser stop is refused if it exceeds the trade's risk amount or what's left of today's loss limit. Each change is logged with the time, old and new stop, and old and new maximum loss.
+- **Exits:** automatic at the stop, on a fresh premium only (older than 15 s is never acted on; a warning is logged). One exit per position; a failed exit goes through the existing retry path. Net P&L includes slippage and charges.
+- **Chart:** the stop and target are drawn as NIFTY levels converted with the option's delta at entry (approximate).
+- **Scope:** paper only; live and replay are unchanged.

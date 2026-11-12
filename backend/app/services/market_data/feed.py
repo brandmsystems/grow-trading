@@ -37,6 +37,7 @@ from app.services.options.sizing import size_position
 from app.services.trading import charges as costs
 from app.services.strategy import indicators as ind
 from app.services.strategy import rules as st
+from app.services.strategy import insight, patterns, signals
 from app.services.strategy.signals import STOP_ATR, TARGET_ATR
 
 log = logging.getLogger("live.feed")
@@ -89,23 +90,8 @@ def signal_state(bars: pd.DataFrame, day: date, now: datetime, entry_start: str,
     if today.empty:
         return {"action": "HOLD", "direction": None, "since": None, "nifty": None, "alert": False,
                 "reason": "No completed bars today yet."}
-    start_t, cut_t = _hm(entry_start), _hm(cutoff)
-    legs, _ = st.generate_legs(done, {day}, start_t, cut_t)
-    events = []                          # (ts, order, kind, payload); exits sort before entries
-    used = set()
-    for leg in legs:
-        events.append((pd.Timestamp(leg.entry_ts), 1, "entry", leg))
-        used.add(pd.Timestamp(leg.entry_ts))
-        if leg.exit_reason == "opposite_cross":
-            events.append((pd.Timestamp(leg.exit_ts), 0, "exit", leg))
-            used.add(pd.Timestamp(leg.exit_ts))
-        elif now.time() >= st.SQUARE_OFF:
-            events.append((pd.Timestamp(leg.exit_ts), 0, "square_off", leg))
-    crosses = st.find_crosses(done)
-    for _, c in crosses[crosses["day"] == day].iterrows():
-        ts = pd.Timestamp(c["close_ts"])
-        if ts not in used:
-            events.append((ts, 0, "ignored", c))
+    start_t = _hm(entry_start)
+    events = signal_events(bars, day, now, entry_start, cutoff)
     if not events:
         return {"action": "HOLD", "direction": None, "since": None, "nifty": None, "alert": False,
                 "reason": f"No crossover in the {entry_start}–{cutoff} entry window yet today."}
@@ -134,6 +120,41 @@ def signal_state(bars: pd.DataFrame, day: date, now: datetime, entry_start: str,
            "at or after 15:00" if t >= st.SQUARE_OFF else f"after the {cutoff} entry cutoff")
     return {"action": "HOLD", "direction": word, "since": ts.isoformat(), "nifty": round(float(obj["close"]), 2),
             "alert": True, "reason": f"{word} crossover at {hhmm} was {why}, so the strategy does not trade it."}
+
+
+def signal_events(bars: pd.DataFrame, day: date, now: datetime, entry_start: str, cutoff: str) -> list[tuple]:
+    """Today's strategy events from closed bars: (ts, order, kind, payload); exits sort before entries.
+    kind: entry | exit (opposite cross) | square_off | ignored (a cross outside the entry window)."""
+    done = bars[bars["close_ts"] <= pd.Timestamp(now)]
+    legs, _ = st.generate_legs(done, {day}, _hm(entry_start), _hm(cutoff))
+    events, used = [], set()
+    for leg in legs:
+        events.append((pd.Timestamp(leg.entry_ts), 1, "entry", leg))
+        used.add(pd.Timestamp(leg.entry_ts))
+        if leg.exit_reason == "opposite_cross":
+            events.append((pd.Timestamp(leg.exit_ts), 0, "exit", leg))
+            used.add(pd.Timestamp(leg.exit_ts))
+        elif now.time() >= st.SQUARE_OFF:
+            events.append((pd.Timestamp(leg.exit_ts), 0, "square_off", leg))
+    crosses = st.find_crosses(done)
+    for _, c in crosses[crosses["day"] == day].iterrows():
+        ts = pd.Timestamp(c["close_ts"])
+        if ts not in used:
+            events.append((ts, 0, "ignored", c))
+    return events
+
+
+def event_markers(events: list[tuple]) -> list[dict]:
+    """Chart markers for the strategy's calls: BUY CE / BUY PE at entries, EXIT, HOLD for ignored crosses."""
+    out = []
+    for ts, _, kind, obj in sorted(events, key=lambda e: (e[0], e[1])):
+        if kind == "entry":
+            out.append({"ts": ts.isoformat(), "kind": kind, "action": "BUY CE" if obj.direction > 0 else "BUY PE"})
+        elif kind in ("exit", "square_off"):
+            out.append({"ts": ts.isoformat(), "kind": kind, "action": "EXIT"})
+        else:
+            out.append({"ts": ts.isoformat(), "kind": kind, "action": "HOLD"})
+    return out
 
 
 def data_checks(today1m: pd.DataFrame, quote: dict, now: datetime) -> list[str]:
@@ -170,6 +191,9 @@ class _Entry:
 
 class Feed:
     def __init__(self, market=None, api=None, clock=None):
+        # The database (daily history, signal model, plan history) is used only by the real feed;
+        # a feed built around an injected market (tests) never reads or writes it.
+        self.use_db = market is None
         if market is None:
             from app.services.market_data.live import GrowwMarket
             market = GrowwMarket()
@@ -221,6 +245,10 @@ class Feed:
             state = "live"
         out.update({"state": state, "as_of": e.good_at.isoformat() if e.good_at else None,
                     "age_sec": None if age is None else round(age), "error": e.error})
+        p, hi, lo = out.get("price"), out.get("high"), out.get("low")
+        if p and hi and lo:
+            out.update({"from_high": round(p - hi, 2), "from_low": round(p - lo, 2),
+                        "range_pct": round((p - lo) / (hi - lo) * 100, 1) if hi > lo else None})
         return out
 
     def bars(self, day: date, tf: int) -> tuple[pd.DataFrame | None, pd.DataFrame | None, str | None]:
@@ -234,13 +262,60 @@ class Feed:
         e = self._get(f"spot|{day}", SPOT_TTL, lambda: self.market.spot_1m(day))
         if e.value is None:
             return None, None, e.error
-        key = (day, e.good_at, tf)
+        fut = self.futures(day)
+        key = (day, e.good_at, tf, id(fut))
         if self._derived.get("key") != key:
             spot = e.value
-            b = st.add_emas(st.resample(spot, tf))
-            b["atr"] = ind.atr(b)
+            # The strategy's own bars (strategies.prepare): EMA 9/21 identical to rules.add_emas,
+            # plus RSI, MACD, ATR and futures VWAP/volume for the explanation, plan and chart.
+            b = signals.signal_bars(spot, fut, tf, "ema_9_21")
+            b["ema9"], b["ema21"] = b["fast"], b["slow"]
+            line, sig_, _ = ind.macd(b["close"])
+            b["macd"], b["macd_signal"] = line, sig_
             self._derived = {"key": key, "bars": b, "today": spot[spot["ts"].dt.date == day]}
         return self._derived["bars"], self._derived["today"], e.error
+
+    def futures(self, day: date) -> pd.DataFrame | None:
+        """Near-month futures 1m candles (VWAP and volume source). None if unavailable."""
+        if not hasattr(self.market, "futures_1m"):
+            return None
+        e = self._get(f"fut|{day}", SPOT_TTL, lambda: self.market.futures_1m(day))
+        return e.value
+
+    def context(self, day: date, tf: int, entry_start: str, cutoff: str) -> dict:
+        """Daily regime, previous session and 10-day average range (once a day) and the signal model."""
+        def daily():
+            from app.database import db
+            try:
+                if not self.use_db:
+                    raise LookupError("no database for an injected market")
+                hist = db.load_candles(getattr(self.market, "spot_symbol", "NSE-NIFTY"),
+                                       datetime.combine(day - timedelta(days=420), time(0)), datetime.combine(day, time(0)))
+            except Exception:
+                hist = pd.DataFrame()
+            if hist.empty:   # no database: the market's own warm-up history (about 40 days)
+                s = self.market.spot_1m(day)
+                hist = s[s["ts"].dt.date < day]
+            reg = signals.daily_regime(hist) if not hist.empty else None
+            dd = hist.groupby(hist["ts"].dt.date).agg(high=("high", "max"), low=("low", "min"), close=("close", "last")) if not hist.empty else None
+            prev = dd.iloc[-1].to_dict() if dd is not None and len(dd) else None
+            rng = float((dd["high"] - dd["low"]).tail(10).mean()) if dd is not None and len(dd) >= 5 else None
+            row = reg.loc[day] if reg is not None and day in reg.index else None
+            if reg is not None and row is None:   # today's row: regime from previous days only
+                full = signals.daily_regime(pd.concat([hist, pd.DataFrame({"ts": [pd.Timestamp(datetime.combine(day, time(9, 15)))],
+                                                                           "open": [prev["close"]], "high": [prev["close"]],
+                                                                           "low": [prev["close"]], "close": [prev["close"]]})]))
+                row = full.loc[day] if day in full.index else None
+            return {"regime": row, "prev": prev, "avg_range": rng}
+        d = self._get(f"daily|{day}", 3600, daily)
+
+        def model():
+            if not self.use_db:
+                return None
+            a = signals.latest("ema_9_21", tf, entry_start, cutoff)
+            return signals.Scorer(a) if a else None
+        m = self._get(f"model|{tf}|{entry_start}|{cutoff}", 600, model)
+        return {**(d.value or {"regime": None, "prev": None, "avg_range": None}), "scorer": m.value}
 
     def margin(self) -> tuple[float | None, str | None]:
         def fetch():
@@ -352,9 +427,7 @@ class Feed:
             days = sorted(done["day"].unique())
             chart_day = day if day in days else (days[-1] if days else None)
             show = done[done["day"] == chart_day] if chart_day else done.iloc[0:0]
-            out["chart"] = {"day": chart_day.isoformat() if chart_day else None, "bars": [
-                {"t": pd.Timestamp(r.start).isoformat(), "o": r.open, "h": r.high, "l": r.low, "c": r.close,
-                 "e9": round(r.ema9, 2), "e21": round(r.ema21, 2)} for r in show.itertuples(index=False)],
+            out["chart"] = {"day": chart_day.isoformat() if chart_day else None, "bars": [_bar_json(r) for r in show.itertuples(index=False)],
                 "forming": self._forming(today1m, tf, now, q)
                 if out["market"]["state"] == "open" and not out["warnings"] else None}
             last = show.iloc[-1] if not show.empty else None
@@ -367,6 +440,8 @@ class Feed:
             out["crosses"] = [{"ts": pd.Timestamp(c["close_ts"]).isoformat(), "direction": int(c["direction"]),
                                "close": round(float(c["close"]), 2)} for _, c in crosses.iterrows()]
             sig = signal_state(bars, day, now, entry_start, cutoff)
+            out["markers"] = event_markers(signal_events(bars, chart_day, now, entry_start, cutoff)) if chart_day else []
+            ctx = self.context(day, tf, entry_start, cutoff)
             if out["market"]["state"] != "open" and sig["action"] != "HOLD":
                 sig = {**sig, "action": "HOLD", "alert": False, "reason": "Market closed: no new entries."}
             if sig["action"] != "HOLD":
@@ -383,9 +458,63 @@ class Feed:
                 else:
                     sig["rec"] = self.recommend(sig, q["price"], bars, day, now, exec_mode, roll, capital, risk_pct)
             out["signal"] = sig
+            # Explanation, plan and patterns: closed bars only; none of them changes the signal.
+            sday = chart_day or day
+            try:
+                out["explain"] = insight.explain(sig, done, sday, tf, ctx["regime"], ctx["scorer"], entry_start, cutoff)
+            except Exception as exc:
+                log.warning("explanation failed: %s", exc)
+                out["explain"] = {"summary": f"Explanation unavailable: {exc}", "checks": []}
+            try:
+                plan = insight.trading_plan(sday, now, q, today1m, ctx["prev"], done, ctx["regime"], ctx["avg_range"],
+                                            tf, entry_start, cutoff)
+                out["plan"] = self._plan_history(sday, tf, plan)
+            except Exception as exc:
+                log.warning("plan failed: %s", exc)
+                out["plan"] = None
+            pats = patterns.detect(done[done["day"] == sday].tail(80))
+            out["patterns"] = [{**x, "effect": patterns.effect(x, sig["action"])} for x in pats][-12:]
         if sig.get("alert") and sig.get("since"):
             record_signal(day, tf, entry_start, cutoff, sig, now)
         return out
+
+    def _plan_history(self, day: date, tf: int, plan: dict) -> dict:
+        """Keep the plan's changes for the day (memory + trading_plans table) with the reason for each."""
+        key = (day, tf)
+        h = getattr(self, "_plans", {}).get(key)
+        if h is None:
+            h = {"last": None, "changes": []}
+            try:
+                if not self.use_db:
+                    raise LookupError("no database")
+                from app.database import db
+                from sqlalchemy import text
+                with db.engine().connect() as c:
+                    rows = c.execute(text("SELECT ts, reason, plan FROM trading_plans WHERE day=:d AND timeframe=:tf ORDER BY id"),
+                                     {"d": day, "tf": tf}).fetchall()
+                h["changes"] = [{"ts": r[0].isoformat(), "reason": r[1], "preferred": r[2].get("preferred")} for r in rows]
+                h["last"] = rows[-1][2] if rows else None
+            except Exception:
+                pass
+            self._plans = {**getattr(self, "_plans", {}), key: h}
+        reason = insight.plan_change_reason(h["last"], plan)
+        if reason:
+            h["last"] = plan
+            h["changes"].append({"ts": plan["computed_at"], "reason": reason, "preferred": plan["preferred"]})
+        if reason and self.use_db:
+            try:
+                import json
+                from app.database import db
+                from sqlalchemy import text
+                with db.engine().begin() as c:
+                    c.execute(text("INSERT INTO trading_plans (day, timeframe, ts, preferred, reason, plan) "
+                                   "VALUES (:d, :tf, :ts, :p, :r, CAST(:j AS JSONB))"),
+                              {"d": day, "tf": tf, "ts": plan["computed_at"], "p": plan["preferred"], "r": reason,
+                               "j": json.dumps(plan, default=str)})
+            except Exception as exc:
+                log.warning("plan history not stored: %s", exc)
+        return {**plan, "created_at": h["changes"][0]["ts"] if h["changes"] else plan["computed_at"],
+                "updated_at": h["changes"][-1]["ts"] if h["changes"] else plan["computed_at"], "changes": h["changes"][-10:]}
 
     @staticmethod
     def _forming(today1m: pd.DataFrame, tf: int, now: datetime, q: dict) -> dict | None:
@@ -400,6 +529,16 @@ class Feed:
             return {"t": start.isoformat(), "o": p, "h": p, "l": p, "c": p}
         return {"t": start.isoformat(), "o": float(part["open"].iloc[0]), "h": max(float(part["high"].max()), p),
                 "l": min(float(part["low"].min()), p), "c": p}
+
+
+def _bar_json(r) -> dict:
+    """One chart bar: OHLC, EMA 9/21, basis-adjusted futures VWAP, futures volume, RSI and MACD."""
+    n = lambda x, d=2: None if x is None or pd.isna(x) else round(float(x), d)
+    vwap = (r.fut_vwap - (r.fut_close - r.close)) if pd.notna(getattr(r, "fut_vwap", None)) and pd.notna(getattr(r, "fut_close", None)) else None
+    return {"t": pd.Timestamp(r.start).isoformat(), "o": r.open, "h": r.high, "l": r.low, "c": r.close,
+            "e9": round(r.ema9, 2), "e21": round(r.ema21, 2), "vwap": n(vwap), "v": n(getattr(r, "fut_volume", None), 0),
+            "rsi": n(getattr(r, "rsi", None), 1), "macd": n(getattr(r, "macd", None)), "macd_signal": n(getattr(r, "macd_signal", None)),
+            "macd_hist": n(getattr(r, "macd_hist", None))}
 
 
 # ====================================================================== alerts

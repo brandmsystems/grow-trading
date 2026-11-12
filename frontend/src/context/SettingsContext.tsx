@@ -16,7 +16,7 @@ export const DEFAULT_ENGINE: EngineConfig = {
   trade_mode: "paper", exec_mode: "ATM_BUY", timeframe: 5, entry_start: "09:30", cutoff: "14:30",
   lots: 1, roll_on_expiry_day: true, max_daily_loss: 5000, max_trades_per_day: 6,
   signal_mode: "cross", strategy: "ema_9_21", min_score: 50, order_confirmation: "manual",
-  risk_pct: 1, daily_risk_pct: 3, max_open_positions: 1, max_lots: 10, min_balance: 0, stop_mode: "atr", stop_atr: 1, stop_pct: 30,
+  risk_pct: 1, daily_risk_pct: 3, max_open_positions: 1, max_lots: 10, min_balance: 0, stop_mode: "atr", stop_atr: 1, stop_pct: 30, stop_points: 20,
 };
 const DEFAULTS: Settings = { theme: "dark", sound: true, timeframe: 5, capital: null, riskPct: 1, engine: DEFAULT_ENGINE, sidebarCollapsed: false };
 const KEY = "gt-settings";

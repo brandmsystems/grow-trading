@@ -37,10 +37,10 @@ def paper_account_state():
             **st, "engine_running": bool(eng), "presets": sizing.PRESETS,
             "settings": {k: getattr(cfg, k) for k in ("risk_pct", "daily_risk_pct", "max_daily_loss", "max_trades_per_day",
                                                       "max_open_positions", "max_lots", "min_balance", "stop_mode",
-                                                      "stop_atr", "stop_pct")},
+                                                      "stop_atr", "stop_pct", "stop_points")},
             "defaults": {k: getattr(defaults, k) for k in ("risk_pct", "daily_risk_pct", "max_daily_loss", "max_trades_per_day",
                                                            "max_open_positions", "max_lots", "min_balance", "stop_mode",
-                                                           "stop_atr", "stop_pct")},
+                                                           "stop_atr", "stop_pct", "stop_points")},
         }})
     except Exception as exc:
         return api_error(exc, 500)
@@ -58,6 +58,42 @@ def paper_account_reset():
         return jsonify({"ok": True, "data": paper_account.reset(float(body.get("capital") or 0))})
     except (TypeError, ValueError) as exc:
         return api_error(exc, 400)
+    except Exception as exc:
+        return api_error(exc, 500)
+
+
+@bp.post("/api/paper/position/stop")
+def paper_position_stop():
+    """Change the open paper position's stop-loss (refused if it would exceed the risk limits)."""
+    body = request.get_json(force=True) or {}
+    eng = _paper_engine()
+    if not eng:
+        return jsonify({"ok": False, "error": "The paper engine isn't running."}), 409
+    try:
+        return jsonify({"ok": True, "data": eng.set_paper_stop(float(body["stop"]))})
+    except (KeyError, TypeError) :
+        return jsonify({"ok": False, "error": "Enter the new stop-loss premium."}), 400
+    except ValueError as exc:
+        return api_error(exc, 400)
+    except Exception as exc:
+        return api_error(exc, 500)
+
+
+@bp.get("/api/paper/stop-changes")
+def paper_stop_changes():
+    from sqlalchemy import text
+    from app.database import db
+    try:
+        tid = int(request.args["trade_id"])
+        with db.engine().connect() as c:
+            rows = [dict(r) for r in c.execute(text(
+                "SELECT ts, old_stop, new_stop, old_max_loss, new_max_loss, source, note FROM paper_stop_changes "
+                "WHERE trade_id=:t ORDER BY id"), {"t": tid}).mappings()]
+        for r in rows:
+            r["ts"] = r["ts"].isoformat()
+        return jsonify({"ok": True, "data": rows})
+    except (KeyError, ValueError):
+        return jsonify({"ok": False, "error": "trade_id is required"}), 400
     except Exception as exc:
         return api_error(exc, 500)
 

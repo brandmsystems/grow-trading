@@ -15,6 +15,9 @@ interface Props {
   markers?: ChartMarker[];
   levels?: PriceLevel[];
   showEma?: boolean;
+  showVwap?: boolean;      // basis-adjusted futures VWAP (bars[].vwap)
+  showVolume?: boolean;    // futures volume histogram (bars[].v)
+  panels?: boolean;        // RSI and MACD panels under the chart, time-synced
   dark: boolean;
   height?: number;
 }
@@ -38,10 +41,14 @@ export function baseOptions(dark: boolean) {
 }
 
 /** Candles + optional EMA 9/21 lines, crossover/trade markers and price levels. Zoom, pan and crosshair built in. */
-export function CandleChart({ bars, forming, crosses = [], markers = [], levels = [], showEma = true, dark, height = 380 }: Props) {
+export function CandleChart({ bars, forming, crosses = [], markers = [], levels = [], showEma = true, showVwap = false,
+  showVolume = false, panels = false, dark, height = 380 }: Props) {
   const box = useRef<HTMLDivElement>(null);
+  const rsiBox = useRef<HTMLDivElement>(null);
+  const macdBox = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
-  const s = useRef<{ c: ISeriesApi<"Candlestick">; f: ISeriesApi<"Line">; sl: ISeriesApi<"Line"> } | null>(null);
+  const s = useRef<{ c: ISeriesApi<"Candlestick">; f: ISeriesApi<"Line">; sl: ISeriesApi<"Line">; vw: ISeriesApi<"Line">; vol: ISeriesApi<"Histogram"> } | null>(null);
+  const sub = useRef<{ rsi?: ISeriesApi<"Line">; macd?: ISeriesApi<"Line">; sig?: ISeriesApi<"Line">; hist?: ISeriesApi<"Histogram">; charts: IChartApi[] }>({ charts: [] });
   const lines = useRef<IPriceLine[]>([]);
   const fitted = useRef("");
 
@@ -52,11 +59,33 @@ export function CandleChart({ bars, forming, crosses = [], markers = [], levels 
     const c = ch.addCandlestickSeries({ upColor: k.up, downColor: k.down, borderUpColor: k.up, borderDownColor: k.down, wickUpColor: k.up, wickDownColor: k.down });
     const f = ch.addLineSeries({ color: k.fast, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "EMA 9" });
     const sl = ch.addLineSeries({ color: k.slow, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "EMA 21" });
+    const vw = ch.addLineSeries({ color: "#a855f7", lineWidth: 1, lineStyle: LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, title: "VWAP" });
+    const vol = ch.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+    ch.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     chart.current = ch;
-    s.current = { c, f, sl };
+    s.current = { c, f, sl, vw, vol };
     fitted.current = "";
-    return () => { ch.remove(); chart.current = null; s.current = null; lines.current = []; };
-  }, [dark]);
+    // RSI and MACD panels share the main chart's visible range.
+    const subCharts: IChartApi[] = [];
+    if (panels && rsiBox.current && macdBox.current) {
+      const opts = { ...baseOptions(dark), timeScale: { ...baseOptions(dark).timeScale, visible: false }, handleScroll: false, handleScale: false };
+      const rc = createChart(rsiBox.current, opts);
+      const rsi = rc.addLineSeries({ color: "#0ea5e9", lineWidth: 2, priceLineVisible: false, title: "RSI 14" });
+      rsi.createPriceLine({ price: 70, color: "#dc2626", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
+      rsi.createPriceLine({ price: 50, color: "#64748b", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
+      rsi.createPriceLine({ price: 30, color: "#16a34a", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
+      const mc = createChart(macdBox.current, opts);
+      const hist = mc.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+      const macd = mc.addLineSeries({ color: "#3b82f6", lineWidth: 1, priceLineVisible: false, title: "MACD" });
+      const sig = mc.addLineSeries({ color: "#f97316", lineWidth: 1, priceLineVisible: false, title: "Signal" });
+      subCharts.push(rc, mc);
+      sub.current = { rsi, macd, sig, hist, charts: subCharts };
+      ch.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r) subCharts.forEach((x) => x.timeScale().setVisibleLogicalRange(r)); });
+    } else {
+      sub.current = { charts: [] };
+    }
+    return () => { subCharts.forEach((x) => x.remove()); ch.remove(); chart.current = null; s.current = null; lines.current = []; sub.current = { charts: [] }; };
+  }, [dark, panels]);
 
   useEffect(() => {
     const sr = s.current;
@@ -66,6 +95,18 @@ export function CandleChart({ bars, forming, crosses = [], markers = [], levels 
     const ema = showEma && bars.length && bars[0].e9 != null;
     sr.f.setData(ema ? bars.map((b) => ({ time: chartTime(b.t) as UTCTimestamp, value: b.e9! })) : []);
     sr.sl.setData(ema ? bars.map((b) => ({ time: chartTime(b.t) as UTCTimestamp, value: b.e21! })) : []);
+    const T = (b: Bar) => chartTime(b.t) as UTCTimestamp;
+    sr.vw.setData(showVwap ? bars.filter((b) => b.vwap != null).map((b) => ({ time: T(b), value: b.vwap! })) : []);
+    sr.vol.setData(showVolume ? bars.filter((b) => b.v != null).map((b) => ({ time: T(b), value: b.v!, color: b.c >= b.o ? "rgba(22,163,74,0.35)" : "rgba(220,38,38,0.35)" })) : []);
+    const sb = sub.current;
+    if (sb.rsi) {
+      sb.rsi.setData(bars.filter((b) => b.rsi != null).map((b) => ({ time: T(b), value: b.rsi! })));
+      sb.macd!.setData(bars.filter((b) => b.macd != null).map((b) => ({ time: T(b), value: b.macd! })));
+      sb.sig!.setData(bars.filter((b) => b.macd_signal != null).map((b) => ({ time: T(b), value: b.macd_signal! })));
+      sb.hist!.setData(bars.filter((b) => b.macd_hist != null).map((b) => ({ time: T(b), value: b.macd_hist!, color: b.macd_hist! >= 0 ? "rgba(22,163,74,0.6)" : "rgba(220,38,38,0.6)" })));
+      const r = chart.current?.timeScale().getVisibleLogicalRange();
+      if (r) sb.charts.forEach((x) => x.timeScale().setVisibleLogicalRange(r));
+    }
 
     // A cross is reported at its bar's close: mark the bar that produced it.
     const starts = all.map((b) => chartTime(b.t));
@@ -79,7 +120,7 @@ export function CandleChart({ bars, forming, crosses = [], markers = [], levels 
     for (const x of crosses) {
       const t = barFor(x.ts, true);
       if (t != null) m.push({ time: t as UTCTimestamp, position: x.direction > 0 ? "belowBar" : "aboveBar", color: x.direction > 0 ? "#16a34a" : "#dc2626",
-        shape: x.direction > 0 ? "arrowUp" : "arrowDown", text: x.direction > 0 ? "Buy CE" : "Buy PE" });
+        shape: x.direction > 0 ? "arrowUp" : "arrowDown", text: x.direction > 0 ? "9/21 ↑" : "9/21 ↓" });
     }
     for (const x of markers) {
       const t = barFor(x.ts);
@@ -93,7 +134,19 @@ export function CandleChart({ bars, forming, crosses = [], markers = [], levels 
 
     const key = `${bars[0]?.t ?? ""}|${bars.length > 0 ? bars[bars.length - 1].t.slice(0, 10) : ""}`;
     if (bars.length && fitted.current !== key) { chart.current?.timeScale().fitContent(); fitted.current = key; }
-  }, [bars, forming, crosses, markers, levels, showEma]);
+  }, [bars, forming, crosses, markers, levels, showEma, showVwap, showVolume, panels]);
 
-  return <div ref={box} style={{ height }} className="w-full touch-pan-y" aria-label="NIFTY candlestick chart" />;
+  return (
+    <div>
+      <div ref={box} style={{ height }} className="w-full touch-pan-y" aria-label="NIFTY candlestick chart" />
+      {panels && (
+        <>
+          <div className="mt-1 text-[11px] text-slate-500">RSI 14 (30 / 50 / 70)</div>
+          <div ref={rsiBox} style={{ height: 90 }} className="w-full" aria-label="RSI panel" />
+          <div className="mt-1 text-[11px] text-slate-500">MACD 12/26/9 · histogram, <span className="text-blue-500">MACD</span>, <span className="text-orange-500">signal</span></div>
+          <div ref={macdBox} style={{ height: 100 }} className="w-full" aria-label="MACD panel" />
+        </>
+      )}
+    </div>
+  );
 }

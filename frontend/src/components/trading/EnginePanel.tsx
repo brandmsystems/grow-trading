@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Play, Power, ShieldCheck, Square, XCircle } from "lucide-react";
-import type { EngineConfig } from "../../types/api";
-import { confirmOrder, getMeta, rejectOrder, squareOff, startEngine, stopEngine } from "../../services/api";
+import type { EngineConfig, Position } from "../../types/api";
+import { confirmOrder, getMeta, rejectOrder, setPaperStop, squareOff, startEngine, stopEngine } from "../../services/api";
 import { useSettings } from "../../context/SettingsContext";
 import { useLive } from "../../context/LiveContext";
 import { dmy, hm, inr, num, pnlClass, todayIST } from "../../utils/format";
@@ -9,6 +9,39 @@ import { Card, Pill, Stat } from "../common/Card";
 import { Button, Field, inputCls, Segmented } from "../common/Controls";
 import { PendingOrder } from "./PendingOrder";
 import { PRESETS } from "./RiskManagement";
+
+/** Paper position stop-loss: entry, stop, target, risk, and an editor (the backend refuses changes beyond the risk limits). */
+function PaperStop({ p, busy, onSaved }: { p: Position; busy: boolean; onSaved: () => void }) {
+  const [val, setVal] = useState("");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  async function save() {
+    const v = Number(val);
+    if (!v) { setMsg({ ok: false, text: "Enter a stop-loss premium." }); return; }
+    try {
+      const r = await setPaperStop(v);
+      setMsg({ ok: true, text: `Stop ${num(r.old_stop)} → ${num(r.new_stop)}; max loss ₹${num(r.old_max_loss, 0)} → ₹${num(r.new_max_loss, 0)}` });
+      setVal(""); onSaved();
+    } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
+  }
+  return (
+    <div className="col-span-2 space-y-2 rounded-lg bg-orange-50 p-2 text-xs dark:bg-orange-950/30">
+      <div className="grid grid-cols-3 gap-2">
+        <Stat label="Entry premium" value={`₹${num(p.entry_price)}`} />
+        <Stat label="Stop-loss" value={`₹${num(p.stop_premium)}`} className="text-loss" sub={p.nifty_stop != null ? `NIFTY ≈ ${num(p.nifty_stop, 0)}` : undefined} />
+        <Stat label="Target" value={p.target_premium != null ? `₹${num(p.target_premium)}` : "—"} className="text-gain" sub={p.risk_reward ? `R:R 1 : ${num(p.risk_reward, 2)}` : undefined} />
+        <Stat label="Max risk" value={p.max_loss != null ? `₹${num(p.max_loss, 0)}` : "—"} className="text-loss" sub={p.max_loss_pct != null ? `${num(p.max_loss_pct)}% of capital` : undefined} />
+        <Stat label="Risk budget" value={p.risk_amount != null ? `₹${num(p.risk_amount, 0)}` : "—"} />
+        <Stat label="Method" value={<span className="text-[11px] font-normal">{p.stop_method ?? "—"}</span>} />
+      </div>
+      <div className="flex gap-2">
+        <input type="number" min={0.05} step={0.05} placeholder="New stop ₹" className={`${inputCls} max-w-32`} value={val} onChange={(e) => setVal(e.target.value)} />
+        <Button onClick={save} disabled={busy}>Change stop</Button>
+      </div>
+      {msg && <p className={msg.ok ? "text-gain" : "text-red-600"}>{msg.text}</p>}
+      <p className="text-slate-500">Exits automatically when the option premium reaches the stop (fresh prices only). Changes that would exceed the trade's risk amount or today's loss limit are refused.</p>
+    </div>
+  );
+}
 
 const STATE = { stopped: ["Stopped", "neutral"], waiting: ["Waiting for market", "info"], running: ["Running", "good"], halted: ["Halted", "warn"], error: ["ERROR: check positions", "bad"] } as const;
 
@@ -54,6 +87,7 @@ export function EnginePanel() {
             <Stat label="Entry → LTP" value={`₹${num(p.entry_price)} → ₹${num(p.ltp)}`} sub={`since ${hm(p.entry_ts)}`} />
             <Stat label="Open P&L" value={inr(p.mtm, true)} className={pnlClass(p.mtm)} />
             {p.stop_ref != null && <Stat label="NIFTY stop / target" value={`${num(p.stop_ref, 0)} / ${num(p.target_ref, 0)}`} />}
+            {p.stop_premium != null && <PaperStop p={p} busy={busy} onSaved={refresh} />}
           </div>
         )}
         {data.halt_reason && <p className="rounded-lg bg-red-50 p-2 text-red-700 dark:bg-red-950/50 dark:text-red-400">{data.halt_reason}</p>}
@@ -97,10 +131,12 @@ export function EnginePanel() {
                   <Field label="Keep at least ₹"><input type="number" min={0} step={5000} className={inputCls} value={cfg.min_balance} onChange={(e) => set({ min_balance: Math.max(0, Number(e.target.value)) })} /></Field>
                   <Field label="Stop-loss">
                     <select className={inputCls} value={cfg.stop_mode} onChange={(e) => set({ stop_mode: e.target.value as EngineConfig["stop_mode"] })}>
-                      <option value="atr">ATR × delta</option><option value="pct">% of premium</option></select></Field>
+                      <option value="atr">ATR × delta</option><option value="pct">% of premium</option><option value="points">Fixed premium points</option></select></Field>
                   {cfg.stop_mode === "atr"
                     ? <Field label="ATR multiple"><input type="number" min={0.25} step={0.25} className={inputCls} value={cfg.stop_atr} onChange={(e) => set({ stop_atr: Number(e.target.value) })} /></Field>
-                    : <Field label="Stop % below premium"><input type="number" min={1} max={99} className={inputCls} value={cfg.stop_pct} onChange={(e) => set({ stop_pct: Number(e.target.value) })} /></Field>}
+                    : cfg.stop_mode === "pct"
+                    ? <Field label="Stop % below premium"><input type="number" min={1} max={99} className={inputCls} value={cfg.stop_pct} onChange={(e) => set({ stop_pct: Number(e.target.value) })} /></Field>
+                    : <Field label="Stop ₹ below premium"><input type="number" min={0.5} step={0.5} className={inputCls} value={cfg.stop_points ?? 20} onChange={(e) => set({ stop_points: Number(e.target.value) })} /></Field>}
                 </div>
                 <p className="text-[11px] text-slate-500">Paper trades exit when the option premium reaches the stop-loss. The engine holds one position at a time.</p>
               </div>

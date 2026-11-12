@@ -46,6 +46,7 @@ from app.services.trading.brokers import OrderUnknown
 log = logging.getLogger("live.engine")
 
 MARKET_OPEN, MARKET_CLOSE = time(9, 15), time(15, 30)
+STALE_PRICE_SEC = 15      # an option price older than this never triggers a paper stop-loss
 
 
 @dataclass
@@ -74,8 +75,9 @@ class EngineConfig:
     max_lots: int = 10                 # cap per trade
     min_balance: float = 0.0           # ₹ that must stay available after an entry
     stop_mode: str = "atr"             # atr: premium - delta x stop_atr x NIFTY ATR | pct: premium x (1 - stop_pct %)
-    stop_atr: float = 1.0
+    stop_atr: float = 1.0              #   | points: premium - stop_points (fixed premium distance)
     stop_pct: float = 30.0
+    stop_points: float = 20.0
 
     def validate(self) -> "EngineConfig":
         if self.trade_mode not in ("paper", "live", "replay"):
@@ -114,11 +116,11 @@ class EngineConfig:
         self.min_balance = float(self.min_balance)
         if self.min_balance < 0:
             raise ValueError("minimum balance can't be negative")
-        if self.stop_mode not in ("atr", "pct"):
-            raise ValueError("stop_mode must be atr or pct")
-        self.stop_atr, self.stop_pct = float(self.stop_atr), float(self.stop_pct)
-        if self.stop_atr <= 0 or not 0 < self.stop_pct < 100:
-            raise ValueError("stop ATR multiple must be positive and stop % between 0 and 100")
+        if self.stop_mode not in ("atr", "pct", "points"):
+            raise ValueError("stop_mode must be atr, pct or points")
+        self.stop_atr, self.stop_pct, self.stop_points = float(self.stop_atr), float(self.stop_pct), float(self.stop_points)
+        if self.stop_atr <= 0 or not 0 < self.stop_pct < 100 or self.stop_points <= 0:
+            raise ValueError("stop ATR multiple and stop points must be positive, stop % between 0 and 100")
         return self
 
 
@@ -144,6 +146,7 @@ class Engine:
         self.realised_today = 0.0
         self.last_eval: dict | None = None
         self.last_ltp: dict = {}
+        self.last_ltp_at: dict = {}               # when each LTP was read (stale prices never trigger a stop)
         self.events: deque = deque(maxlen=300)
         self.exit_failures = 0
         self.bars_today: list[dict] = []
@@ -539,10 +542,15 @@ class Engine:
     def _paper_stop(self, c, side: str, premium: float) -> tuple[float | None, float | None, str, str | None]:
         """(stop premium, target premium, method text, error). Buys stop below the premium, sells above."""
         sgn = 1 if side == "BUY" else -1
+        self._last_delta = None
         if self.cfg.stop_mode == "pct":
             stop = premium * (1 - sgn * self.cfg.stop_pct / 100)
             target = premium * (1 + sgn * 2 * self.cfg.stop_pct / 100)
             how = f"{self.cfg.stop_pct:g}% of the premium (target 2× that distance)"
+        elif self.cfg.stop_mode == "points":
+            stop = premium - sgn * self.cfg.stop_points
+            target = premium + sgn * 2 * self.cfg.stop_points
+            how = f"{self.cfg.stop_points:g} premium points (target 2× that distance)"
         else:
             if not self.last_atr:
                 return None, None, "", "NIFTY ATR unavailable, so no stop-loss can be calculated."
@@ -552,6 +560,7 @@ class Engine:
                 return None, None, "", f"Option delta unavailable ({exc}), so no stop-loss can be calculated."
             if not delta:
                 return None, None, "", "Option delta unavailable, so no stop-loss can be calculated."
+            self._last_delta = abs(delta)
             move = abs(delta) * self.last_atr
             stop = premium - sgn * self.cfg.stop_atr * move
             target = premium + sgn * signals.TARGET_ATR * move
@@ -588,7 +597,8 @@ class Engine:
                                  available=acct["available"], max_lots=self.cfg.max_lots,
                                  min_balance=self.cfg.min_balance, target=target, cfg=self.cost_cfg,
                                  include_slippage=True)
-        r.update(base, stop_method=how)
+        r.update(base, stop_method=how, stop_mode=self.cfg.stop_mode, delta=getattr(self, "_last_delta", None),
+                 atr=self.last_atr, nifty_ref=round(leg.signal_close, 2))
         if err:
             r.update(decision="NO TRADE", reason=err)
         with self.dbe.connect() as cx:
@@ -622,13 +632,84 @@ class Engine:
         p = self.position
         if not (self.paper and p and p.get("stop_premium") is not None):
             return
-        ltp = self.last_ltp.get(p["contract"].trading_symbol)
-        if ltp is None:
+        if p.get("exiting"):
             return
+        sym = p["contract"].trading_symbol
+        ltp, at = self.last_ltp.get(sym), self.last_ltp_at.get(sym)
+        if ltp is None or at is None:
+            return
+        age = (self.market.now() - at).total_seconds()
+        if age > STALE_PRICE_SEC:      # never act on an old price; the next fresh quote is checked
+            if not p.get("stale_warned"):
+                self.log(f"Option premium is {age:.0f}s old: stop-loss not checked until a fresh price arrives", "warn")
+                p["stale_warned"] = True
+            return
+        p["stale_warned"] = False
         hit = ltp <= p["stop_premium"] if p["side"] == "BUY" else ltp >= p["stop_premium"]
         if hit:
             self.log(f"Premium {ltp:.2f} reached the stop-loss {p['stop_premium']:.2f}: exiting", "warn")
+            p["exiting"] = True
             self._exit("stop_loss")
+            if self.position is p:      # exit failed: the retry path handles it, never a second stop exit at once
+                p["exiting"] = False
+
+    # ------------------------------------------------------------ editing the paper stop-loss
+    def _record_stop(self, tid, old, new, old_loss, new_loss, source, note=None):
+        try:
+            with self.dbe.begin() as c:
+                c.execute(text("INSERT INTO paper_stop_changes (trade_id, ts, old_stop, new_stop, old_max_loss, "
+                               "new_max_loss, source, note) VALUES (:t, :ts, :o, :n, :ol, :nl, :s, :note)"),
+                          {"t": tid, "ts": self.market.now(), "o": old, "n": new, "ol": old_loss, "nl": new_loss,
+                           "s": source, "note": note})
+        except Exception as exc:
+            log.warning("stop change not recorded: %s", exc)
+
+    def set_paper_stop(self, new_stop: float) -> dict:
+        """Change the open paper position's stop-loss. Refused, with the reason, if it would exceed the
+        trade's risk amount or today's remaining loss limit, or sit on the wrong side of the current premium."""
+        with self._lock:
+            p = self.position
+            if not self.paper:
+                raise ValueError("Stop-loss editing is for paper positions only.")
+            if not p or p.get("stop_premium") is None:
+                raise ValueError("No open paper position with a stop-loss.")
+            new_stop = costs._round_tick_down(float(new_stop)) if p["side"] == "BUY" else costs._round_tick_up(float(new_stop))
+            sym = p["contract"].trading_symbol
+            try:
+                ltp = float(self.market.option_ltp(p["contract"]))
+                self.last_ltp[sym], self.last_ltp_at[sym] = ltp, self.market.now()
+            except Exception as exc:
+                raise ValueError(f"Current premium unavailable ({exc}). The stop could not be checked, so it was not changed.")
+            if new_stop <= 0:
+                raise ValueError("The stop-loss must be above zero.")
+            if p["side"] == "BUY" and new_stop >= ltp:
+                raise ValueError(f"The stop {new_stop:.2f} must be below the current premium {ltp:.2f}.")
+            if p["side"] == "SELL" and new_stop <= ltp:
+                raise ValueError(f"The stop {new_stop:.2f} must be above the current premium {ltp:.2f}.")
+            risk = p.get("risk") or {}
+            old_loss = float(risk.get("max_loss") or 0.0)
+            new_loss = sizing._loss_at(p["side"], p["entry_price"], new_stop, p["qty"], self.cost_cfg, True)["loss"]
+            budget = float(risk.get("risk_amount") or 0.0)
+            acct = paper_account.state(self.day, self.cfg, None, None, eng=self.dbe)
+            day_room = None if acct["daily_limit"] is None else max(0.0, acct["daily_limit"] + min(0.0, acct["realised_today"]))
+            if new_loss > old_loss:
+                if budget and new_loss > budget:
+                    raise ValueError(f"Refused: the new maximum loss ₹{new_loss:,.0f} exceeds this trade's risk amount "
+                                     f"₹{budget:,.0f} ({risk.get('risk_pct')}% of ₹{risk.get('capital', 0):,.0f}).")
+                if day_room is not None and new_loss > day_room:
+                    raise ValueError(f"Refused: the new maximum loss ₹{new_loss:,.0f} exceeds the ₹{day_room:,.0f} left "
+                                     f"in today's loss limit.")
+            old = p["stop_premium"]
+            p["stop_premium"] = new_stop
+            tgt = p.get("target_premium")
+            p["risk"] = {**risk, "max_loss": new_loss, "stop": new_stop,
+                         "risk_reward": round(abs(tgt - p["entry_price"]) / abs(p["entry_price"] - new_stop), 2)
+                         if tgt and p["entry_price"] != new_stop else None}
+            self._update_trade(p["id"], {"stop_premium": new_stop})
+            self._record_stop(p["id"], old, new_stop, old_loss, new_loss, "user")
+            self.log(f"Stop-loss changed {old:.2f} → {new_stop:.2f}: maximum loss ₹{old_loss:,.0f} → ₹{new_loss:,.0f}")
+            return {"trade_id": p["id"], "old_stop": old, "new_stop": new_stop, "old_max_loss": old_loss,
+                    "new_max_loss": new_loss, "ltp": ltp}
 
     # ------------------------------------------------------------ manual confirmation (live mode)
     def _propose(self, now: datetime, leg, c, side, qty, strike, typ, expiry, refs):
@@ -696,6 +777,9 @@ class Engine:
                          "entry_ref": leg.signal_close, **(refs or {})}
         self.trades_today += 1
         self.log(f"ENTERED {side} {c.trading_symbol} x{qty} @ {fill['price']:.2f} ({fill['order_id']})")
+        if self.paper and (refs or {}).get("stop_premium") is not None:
+            self._record_stop(tid, None, refs["stop_premium"], None, refs["risk"].get("max_loss"), "entry",
+                              refs["risk"].get("stop_method"))
         r = refs or {}
         self._alert(f"{side} {typ}", leg.entry_ts, direction=dirn, nifty=round(leg.signal_close, 2), strike=strike,
                     opt_type=typ, symbol=c.trading_symbol, expiry=expiry.isoformat(), qty=qty,
@@ -759,6 +843,7 @@ class Engine:
         except Exception:
             return None
         self.last_ltp[p["contract"].trading_symbol] = ltp
+        self.last_ltp_at[p["contract"].trading_symbol] = self.market.now()
         return self._pnl(p, ltp)["net"]
 
     def _daily_limit(self) -> float:
@@ -787,6 +872,27 @@ class Engine:
         self.halt_reason = reason
         self.log(reason, "error" if error else "warn")
 
+    def _paper_levels(self, p: dict) -> dict:
+        """Paper stop/target with their risk, and the NIFTY levels they correspond to (for the chart)."""
+        if p.get("stop_premium") is None:
+            return {}
+        r = p.get("risk") or {}
+        sgn = 1 if p["side"] == "BUY" else -1
+        delta, ref = r.get("delta"), r.get("nifty_ref")
+        d = 1 if p["direction"] > 0 else -1
+
+        def to_nifty(prem):
+            if not (delta and ref) or prem is None:
+                return None
+            return round(ref - d * sgn * (p["entry_price"] - prem) / delta, 2)
+        cap = r.get("capital") or 0
+        ml = r.get("max_loss")
+        return {"stop_premium": p["stop_premium"], "target_premium": p.get("target_premium"),
+                "max_loss": ml, "max_loss_pct": round(100 * ml / cap, 2) if cap and ml is not None else None,
+                "risk_amount": r.get("risk_amount"), "risk_reward": r.get("risk_reward"),
+                "nifty_stop": to_nifty(p["stop_premium"]), "nifty_target": to_nifty(p.get("target_premium")),
+                "stop_method": r.get("stop_method")}
+
     # ------------------------------------------------------------ status for UI
     def status(self) -> dict:
         with self._lock:
@@ -801,7 +907,8 @@ class Engine:
                        "entry_price": p["entry_price"], "entry_ts": pd.Timestamp(p["entry_ts"]).isoformat(),
                        "ltp": ltp, "mtm": self._pnl(p, ltp)["net"] if ltp else None,
                        "exit_failures": self.exit_failures, "score": p.get("score"),
-                       "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref")}
+                       "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref"),
+                       **self._paper_levels(p)}
             pend = None
             if self.pending:
                 q = self.pending

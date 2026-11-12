@@ -40,7 +40,7 @@ def test_db():
 @pytest.fixture(autouse=True)
 def clean_live_tables():
     with db.engine().begin() as c:
-        c.execute(text("TRUNCATE live_trades, live_events, live_sessions RESTART IDENTITY"))
+        c.execute(text("TRUNCATE live_trades, live_events, live_sessions RESTART IDENTITY CASCADE"))
 
 
 def run_days(engine, market, days, step=10):
