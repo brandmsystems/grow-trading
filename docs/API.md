@@ -41,7 +41,7 @@
 |---|---|---|
 | GET | `/api/research?entry_start=&cutoff=` | All strategy × timeframe results and walk-forward |
 | POST | `/api/research/run` | Compute missing configurations (job, research lane) |
-| GET | `/api/signals?strategy=&tf=` | Stored signal analysis (or `null`) |
+| GET | `/api/signals?strategy=&tf=` | Stored signal analysis (or `null`). Version 3 adds `model.auc_ci`, `model.calibration_wf` (walk-forward Brier vs average, per year), `model.calibrator`, `model.verdict`, a 95% `ci` on each band and reliability group, and `calibrated` on each signal. Older (v2) analyses are not served; rebuild them |
 | POST | `/api/signals/build` | Body `{"strategy", "tf"}`: build the analysis (job) |
 
 ## Live: `api/live.py`
@@ -49,6 +49,7 @@
 |---|---|---|
 | GET | `/api/live/status?mode=&tf=&strategy=` | Engine state, position, P&L, config, market status, recent alerts, NIFTY/EMA snapshot |
 | GET | `/api/live/dashboard?tf=&entry_start=&cutoff=&exec_mode=&roll=&capital=&risk_pct=&mode=` | All of the above plus the live feed. `tf` 1, 5, 15 or 30. Feed contents:<br>• quote, now with `from_high`, `from_low`, `range_pct`<br>• chart bars with EMA 9/21, `vwap`, `v`, `rsi`, `macd`, `macd_signal`, `macd_hist`<br>• `markers` (BUY CE / BUY PE / EXIT / HOLD)<br>• signal, with `explain` (checks with actual values, confidence, why, caution)<br>• `plan` (today's plan, levels, scenarios, change history)<br>• `patterns` (candle patterns on closed bars, with status and effect)<br>• verified option contract and premium, stop/target, sizing |
+| GET | `/api/options/chain?expiry=&width=` | Live NIFTY option chain from Groww around ATM (`width` strikes each side, default 10, max 20; `expiry` defaults to the nearest). Per strike, CE and PE: LTP, volume, OI, IV, delta, gamma, theta, vega (from Groww's chain), plus previous close, change, change %, previous OI, OI change and OI change % for ATM ±5 (from each contract's Groww quote; `null` elsewhere). Also the expiry list, spot (separate from premiums), ATM, days to expiry, NSE lot size, totals and a calculated put/call OI ratio, and `chain_as_of` / `quotes_as_of` with any errors. 400 for an unlisted expiry, 502 if Groww fails. Cached: chain 10 s, quotes 60 s (10 min when closed) |
 | POST | `/api/live/start` | Body `{"config": {...}, "confirm": "LIVE", "replay_day", "replay_speed"}`. Live mode requires `confirm` and respects `LIVE_MAX_LOTS` |
 | POST | `/api/live/confirm` | Body `{"id"}`: place the live entry order waiting for confirmation (409 if it expired or the engine can't enter) |
 | POST | `/api/live/reject` | Body `{"id"}`: skip it; no order is placed |

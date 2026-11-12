@@ -244,16 +244,25 @@ export interface HistSignal {
   score: number | null; category: string; out_of_sample: boolean;
   entry: number; stop: number; target: number; risk_reward: number; atr: number; expires: string;
   indicators: Indicator[]; reason: string; regime: string;
-  comparable: { band: string; n: number; hit_rate: number | null } | null;
+  comparable: { band: string; n: number; hit_rate: number | null; ci?: [number, number] | null } | null;
+  /** Hit rate this score corresponds to, calibrated only on earlier years (null when not yet testable). */
+  calibrated?: number | null;
   outcome: string; decided_at: string | null; strong_alert: boolean;
 }
+
+export interface CalibBin { from: number; to: number; n: number; mean_score: number | null; hit_rate: number | null; ci?: [number, number] | null }
 
 export interface SignalAnalysis {
   strategy: string; strategy_label: string; timeframe: number; generated_at: string; asof: string;
   counts: { signals: number; labelled: number; oos: number; unconfirmed: number; pending: number };
   model: { base_rate: number | null; auc: number | null; brier: number | null; brier_base: number | null;
-           folds: { year: number; train_signals: number; test_signals: number; hit_rate: number | null; auc: number | null }[] };
-  calibration: { band: string; from: number; to: number; n: number; mean_score: number | null; hit_rate: number | null }[];
+           folds: { year: number; train_signals: number; test_signals: number; hit_rate: number | null; auc: number | null }[];
+           auc_ci?: [number, number] | null;
+           calibration_wf?: { n: number; brier: number | null; brier_base: number | null; skill: number | null;
+                              folds: { year: number; n: number; trained_on: number; brier: number | null; brier_base: number | null }[] };
+           verdict?: { edge: boolean; text: string } };
+  calibration: (CalibBin & { band: string })[];
+  reliability?: CalibBin[];
   signals: HistSignal[];
 }
 
@@ -309,7 +318,7 @@ export interface ExplainCheck {
 export interface Explanation {
   action?: string; bar_close?: string; direction?: string; summary: string; why?: string; caution?: string | null;
   bullets?: string[]; checks: ExplainCheck[]; note?: string; atr?: number | null;
-  confidence?: { score: number | null; band?: string; hit_rate?: number | null; n?: number | null; text: string } | null;
+  confidence?: { score: number | null; band?: string; hit_rate?: number | null; n?: number | null; ci?: [number, number] | null; calibrated?: number | null; edge?: boolean | null; text: string } | null;
 }
 export interface PlanLevel { name: string; price: number; kind: "support" | "resistance" | "pivot"; source: string }
 export interface TradingPlan {
@@ -326,3 +335,20 @@ export interface CandlePattern {
   o: number; h: number; l: number; c: number; confirmation: Record<string, string | number>; effect: string;
 }
 export interface StopChange { ts: string; old_stop: number | null; new_stop: number; old_max_loss: number | null; new_max_loss: number; source: string; note: string | null }
+
+// ------------------------------------------------------------------ option chain (Groww, live)
+export interface ChainSide {
+  symbol: string | null; ltp: number | null; volume: number | null; oi: number | null;
+  iv: number | null; delta: number | null; gamma: number | null; theta: number | null; vega: number | null;
+  /** From the contract's own Groww quote; null outside the quoted strikes. */
+  prev_close: number | null; change: number | null; change_pct: number | null;
+  prev_oi: number | null; oi_change: number | null; oi_change_pct: number | null;
+}
+export interface OptionChain {
+  expiry: string; expiries: string[]; days_to_expiry: number; lot_size: number | null;
+  spot: { price: number | null; change: number | null; change_pct: number | null; prev_close: number | null; state: string; as_of: string | null };
+  underlying_ltp: number | null; atm: number; width: number; quote_width: number;
+  rows: { strike: number; atm: boolean; ce: ChainSide | null; pe: ChainSide | null }[];
+  totals: { ce_oi: number; pe_oi: number; ce_volume: number; pe_volume: number; pcr: number | null };
+  chain_as_of: string | null; chain_error: string | null; quotes_as_of: string | null; quotes_error: string | null; market: string;
+}

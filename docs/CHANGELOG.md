@@ -2,6 +2,15 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: Phase 2, strategy and backtesting
+- **Calibration (signals.py, analysis v3):** Wilson 95% ranges on band and score-group hit rates; bootstrap AUC range; walk-forward Platt calibration compared with the historical average (Brier skill); per-signal calibrated estimate; plain verdict. Raw scores are unchanged (checked: all 15-minute v2 and v3 scores identical), so prediction mode trades exactly as before. EMA 9/21 analyses rebuilt for 5, 15 and 30 min.
+- **Live confidence text** shows the band's 95% range, the calibrated estimate and the verdict.
+- **Option chain:** `Feed.option_chain` and `GET /api/options/chain`, using Groww's chain plus per-contract quotes for ATM ±5. OI change is computed as OI minus previous OI, because Groww's `oi_day_change` came back scaled by 0.65.
+- **Options Analysis page:** the live chain replaces the "not available" note.
+- **Backtest page:** payoff ratio, average win/loss, brokerage & taxes vs slippage, and filters for direction, crossover number and entry time.
+- **Signals page:** Calibration check card.
+- **Tests:** `tests/test_phase2.py` (15): Wilson values, calibrator bounds, no look-ahead in walk-forward calibration, informative vs noise scores, reproducible AUC range, verdict cases, unchanged raw score, live confidence text, and the chain (ATM centring, spot separate, OI change, quotes only near ATM, nothing invented on failure, errors, other expiry, width limit, caching). **259 passed.** React build passes.
+
 ## 12 Nov: Live market & paper trading improvements (5 items)
 - **NIFTY high / low:** the quote adds `from_high`, `from_low` and `range_pct`. The spot card shows the points from the high and low, change %, previous close, a day-range bar, the updated time and age, and Delayed / Disconnected states.
 - **Prediction explanations:** new `strategy/insight.explain` shows EMA 9/21, VWAP, RSI, MACD, volume and trend with actual values, plus the model confidence with its out-of-sample hit rate, why the call isn't HOLD (or what HOLD needs), and a caution on weak confirmation. It never changes the signal. The *View reason* panel is on the recommendation card.

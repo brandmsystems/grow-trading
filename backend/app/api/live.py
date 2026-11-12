@@ -21,6 +21,29 @@ def live_status():
                                                              request.args.get("strategy", "ema_9_21"))})
 
 
+@bp.get("/api/options/chain")
+def options_chain():
+    """Live NIFTY option chain around ATM (Groww): CE and PE premiums, change, volume, OI, OI change, IV, Greeks."""
+    from datetime import date
+    from app.services.market_data import feed as live_feed
+    a = request.args
+    try:
+        expiry = date.fromisoformat(a["expiry"]) if a.get("expiry") else None
+        width = int(a.get("width", live_feed.CHAIN_WIDTH))
+    except (TypeError, ValueError) as exc:
+        return api_error(exc, 400)
+    try:
+        config.load_keys()
+        return jsonify({"ok": True, "data": live_feed.feed().option_chain(expiry, width)})
+    except config.KeysError as exc:
+        return api_error(exc, 400)
+    except ValueError as exc:
+        return api_error(exc, 400)
+    except Exception as exc:
+        log.exception("option chain failed")
+        return api_error(exc, 502)
+
+
 @bp.get("/api/live/dashboard")
 def live_dashboard():
     """Everything the Live page shows, in one poll: engine status, NIFTY feed, signal, option, size."""

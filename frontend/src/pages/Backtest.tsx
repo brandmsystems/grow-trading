@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Play, Settings2 } from "lucide-react";
 import { useSettings } from "../context/SettingsContext";
@@ -23,11 +23,14 @@ const PCT_KEYS = new Set(["slippage_pct", "stt_sell_pct", "exchange_pct", "stamp
 function metricsOf(trades: BtTrade[], capital: number) {
   const n = trades.length, wins = trades.filter((t) => t.net > 0).length;
   const net = trades.reduce((a, t) => a + t.net, 0), gross = trades.reduce((a, t) => a + t.gross, 0);
-  const fric = trades.reduce((a, t) => a + t.friction, 0);
+  const fric = trades.reduce((a, t) => a + t.friction, 0), slip = trades.reduce((a, t) => a + (t.slippage ?? 0), 0);
   const sw = trades.filter((t) => t.net > 0).reduce((a, t) => a + t.net, 0), sl = -trades.filter((t) => t.net <= 0).reduce((a, t) => a + t.net, 0);
+  const avgW = wins ? sw / wins : 0, avgL = n - wins ? sl / (n - wins) : 0;
   let eq = capital, peak = capital, dd = 0, ddp = 0;
   for (const t of trades) { eq += t.net; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq); if (peak > 0) ddp = Math.max(ddp, ((peak - eq) / peak) * 100); }
-  return { n, wins, net, gross, fric, pf: sl > 0 ? sw / sl : null, exp: n ? net / n : 0, dd, ddp, rate: n ? (wins / n) * 100 : 0 };
+  // Same definitions as the backend's metrics.compute (break-even counts as a loss).
+  return { n, wins, net, gross, fric, slip, charges: fric - slip, pf: sl > 0 ? sw / sl : null, payoff: avgL > 0 ? avgW / avgL : null,
+    avgW, avgL, exp: n ? net / n : 0, dd, ddp, rate: n ? (wins / n) * 100 : 0 };
 }
 
 export default function Backtest() {
@@ -42,6 +45,10 @@ export default function Backtest() {
   const [mode, setMode] = useState<ModeKey>((search.get("mode") as ModeKey) || "ATM_BUY");
   const [year, setYear] = useState("all");
   const [outcome, setOutcome] = useState("all");
+  const [dir, setDir] = useState("all");
+  const [tFrom, setTFrom] = useState("");
+  const [tTo, setTTo] = useState("");
+  const [cross, setCross] = useState("all");
   const [selId, setSelId] = useState<string | null>(null);
   const [chart, setChart] = useState<BtChart | null>(null);
   const [chartErr, setChartErr] = useState<string | null>(null);
@@ -81,16 +88,22 @@ export default function Backtest() {
 
   const all = result?.trades[mode] ?? [];
   const years = useMemo(() => [...new Set(all.map((t) => t.day.slice(0, 4)))].sort(), [all]);
-  const list = useMemo(() => all.filter((t) => (year === "all" || t.day.startsWith(year)) && (outcome === "all" || t.outcome === outcome)), [all, year, outcome]);
+  const crossNos = useMemo(() => [...new Set(all.map((t) => t.ordinal))].sort((a, b) => a - b), [all]);
+  // Entry time = the signal bar's close (entry_ts); the fill is the next minute.
+  const keep = useCallback((t: BtTrade) => (year === "all" || t.day.startsWith(year)) && (outcome === "all" || t.outcome === outcome)
+    && (dir === "all" || t.direction === dir) && (!tFrom || hm(t.entry_ts) >= tFrom) && (!tTo || hm(t.entry_ts) <= tTo)
+    && (cross === "all" || (cross === "4+" ? t.ordinal >= 4 : t.ordinal === Number(cross))), [year, outcome, dir, tFrom, tTo, cross]);
+  const list = useMemo(() => all.filter(keep), [all, keep]);
+  const filtered = dir !== "all" || !!tFrom || !!tTo || cross !== "all";
   const m = metricsOf(list, result?.params.capital ?? 100000);
   const sel = list.find((t) => t.id === selId) ?? list[0];
 
   const equity = useMemo(() => MODES.map(({ value, label }) => {
     const byDay = new Map<string, number>();
-    for (const t of (result?.trades[value] ?? []).filter((t) => year === "all" || t.day.startsWith(year))) byDay.set(t.day, (byDay.get(t.day) ?? 0) + t.net);
+    for (const t of (result?.trades[value] ?? []).filter(keep)) byDay.set(t.day, (byDay.get(t.day) ?? 0) + t.net);
     let cum = 0;
     return { name: label, color: MODE_COLOR[value], data: [...byDay.entries()].sort().map(([d, v]) => ({ time: d, value: (cum += v) })) };
-  }), [result, year]);
+  }), [result, keep]);
   const monthly = useMemo(() => {
     const mm = new Map<string, number>();
     for (const t of list) mm.set(t.day.slice(0, 7), (mm.get(t.day.slice(0, 7)) ?? 0) + t.net);
@@ -181,6 +194,18 @@ export default function Backtest() {
             <select aria-label="Outcome" className={selectInline} value={outcome} onChange={(e) => { setOutcome(e.target.value); setSelId(null); }}>
               <option value="all">All trades</option><option value="win">Winners</option><option value="loss">Losers</option>
             </select>
+            <select aria-label="Direction" className={selectInline} value={dir} onChange={(e) => { setDir(e.target.value); setSelId(null); }}>
+              <option value="all">CE and PE</option><option value="Bullish">Bullish (CE side)</option><option value="Bearish">Bearish (PE side)</option>
+            </select>
+            <select aria-label="Crossover number" className={selectInline} value={cross} onChange={(e) => { setCross(e.target.value); setSelId(null); }}>
+              <option value="all">Any crossover</option>{crossNos.filter((c) => c <= 3).map((c) => <option key={c} value={c}>Crossover #{c} of the day</option>)}
+              {crossNos.some((c) => c >= 4) && <option value="4+">Crossover #4 or later</option>}
+            </select>
+            <span className="flex items-center gap-1 text-xs text-slate-500">Entry
+              <input aria-label="Entry from" type="time" className={selectInline} value={tFrom} onChange={(e) => { setTFrom(e.target.value); setSelId(null); }} />
+              to <input aria-label="Entry to" type="time" className={selectInline} value={tTo} onChange={(e) => { setTTo(e.target.value); setSelId(null); }} />
+            </span>
+            {filtered && <Button onClick={() => { setDir("all"); setTFrom(""); setTTo(""); setCross("all"); }}>Clear filters</Button>}
           </div>
 
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -188,8 +213,9 @@ export default function Backtest() {
             <Card accent="spot"><Stat label="Win rate" value={pct(m.rate)} className="text-xl" sub={`${m.wins} won · ${m.n - m.wins} lost`} /></Card>
             <Card accent="neutral"><Stat label="Total trades" value={m.n} className="text-xl" sub={`expectancy ${inr(m.exp, true, 0)}`} /></Card>
             <Card accent="loss"><Stat label="Max drawdown" value={inr(-m.dd, false, 0)} className="text-xl text-loss" sub={pct(m.ddp)} /></Card>
-            <Card accent="risk"><Stat label="Brokerage & charges" value={inr(-m.fric, false, 0)} className="text-xl text-orange-600" sub="incl. slippage" tip="All friction: slippage, brokerage, STT, exchange, SEBI, stamp duty and GST." /></Card>
-            <Card accent="strat"><Stat label="Profit factor" value={m.pf == null ? "∞" : num(m.pf)} className="text-xl" sub="won ÷ lost" /></Card>
+            <Card accent="risk"><Stat label="Costs" value={inr(-m.fric, false, 0)} className="text-xl text-orange-600" sub={`taxes ${inrShort(-m.charges)} · slip ${inrShort(-m.slip)}`} tip={`Brokerage & taxes (brokerage, STT, exchange, SEBI, stamp duty, GST) ${inr(-m.charges, false, 0)}; slippage (fills worse than the candle price) ${inr(-m.slip, false, 0)}.`} /></Card>
+            <Card accent="strat"><Stat label="Profit factor" value={m.pf == null ? (m.wins ? "∞" : "—") : num(m.pf)} className="text-xl" sub={`payoff ratio ${m.payoff == null ? "—" : num(m.payoff)}`}
+              tip={`Profit factor = total won ÷ total lost. Payoff ratio = average win ÷ average loss (${inr(m.avgW, false, 0)} ÷ ${inr(m.avgL, false, 0)}).`} /></Card>
           </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

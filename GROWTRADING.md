@@ -275,6 +275,20 @@ Decisions you made at the gate: option scope ATM ±10 strikes, CE and PE, all we
 
 **Phase 1 gate:** data coverage, validation, contract metadata (contracts, expiries, lot sizes) and integrity are tested. Waiting for your approval to start Phase 2.
 
+### Phase 2: strategy and backtesting (12 Nov 2026)
+Existing strategies, engine, rules and raw signal scores are unchanged.
+| Item | Result |
+|---|---|
+| Calibration | Band hit rates with 95% ranges, AUC range, walk-forward calibration vs the historical average, calibrated estimates, plain verdict (Signals page and *View reason*). EMA 9/21: 5 min no proven edge; 15 min modest edge (AUC 0.53–0.63, +2.3% Brier skill); 30 min not yet testable |
+| Out-of-sample validation | Calibration is fitted only on earlier years; tested that later outcomes never change earlier results. Strategy walk-forward (Compare page) unchanged |
+| Options analysis | `GET /api/options/chain`: live CE+PE premiums, change, volume, OI, OI change, IV and Greeks around ATM, with the expiry list; spot shown separately. Options Analysis page shows the chain |
+| Backtest report | Payoff ratio, average win/loss, brokerage & taxes vs slippage, filters for direction, crossover number and entry time |
+| Tests | 15 new; 259 pass; React build passes |
+
+**Found:** Groww's historical candles give OI 0 for the current session, so the 12 Nov option candles have no OI (repair needs your approval). Groww's `oi_day_change` is scaled ×0.65; the app computes OI change itself.
+
+**Phase 2 gate:** backtesting engine (existing tests), signal scores (calibration and no-look-ahead tests), options data and performance calculations validated. Waiting for your approval to start Phase 3.
+
 ### Paper trading risk management (12 Nov 2026)
 Requested as prompt 13. Paper only; live and replay unchanged. Every paper trade calculates risk %, risk amount, stop-loss, risk per lot (with slippage and charges), lots and quantity **before** the simulated fill and stores it in `live_trades.risk`. Failed checks give NO TRADE with the exact reasons. Premium stop-loss enforced (ATR × delta by default); daily limit halts new entries until the next session; virtual account with a running balance (`paper_accounts`). Details: [docs/STRATEGY.md](docs/STRATEGY.md#paper-trading-risk-management-12-nov-2026), [docs/FRONTEND.md](docs/FRONTEND.md). Tests: 56 new.
 
@@ -293,7 +307,6 @@ Full list: [docs/TODO.md](docs/TODO.md).
 
 **Pending:**
 - Socket.IO push (Phase 6)
-- backend endpoints for option chain/expiries and CE+PE premiums (see [docs/TODO.md](docs/TODO.md))
 
 **Known issues:**
 - **No holiday calendar.**

@@ -1,14 +1,15 @@
 import { Layers } from "lucide-react";
 import { useLive } from "../context/LiveContext";
 import { SpotCard } from "../components/market/MarketCards";
+import { OptionChainTable } from "../components/market/OptionChainTable";
 import { Card, Pill, Stat } from "../components/common/Card";
 import { PageHeader } from "../components/common/Controls";
-import { Empty, Limitation, Loading } from "../components/common/States";
+import { Empty, Loading } from "../components/common/States";
 import { dmy, hms, num } from "../utils/format";
 
 /**
- * Options analysis built only from what the backend exposes: the strategy's verified
- * recommended contract. There is no option-chain or expiry-list endpoint yet (see docs/TODO.md).
+ * Options analysis: the strategy's verified recommended contract, and the live Groww option
+ * chain (CE and PE around ATM) from /api/options/chain.
  */
 export default function Options() {
   const { data } = useLive();
@@ -63,13 +64,7 @@ export default function Options() {
           )}
         </Card>
       </div>
-      <Card title="Option chain">
-        <Limitation>
-          Not available yet: the backend has no option-chain or expiry-list endpoint for the frontend. It reads the chain internally to verify the
-          recommended contract, which is shown above. Volume and premium change aren't provided either. A chain endpoint is listed in docs/TODO.md;
-          until it exists, this page shows no other strikes rather than made-up ones.
-        </Limitation>
-      </Card>
+      <OptionChainTable />
     </div>
   );
 }

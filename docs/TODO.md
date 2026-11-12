@@ -1,6 +1,6 @@
 # Pending work and known issues
 
-*Updated 12 Nov 2026, Phase 1 (historical data).*
+*Updated 12 Nov 2026, Phase 2 (strategy and backtesting).*
 
 ## Restructure phases
 | Phase | Status |
@@ -20,10 +20,11 @@
 - **Commit at the end of each phase.**
 
 ## Next
-- Backend endpoints the redesigned frontend would use (frontend-only work couldn't add them):
-  - option chain and expiry list for Options Analysis
-  - CE and PE premiums together, with premium change and volume
-  - EMA values from `/api/data/candles`, so historical EMAs match the strategy exactly
+- EMA values from `/api/data/candles`, so historical EMAs match the strategy exactly. (Option chain, expiry list and CE+PE premiums were done in Phase 2.)
+- **Proposals needing your approval (would change trading or results):**
+  - stronger regularisation chosen by walk-forward validation for the signal model (changes scores, so prediction-mode trades)
+  - a "require N confirmations" or "score ≥ X" entry filter, backtested first
+  - custom EMA periods as new strategy settings (existing defaults unchanged)
 - Phase 6: Flask-SocketIO push for quotes, signals and alerts.
 
 ## Known issues
@@ -43,6 +44,11 @@
 - **Plan history** is stored per timeframe; switching the chart timeframe shows that timeframe's plan.
 - **Prediction rule:** its option P&L hasn't been backtested yet; a "Prediction score ≥ X" Backtest filter is proposed.
 - **No strategy profitable after costs:** none of the 28 configurations was profitable over five years except EMA 20/50 30m (about break-even). See [BACKTESTING.md](BACKTESTING.md).
+
+- **Today's option candles have OI = 0:** Groww's historical candles return OI 0 for the current session (seen 12 Nov: all 32,982 option candles stored that day). The day is marked fetched, so it won't be re-downloaded. Fix proposed: re-request days whose candles all have OI 0 and update only the OI column. Awaiting your approval (it updates stored rows).
+- **Signal score has little edge:** out of sample, EMA 9/21 5-min has no proven edge (AUC 0.49–0.55), 15-min a modest one (+2.3% Brier skill), 30-min can't be tested yet. Scores rarely reach 70+. Shown on the Signals page.
+- **Option chain speed:** Groww takes 1–4 s per call, so the first chain load takes about 5–8 s; later loads are cached.
+- **Groww `oi_day_change`** is scaled (×0.65 of OI minus previous OI); the app computes the change itself.
 
 ## Future
 - Level 3: Telegram notifications, trading terminal improvements.

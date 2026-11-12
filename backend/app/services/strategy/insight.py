@@ -125,12 +125,19 @@ def explain(sig: dict, bars: pd.DataFrame, day: date, tf: int, regime=None, scor
         feats, _ = signals.features(r, regime, d, float(r["atr"]), pd.Timestamp(r["close_ts"]).to_pydatetime())
         score = scorer.score(feats)
         comp = scorer.comparable(score)
+        ci = comp.get("ci") if comp else None
+        cal = comp.get("calibrated") if comp else None
+        ver = (comp or {}).get("verdict") or {}
+        text = ((f"Score {score:.0f}/100 ({signals.band(score)}). On years the model had not seen, signals in "
+                 f"this band reached the 2×ATR target before the 1×ATR stop {comp['hit_rate']}% of the time "
+                 f"(n={comp['n']}{f', 95% range {ci[0]}–{ci[1]}%' if ci else ''}).") if comp and comp["hit_rate"] is not None
+                else f"Score {score:.0f}/100 ({signals.band(score)}); no out-of-sample history for this band.")
+        if cal is not None:
+            text += f" Calibrated estimate for this score: {cal:.0f}%."
+        text += f" {ver['text']}" if ver.get("text") else " A model score, not a probability."
         confidence = {"score": round(score, 1), "band": signals.band(score),
                       "hit_rate": comp["hit_rate"] if comp else None, "n": comp["n"] if comp else None,
-                      "text": (f"Score {score:.0f}/100 ({signals.band(score)}). On years the model had not seen, signals in "
-                               f"this band reached the 2×ATR target before the 1×ATR stop {comp['hit_rate']}% of the time "
-                               f"(n={comp['n']}). A model score, not a probability.") if comp and comp["hit_rate"] is not None
-                              else f"Score {score:.0f}/100 ({signals.band(score)}); no out-of-sample history for this band."}
+                      "ci": ci, "calibrated": cal, "edge": ver.get("edge"), "text": text}
     elif action != "HOLD":
         confidence = {"score": None, "text": f"Not scored: build the {tf}m EMA 9/21 analysis on the Signals page to score live signals."}
 

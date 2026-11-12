@@ -48,6 +48,23 @@ An unconfirmed cross doesn't open a trade, but still exits an opposite one.
 - **Strong alert:** score ≥ 70, at least 3 supporting indicators, and at least 30 comparable past signals.
 - **Not used:** option-chain OI/IV/Greeks, because Groww has no historical snapshots.
 
+### Calibration (Phase 2, 12 Nov 2026, analysis version 3)
+The raw score and its model are unchanged (prediction mode compares that score with `min_score`, so changing it would change trading). Calibration is measured and shown next to it:
+- **Band hit rates with 95% ranges:** Wilson intervals on the out-of-sample signals in each band and in ten equal-sized score groups.
+- **AUC range:** 95% bootstrap interval (400 resamples, fixed seed).
+- **Walk-forward calibration:** each out-of-sample year is calibrated (Platt scaling on logit(score)) using only earlier out-of-sample years, then compared with the simplest honest forecast, the earlier years' average hit rate (Brier skill). A test proves that changing a later year's outcomes never changes an earlier year's result.
+- **Calibrated estimate:** each historical signal gets its walk-forward estimate; live signals use a calibrator fitted on all out-of-sample signals.
+- **Verdict:** "No proven edge" when the AUC range includes 0.50; "Weak" when the calibrated rates don't beat the average; "Modest edge" when both tests pass.
+
+**EMA 9/21 results (built 12 Nov 2026):**
+| Timeframe | Out-of-sample signals | AUC (95% range) | Calibrated vs average (Brier skill) | Verdict |
+|---|---|---|---|---|
+| 5 min | 2,124 | 0.52 (0.49–0.55) | −0.1% | No proven edge |
+| 15 min | 570 | 0.59 (0.53–0.63) | +2.3% | Modest edge |
+| 30 min | 90 | 0.72 (0.61–0.83) | not testable yet (one out-of-sample year) | Not enough later years |
+
+Scores almost never reach the 70+ bands (15 min: 1 signal of 570). The bands describe the score, not a likelihood: in the 15-minute "No strong signal" band, 25.2% (21.7–29.0%) of signals hit their target.
+
 ## Charges (`trading/charges.py`)
 | Item | Rate |
 |---|---|

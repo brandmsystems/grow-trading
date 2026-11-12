@@ -29,7 +29,7 @@
 - **No invented prices:** a missing option candle skips the trade with a reason.
 - **Today's unfinished session:** valued at the latest completed minute and marked "open".
 
-**Results:** each mode gets trades, win rate, gross/net P&L, friction, profit factor, payoff, expectancy and max drawdown (₹ and %). The Backtest page also shows monthly, yearly, best and worst days, no-trade days and skipped trades.
+**Results:** each mode gets trades, win rate, gross/net P&L, friction, profit factor, payoff, expectancy and max drawdown (₹ and %). The Backtest page also shows monthly, yearly, best and worst days, no-trade days and skipped trades. Phase 2 (12 Nov 2026) added the payoff ratio and average win/loss, costs split into brokerage & taxes and slippage, and filters for direction, crossover number of the day (#1, #2, #3, #4+) and entry time range; every KPI, chart and table follows the filters. The page's figures use the same definitions as `metrics.compute` (break-even counts as a loss). Engine and results unchanged.
 
 ## Comparison (`services/backtest/research.py`, Compare page)
 Every strategy × timeframe (7 × 4 = 28) runs over all stored data, and a compact summary is kept in `strategy_results`. **Walk-forward:** each year uses the setup with the best net P&L on earlier years only.

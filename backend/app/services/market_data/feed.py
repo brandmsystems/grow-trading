@@ -46,6 +46,10 @@ QUOTE_TTL = 3            # seconds, market open
 CLOSED_TTL = 60          # seconds, market closed (the price doesn't move)
 SPOT_TTL = 15            # 1m candles
 CHAIN_TTL = 10
+CHAIN_WIDTH = 10               # option chain page: strikes each side of ATM
+CHAIN_QUOTE_WIDTH = 5          # strikes each side of ATM that also get a per-contract quote (change, OI change)
+CHAIN_QUOTES_TTL = 60          # those quotes: refreshed at most once a minute while open
+CLOSED_CHAIN_QUOTES_TTL = 600
 OPT_QUOTE_TTL = 3
 MARGIN_TTL = 30
 LIVE_MAX_AGE = 15        # a quote older than this is "delayed"
@@ -334,6 +338,106 @@ class Feed:
     def _opt_quote(self, symbol: str) -> _Entry:
         return self._get(f"oq|{symbol}", OPT_QUOTE_TTL, lambda: self.api(
             "get_quote", trading_symbol=symbol, exchange="NSE", segment="FNO", timeout=5))
+
+    # -------------------------------------------------- option chain (Options Analysis page)
+    def option_chain(self, expiry: date | None = None, width: int = CHAIN_WIDTH, quote_width: int = CHAIN_QUOTE_WIDTH) -> dict:
+        """CE and PE side by side for the strikes around ATM, from Groww only.
+
+        * Groww's option chain: LTP, volume, OI, IV and Greeks for every strike (one call).
+        * Groww's per-contract quote, for the strikes within `quote_width` of ATM only (to stay well
+          inside Groww's rate limits): previous close, premium change and OI change. Other strikes
+          show these as unavailable rather than estimated.
+        Nothing is filled in or estimated; a value Groww doesn't send stays None."""
+        now = self.now()
+        day = now.date()
+        open_ = market_status(now)["state"] == "open"
+        width, quote_width = max(1, min(int(width), 20)), max(0, min(int(quote_width), CHAIN_QUOTE_WIDTH))
+        exps = [e for e in self.market.expiries(day) if e >= day]
+        if not exps:
+            raise LookupError("Groww returned no NIFTY expiries.")
+        if expiry is None:
+            expiry = exps[0]
+        elif expiry not in exps:
+            raise ValueError(f"{expiry} is not a listed NIFTY expiry.")
+        ch = self._chain(expiry)
+        if ch.value is None:
+            raise RuntimeError(f"Option chain unavailable: {ch.error}")
+        strikes = {}
+        for k, v in ((ch.value or {}).get("strikes") or {}).items():
+            s = _f(k)
+            if s is not None and isinstance(v, dict):
+                strikes[s] = v
+        if not strikes:
+            raise RuntimeError("Groww returned an empty option chain.")
+        under = _f(ch.value.get("underlying_ltp"))
+        q = self.quote(open_)
+        ref = under or q.get("price")
+        keys = sorted(strikes)
+        atm = min(keys, key=lambda s: abs(s - ref)) if ref else keys[len(keys) // 2]
+        i = keys.index(atm)
+        shown = keys[max(0, i - width): i + width + 1]
+        near = set(keys[max(0, i - quote_width): i + quote_width + 1])
+        symbols = [r.get("trading_symbol") for s in shown if s in near
+                   for r in (strikes[s].get("CE"), strikes[s].get("PE")) if isinstance(r, dict) and r.get("trading_symbol")]
+        qs = self._get(f"chainq|{expiry}|{atm}|{quote_width}", CHAIN_QUOTES_TTL if open_ else CLOSED_CHAIN_QUOTES_TTL,
+                       lambda: self._quotes(symbols))
+
+        def side(row: dict | None) -> dict | None:
+            if not isinstance(row, dict):
+                return None
+            g = row.get("greeks") or {}
+            sym = row.get("trading_symbol")
+            out = {"symbol": sym, "ltp": _f(row.get("ltp")), "volume": _f(row.get("volume")), "oi": _f(row.get("open_interest")),
+                   "iv": _f(g.get("iv")), "delta": _f(g.get("delta")), "gamma": _f(g.get("gamma")),
+                   "theta": _f(g.get("theta")), "vega": _f(g.get("vega")),
+                   "prev_close": None, "change": None, "change_pct": None, "prev_oi": None, "oi_change": None, "oi_change_pct": None}
+            qq = (qs.value or {}).get(sym)
+            if qq:
+                # OI change = the quote's OI minus its previous OI. Groww's own `oi_day_change` field is not
+                # used: it came back scaled (x0.65 of that difference) while its percentage matched it.
+                oi_q, prev_oi = _f(qq.get("open_interest")), _f(qq.get("previous_open_interest"))
+                d_oi = oi_q - prev_oi if oi_q is not None and prev_oi is not None else None
+                out.update({"prev_close": _f((qq.get("ohlc") or {}).get("close")), "change": _f(qq.get("day_change")),
+                            "change_pct": _f(qq.get("day_change_perc")), "prev_oi": prev_oi, "oi_change": d_oi,
+                            "oi_change_pct": round(d_oi / prev_oi * 100, 2) if d_oi is not None and prev_oi else None})
+            return out
+
+        rows = [{"strike": s, "atm": s == atm, "ce": side(strikes[s].get("CE")), "pe": side(strikes[s].get("PE"))} for s in shown]
+        tot = lambda leg, k: sum((r[leg] or {}).get(k) or 0 for r in rows)   # noqa: E731
+        ce_oi, pe_oi = tot("ce", "oi"), tot("pe", "oi")
+        lot = None
+        try:
+            from app.services.options import lot_sizes
+            lot = lot_sizes.lot_size_for(expiry, exps)[0]
+        except Exception:
+            pass
+        return {
+            "expiry": expiry.isoformat(), "expiries": [e.isoformat() for e in exps], "days_to_expiry": (expiry - day).days,
+            "lot_size": lot, "spot": {k: q.get(k) for k in ("price", "change", "change_pct", "prev_close", "state", "as_of")},
+            "underlying_ltp": under, "atm": atm, "width": width, "quote_width": quote_width,
+            "rows": rows,
+            "totals": {"ce_oi": ce_oi, "pe_oi": pe_oi, "ce_volume": tot("ce", "volume"), "pe_volume": tot("pe", "volume"),
+                       "pcr": round(pe_oi / ce_oi, 2) if ce_oi else None},
+            "chain_as_of": ch.good_at.isoformat() if ch.good_at else None, "chain_error": ch.error,
+            "quotes_as_of": qs.good_at.isoformat() if qs.good_at else None, "quotes_error": qs.error,
+            "market": market_status(now)["state"],
+        }
+
+    def _quotes(self, symbols: list[str]) -> dict:
+        """Per-contract Groww quotes, a few at a time. Fails only if every request fails."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(sym):
+            try:
+                return sym, self.api("get_quote", trading_symbol=sym, exchange="NSE", segment="FNO", timeout=5), None
+            except Exception as exc:
+                return sym, None, str(exc) or type(exc).__name__
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            res = list(ex.map(one, symbols))
+        good = {s: v for s, v, _ in res if v}
+        if symbols and not good:
+            raise RuntimeError(next((e for _, _, e in res if e), "no quotes returned"))
+        return good
 
     # -------------------------------------------------- recommendation
     def recommend(self, sig: dict, spot: float, bars: pd.DataFrame, day: date, now: datetime,

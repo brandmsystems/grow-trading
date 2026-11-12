@@ -30,7 +30,7 @@ from app.database import db
 from app.services.strategy import strategies
 from app.services.strategy import rules as st
 
-VERSION = 2
+VERSION = 3   # 3: calibration intervals, walk-forward Platt calibration, verdict (scores unchanged)
 STOP_ATR, TARGET_ATR = 1.0, 2.0
 MIN_TRAIN = 300
 BANDS = [(0, 50, "No strong signal"), (50, 70, "Watch / Moderate signal"),
@@ -115,6 +115,95 @@ def auc(score: np.ndarray, y: np.ndarray) -> float | None:
     return float((ranks[:len(pos)].sum() - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)))
 
 
+# ---------------------------------------------------------------- calibration (Phase 2)
+# The raw score above is unchanged (prediction mode compares it with min_score). These helpers
+# only measure it: what hit rate a score really corresponds to, and how uncertain that is.
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
+    """95% Wilson interval for a hit rate of k out of n, in percent."""
+    if n <= 0:
+        return None
+    p = k / n
+    den = 1 + z * z / n
+    mid = (p + z * z / (2 * n)) / den
+    half = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
+    return round(max(0.0, mid - half) * 100, 1), round(min(1.0, mid + half) * 100, 1)
+
+
+def _logit(score: np.ndarray) -> np.ndarray:
+    p = np.clip(np.asarray(score, dtype=float) / 100, 1e-4, 1 - 1e-4)
+    return np.log(p / (1 - p))
+
+
+def fit_calibrator(score: np.ndarray, y: np.ndarray) -> dict | None:
+    """Platt scaling: a 1-feature logistic regression from logit(score) to the observed hit rate.
+    Fitted only on out-of-sample scores, so it learns how the model's scores behave on unseen years."""
+    if len(score) < 50 or y.min() == y.max():
+        return None
+    m = fit(_logit(score)[:, None], y.astype(float), lam=1.0)
+    return {"w": m["w"].tolist(), "mu": m["mu"].tolist(), "sd": m["sd"].tolist(), "n": int(len(score))}
+
+
+def apply_calibrator(cal: dict, score) -> np.ndarray:
+    m = {"w": np.array(cal["w"]), "mu": np.array(cal["mu"]), "sd": np.array(cal["sd"])}
+    return predict(m, _logit(np.atleast_1d(score))[:, None]) * 100
+
+
+def auc_interval(score: np.ndarray, y: np.ndarray, reps: int = 400, seed: int = 7) -> tuple[float, float] | None:
+    """95% bootstrap interval for the AUC (fixed seed, so a rebuild gives the same answer)."""
+    if len(score) < 30 or y.min() == y.max():
+        return None
+    rng = np.random.default_rng(seed)
+    vals = []
+    for _ in range(reps):
+        i = rng.integers(0, len(score), len(score))
+        a = auc(score[i], y[i])
+        if a is not None:
+            vals.append(a)
+    return (round(float(np.percentile(vals, 2.5)), 3), round(float(np.percentile(vals, 97.5)), 3)) if vals else None
+
+
+def walk_forward_calibration(years: np.ndarray, score: np.ndarray, y: np.ndarray) -> dict:
+    """Calibrate each out-of-sample year with a calibrator fitted on EARLIER out-of-sample years only,
+    and compare it with the simplest honest forecast: the earlier years' average hit rate."""
+    cal = np.full(len(score), np.nan)
+    base = np.full(len(score), np.nan)
+    folds = []
+    for yr in sorted(set(years.tolist())):
+        prior, test = years < yr, years == yr
+        c = fit_calibrator(score[prior], y[prior])
+        if c is None:
+            continue
+        cal[test] = apply_calibrator(c, score[test])
+        base[test] = y[prior].mean() * 100
+        p, b, yy = cal[test] / 100, base[test] / 100, y[test]
+        folds.append({"year": int(yr), "n": int(test.sum()), "trained_on": int(prior.sum()),
+                      "brier": _r(float(np.mean((p - yy) ** 2)), 4), "brier_base": _r(float(np.mean((b - yy) ** 2)), 4)})
+    done = ~np.isnan(cal)
+    out = {"folds": folds, "n": int(done.sum()), "brier": None, "brier_base": None, "skill": None}
+    if done.any():
+        bs = float(np.mean((cal[done] / 100 - y[done]) ** 2))
+        bb = float(np.mean((base[done] / 100 - y[done]) ** 2))
+        out.update(brier=_r(bs, 4), brier_base=_r(bb, 4), skill=_r((1 - bs / bb) * 100 if bb > 0 else None, 1))
+    return out
+
+
+def verdict(auc_ci: tuple[float, float] | None, wf: dict) -> dict:
+    """Plain-language judgement of whether the score has a proven edge out of sample."""
+    if auc_ci is None:
+        return {"edge": False, "text": "Not enough out-of-sample signals to judge the score."}
+    if auc_ci[0] <= 0.5:
+        return {"edge": False, "text": f"No proven edge: the out-of-sample AUC range {auc_ci[0]:.2f}–{auc_ci[1]:.2f} includes 0.50 "
+                                       "(a coin flip). Treat the score as context, not as a forecast."}
+    if wf.get("skill") is None:
+        return {"edge": False, "text": f"The score ranks signals better than chance (AUC {auc_ci[0]:.2f}–{auc_ci[1]:.2f}), but there "
+                                       "aren't enough later years yet to test its calibrated hit rates."}
+    if wf["skill"] <= 0:
+        return {"edge": False, "text": f"Weak: the score ranks signals better than chance (AUC {auc_ci[0]:.2f}–{auc_ci[1]:.2f}), but its "
+                                       "calibrated hit rates did not beat the plain historical average on later years."}
+    return {"edge": True, "text": f"Modest edge: AUC {auc_ci[0]:.2f}–{auc_ci[1]:.2f}, and calibrated hit rates beat the historical "
+                                  f"average by {wf['skill']:.1f}% (Brier skill) on later years."}
+
+
 # ---------------------------------------------------------------- features + outcomes
 def signal_bars(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None, tf: int, key: str) -> pd.DataFrame:
     """Strategy bars plus the extra columns the features need. Used offline and live."""
@@ -151,6 +240,8 @@ class Scorer:
             raise LookupError("This Signals analysis has no trained model (too few signals). Rebuild it.")
         self.model = {"w": np.array(prm["w"]), "mu": np.array(prm["mu"]), "sd": np.array(prm["sd"])}
         self.calibration = analysis.get("calibration", [])
+        self.calibrator = (analysis.get("model") or {}).get("calibrator")
+        self.verdict = (analysis.get("model") or {}).get("verdict")
         self.built = analysis.get("generated_at")
 
     def score(self, feats: dict) -> float:
@@ -159,7 +250,11 @@ class Scorer:
 
     def comparable(self, score: float) -> dict | None:
         c = next((c for c in self.calibration if c["from"] <= score < max(c["to"], 100.001)), None)
-        return {"band": c["band"], "n": c["n"], "hit_rate": c["hit_rate"]} if c else None
+        if not c:
+            return None
+        return {"band": c["band"], "n": c["n"], "hit_rate": c["hit_rate"], "ci": c.get("ci"),
+                "calibrated": _r(apply_calibrator(self.calibrator, score)[0]) if self.calibrator else None,
+                "verdict": self.verdict}
 
 
 def latest(strategy: str, tf: int, entry_start: str = "09:30", cutoff: str = "14:30") -> dict | None:
@@ -280,7 +375,8 @@ def build(strategy: str = strategies.DEFAULT, tf: int = 15, entry_start: str = "
         mask = (s_oos >= lo) & (s_oos < hi)
         calib.append({"band": label, "from": lo, "to": min(hi, 100), "n": int(mask.sum()),
                       "mean_score": _r(s_oos[mask].mean()) if mask.any() else None,
-                      "hit_rate": _r(y_oos[mask].mean() * 100) if mask.any() else None})
+                      "hit_rate": _r(y_oos[mask].mean() * 100) if mask.any() else None,
+                      "ci": wilson(int(y_oos[mask].sum()), int(mask.sum()))})
     reliability = []
     if len(s_oos):
         edges = np.unique(np.percentile(s_oos, np.linspace(0, 100, 11)))
@@ -288,13 +384,29 @@ def build(strategy: str = strategies.DEFAULT, tf: int = 15, entry_start: str = "
             mask = (s_oos >= a) & (s_oos <= b if b == edges[-1] else s_oos < b)
             if mask.sum():
                 reliability.append({"from": _r(a), "to": _r(b), "n": int(mask.sum()),
-                                    "mean_score": _r(s_oos[mask].mean()), "hit_rate": _r(y_oos[mask].mean() * 100)})
+                                    "mean_score": _r(s_oos[mask].mean()), "hit_rate": _r(y_oos[mask].mean() * 100),
+                                    "ci": wilson(int(y_oos[mask].sum()), int(mask.sum()))})
+    yr_oos = df.loc[oos, "year"].to_numpy()
+    wf = walk_forward_calibration(yr_oos, s_oos, y_oos)
+    auc_ci = auc_interval(s_oos, y_oos)
+    calibrator = fit_calibrator(s_oos, y_oos)
+    judged = verdict(auc_ci, wf)
+    # Per-signal calibrated estimate: walk-forward for history (no look-ahead), final calibrator for new signals.
+    df["calibrated"] = np.nan
+    for yr in sorted(set(yr_oos.tolist())):
+        prior = oos & (df["year"] < yr)
+        c = fit_calibrator(df.loc[prior, "score"].to_numpy(), y[prior.to_numpy()])
+        rows_yr = df["oos"] & (df["year"] == yr)
+        if c is not None and rows_yr.any():
+            df.loc[rows_yr, "calibrated"] = apply_calibrator(c, df.loc[rows_yr, "score"].to_numpy())
+    if calibrator is not None and fresh.any():
+        df.loc[fresh, "calibrated"] = apply_calibrator(calibrator, df.loc[fresh, "score"].to_numpy())
 
     def comparable(score):
         if score is None or np.isnan(score):
             return None
         c = next(c for c in calib if c["from"] <= score < max(c["to"], 100.001))
-        return {"band": c["band"], "n": c["n"], "hit_rate": c["hit_rate"]}
+        return {"band": c["band"], "n": c["n"], "hit_rate": c["hit_rate"], "ci": c["ci"]}
 
     say(0.9, "Describing signals")
     out_rows = [_describe(r, tf, s_cfg, comparable) for r in df.tail(400).to_dict("records")]
@@ -310,7 +422,8 @@ def build(strategy: str = strategies.DEFAULT, tf: int = 15, entry_start: str = "
         "model": {"base_rate": _r(base * 100) if base is not None else None,
                   "brier": _r(float(np.mean((s_oos / 100 - y_oos) ** 2)), 4) if len(y_oos) else None,
                   "brier_base": _r(float(np.mean((base - y_oos) ** 2)), 4) if len(y_oos) else None,
-                  "auc": _r(auc(s_oos, y_oos), 3), "folds": fold_rows, "weights": weights,
+                  "auc": _r(auc(s_oos, y_oos), 3), "auc_ci": auc_ci, "folds": fold_rows, "weights": weights,
+                  "calibration_wf": wf, "calibrator": calibrator, "verdict": judged,
                   "stop_atr": STOP_ATR, "target_atr": TARGET_ATR,
                   "params": {"w": final["w"].tolist(), "mu": final["mu"].tolist(), "sd": final["sd"].tolist()} if final else None},
         "calibration": calib, "reliability": reliability,
@@ -362,6 +475,7 @@ def _describe(r: dict, tf: int, s_cfg, comparable) -> dict:
         "risk_reward": round(TARGET_ATR / STOP_ATR, 2), "atr": round(atr, 2),
         "expires": (r["ts"] + timedelta(minutes=tf)).isoformat(),
         "indicators": indicators, "reason": reason, "regime": r["regime_label"],
+        "calibrated": _r(r.get("calibrated")) if r["confirmed"] else None,
         "comparable": comp, "outcome": r["outcome"] if r["confirmed"] else "not traded", "decided_at": r["decided_at"],
         "strong_alert": strong,
     }

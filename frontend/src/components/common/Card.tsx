@@ -15,9 +15,9 @@ export function Card({ title, icon, right, accent, children, className = "", bod
   return (
     <section className={`fade-in min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 ${bar} ${className}`}>
       {(title || right) && (
-        <div className="flex items-center justify-between gap-2 px-4 pt-4 pb-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-2">
           <h2 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200">{icon}{title}</h2>
-          {right && <div className="shrink-0 text-xs text-slate-500 dark:text-slate-400">{right}</div>}
+          {right && <div className="max-w-full shrink-0 text-xs text-slate-500 dark:text-slate-400">{right}</div>}
         </div>
       )}
       <div className={bodyClass || (title || right ? "px-4 pb-4" : "p-4 pt-5")}>{children}</div>

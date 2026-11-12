@@ -7,6 +7,7 @@ import { Card, Pill, Stat } from "../components/common/Card";
 import { Button, Field, inputCls, PageHeader, Segmented } from "../components/common/Controls";
 import { Empty, ErrorNote, Limitation, Loading, Progress } from "../components/common/States";
 import { AlertList } from "../components/layout/NotificationPanel";
+import { CalibrationCard } from "../components/trading/Calibration";
 import { isExit } from "../hooks/useAlerts";
 import { dmy, dmyhm, hm, num, pct } from "../utils/format";
 import type { HistSignal, Job } from "../types/api";
@@ -134,6 +135,8 @@ export default function Signals() {
               <Stat label="Hit rate (all)" value={pct(analysis.model.base_rate)} />
               {groups.map((g) => <Stat key={g.label} label={g.label} value={pct(g.rate)} sub={`${g.n} signals`} />)}
             </div>
+            {analysis.model.verdict ? <CalibrationCard a={analysis} />
+              : <p className="text-sm text-orange-600">This analysis was built before the calibration check existed. Rebuild it to see calibrated hit rates.</p>}
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
               <div className="overflow-x-auto xl:col-span-3">
@@ -176,7 +179,8 @@ export default function Signals() {
                   <div className="text-xs text-slate-500">
                     Result: <b className={selected.outcome === "hit" ? "text-gain" : selected.outcome === "miss" ? "text-loss" : ""}>{selected.outcome}</b>
                     {selected.decided_at && ` at ${hm(selected.decided_at)}`}
-                    {selected.comparable?.hit_rate != null && ` · similar past signals hit ${pct(selected.comparable.hit_rate)} of ${selected.comparable.n}`}
+                    {selected.comparable?.hit_rate != null && ` · similar past signals hit ${pct(selected.comparable.hit_rate)} of ${selected.comparable.n}${selected.comparable.ci ? ` (95% range ${selected.comparable.ci[0]}–${selected.comparable.ci[1]}%)` : ""}`}
+                    {selected.calibrated != null && ` · calibrated estimate ${pct(selected.calibrated)}`}
                   </div>
                 </div>
               )}
