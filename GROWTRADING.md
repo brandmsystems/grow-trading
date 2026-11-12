@@ -14,7 +14,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Historical data | **Done:** NIFTY spot and near-month futures, 1-minute, 11 Nov 2021 → today; validated. Option history (ATM ±10, CE/PE, all expiries) downloading; NSE lot-size history stored |
 | Strategies, backtest, comparison | **Done:** 7 strategies × 4 timeframes, all 28 computed with real option prices |
 | Signal engine | **Done:** scores tested only on years the model hadn't seen |
-| Paper / replay engine (crossover and prediction modes) | **Done and tested** |
+| Paper / replay engine (crossover and prediction modes) | **Done and tested.** Paper now sizes every trade from a risk budget (virtual account, risk %, premium stop-loss, daily limit) and stores the calculation with the trade |
 | Live (real-money) engine | Built with safety rails. **Every entry order waits for your confirmation by default**; tested on replays, no real order placed yet |
 | Alerts | Stored once per signal (`live_alerts`), shown on the Live page |
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
@@ -23,7 +23,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Tests | **140 pass**; React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
-**Main research finding:** after real option prices and all costs, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m, are close to break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
+**Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
 
 ---
 
@@ -258,7 +258,7 @@ Decisions you made at the gate: option scope ATM ±10 strikes, CE and PE, all we
 |---|---|
 | Synthetic test rows | **Removed:** 223,305 `SYNTH:` candles plus their fetch-log, contract, expiry and cached-run rows, exported first to `data/backups/synthetic_2026-11-12_*.csv.gz` (row counts verified before deleting). 4 synthetic engine trades kept, as trade history is never deleted. A test now checks the production database has no `SYNTH:` candles |
 | Historical lot sizes | **Done:** migration 0008 `lot_sizes`, copied from NSE/FAOP/47854, 61415, 64625 and 70616 (read from the PDFs). NIFTY: 50 → 25 (weekly 2 May 2024, monthly 30 May 2024) → 75 (weekly 2 Jan 2025, monthly 27 Feb 2025) → 65 (weekly 6 Jan 2026, monthly 27 Jan 2026). Groww's current instrument list (18 expiries, all 65) matches |
-| Backtests | Default lot size is now each contract's NSE lot size; a fixed lot size is still available. Each trade records `lot_size` and `lot_source`. All 28 configurations re-run (old fixed-65 results kept) |
+| Backtests | Default lot size is now each contract's NSE lot size; a fixed lot size is still available. Each trade records `lot_size` and `lot_source`. All 28 configurations re-run in 94 min (old fixed-65 results kept): still 2 of 84 positive, both break-even; EMA 9/21 15m ATM buy −₹1,58,676 (was −₹1,85,783). See [docs/BACKTESTING.md](docs/BACKTESTING.md) |
 | Option history | **New** `market_data/options_history.py`: for every stored session, CE and PE within 10 strikes of that day's ATM (from the day's spot low/high), for every expiry a backtest can pick. 21,702 contracts, 264 expiries, 172,120 contract-days. Resumable (only never-requested days are fetched), stoppable, failed requests reported and retried on the next run; 0-row days recorded, never filled |
 | Futures freshness | **Fixed:** the daily live refresh now updates futures as well as spot, and today's completed futures candles are stored as they are read |
 | Data page | Spot, futures and options cards (counts, range, latest candle, last successful download), intervals, option coverage by month with download/resume/stop, NSE lot-size table |
@@ -266,6 +266,9 @@ Decisions you made at the gate: option scope ATM ±10 strikes, CE and PE, all we
 | Tests | New `tests/test_options_data.py` and two backtest tests (see CHANGELOG for counts) |
 
 **Not available from any source used:** historical IV/Greeks snapshots (Groww has no option-chain history). OI is stored with every option candle.
+
+### Paper trading risk management (12 Nov 2026)
+Requested as prompt 13. Paper only; live and replay unchanged. Every paper trade calculates risk %, risk amount, stop-loss, risk per lot (with slippage and charges), lots and quantity **before** the simulated fill and stores it in `live_trades.risk`. Failed checks give NO TRADE with the exact reasons. Premium stop-loss enforced (ATR × delta by default); daily limit halts new entries until the next session; virtual account with a running balance (`paper_accounts`). Details: [docs/STRATEGY.md](docs/STRATEGY.md#paper-trading-risk-management-12-nov-2026), [docs/FRONTEND.md](docs/FRONTEND.md). Tests: 56 new.
 
 ## 11. Known issues and pending work
 Full list: [docs/TODO.md](docs/TODO.md).

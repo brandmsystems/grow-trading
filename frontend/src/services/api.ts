@@ -1,7 +1,7 @@
 // Typed client for the Flask API. Every page goes through these functions (no direct fetch elsewhere).
 import type {
   ApiErr, BtChart, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
-  LiveTrade, LotSize, OptionsCoverage, Research, SignalAnalysis,
+  LiveTrade, LotSize, OptionsCoverage, PaperAccount, Research, RiskCalc, SignalAnalysis,
 } from "../types/api";
 
 export class ApiError extends Error {
@@ -46,6 +46,10 @@ export interface DashboardQuery { tf: number; mode: string; exec_mode: string; c
 
 export const getDashboard = (q: DashboardQuery) =>
   api<Dashboard>(`/api/live/dashboard?${qs({ tf: q.tf, mode: q.mode, exec_mode: q.exec_mode, risk_pct: q.risk_pct, capital: q.capital })}`);
+export const getPaperTrades = () => api<LiveTrade[]>("/api/live/trades?mode=paper");
+export const getPaperAccount = () => api<PaperAccount>("/api/paper/account");
+export const resetPaperAccount = (capital: number) => request<never>("/api/paper/account", { json: { capital, confirm: "RESET" } });
+export const riskCalc = (body: Record<string, number | string | null | undefined>) => api<RiskCalc>("/api/paper/risk-calc", { json: body });
 export const getLiveTrades = (mode: string, day: string) => api<LiveTrade[]>(`/api/live/trades?${qs({ mode, day })}`);
 export const startEngine = (config: Partial<EngineConfig>, confirm = "", replay_day?: string, replay_speed = 120) =>
   api<Dashboard>("/api/live/start", { json: { config, confirm, replay_day, replay_speed } });

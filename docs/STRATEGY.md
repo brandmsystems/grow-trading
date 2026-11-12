@@ -66,3 +66,34 @@ All rates are editable in Backtest settings.
 - **Risk budget:** capital × risk %.
 - **Risk per lot:** (entry − stop) × lot size, plus charges. Live and paper use the contract's current lot size from Groww's instrument list; backtests use the NSE lot size of each historical contract.
 - **Cost per lot:** premium × lot size, plus charges.
+
+## Paper trading risk management (12 Nov 2026)
+Paper trading only. Live and replay keep fixed lots and are unchanged; nothing here can place a Groww order.
+
+**Your decisions:** premium stop-loss enforced on paper trades; default stop ATR × delta; after a daily-limit halt, trading resumes at the next session; the virtual account carries a running balance.
+
+**Before every paper entry** (`Engine._paper_risk`, using `options/sizing.risk_size`):
+1. Available virtual capital = account balance − open investment (`paper_account.state`).
+2. Risk % from the session settings (presets: Conservative 0.5%, Low 1%, Moderate 1.5%, High 2%, or custom). These are settings, not safe levels.
+3. Actual option premium: the contract's Groww LTP. If it's unavailable: **NO TRADE**.
+4. Stop-loss premium:
+   - **ATR (default):** premium − |delta| × ATR multiple (1) × NIFTY ATR(14) of the signal timeframe; delta from Groww's option chain.
+   - **%:** premium × (1 − stop %).
+   - Sells mirror this above the premium. If ATR or delta is unavailable: **NO TRADE**.
+   - Target (shown for risk/reward only, not enforced) = premium ± |delta| × 2 × ATR, or 2× the % distance.
+5. Risk amount = available capital × risk % ÷ 100.
+6. Risk per lot = (entry − stop) × lot size + slippage allowance + charges, i.e. the full loss of one lot closed at the stop (`charges.round_trip`). Lot size is the contract's own.
+7. Lots = floor(risk amount ÷ risk per lot), capped by the cash available after the minimum balance (buys) and by max lots. Quantity = lots × lot size.
+8. **Checks:**
+   - the daily loss limit isn't already reached
+   - the trade's maximum loss fits in what's left of today's limit
+   - balance and maximum lots
+   - open positions < maximum
+9. **NO TRADE** if one lot exceeds the risk budget, the capital is insufficient, or any check fails. The exact reasons (every failed check) and the full calculation are stored in a HOLD alert.
+10. Otherwise the simulated fill happens, and the full calculation is saved in `live_trades.risk`, with `stop_premium`, `target_premium` and `paper_account_id`.
+
+**While a paper position is open:** it exits when the option premium reaches `stop_premium` (`stop_loss`), as well as on the opposite crossover and the 15:00 square-off.
+
+**Daily limit:** the smaller of `max_daily_loss` (₹) and `daily_risk_pct` of the day's starting capital. Realised + open P&L reaching it squares off and halts new entries until the next session.
+
+**Selling (ATM sell):** option-selling margin isn't modelled, so sells are sized by the risk budget and max lots only.

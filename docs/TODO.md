@@ -35,6 +35,8 @@
 - **Option history download:** runs about 110 requests a minute (Groww rate limit). Until it finishes, the Market Data page shows partial option coverage.
 - **Download status after a restart:** starting the app marks any download still `running` as `interrupted`. A download run in a separate process keeps going and records its real final status when it ends.
 - **No historical IV/Greeks:** Groww has no option-chain history; OI is stored with each option candle.
+- **Paper risk:** the engine holds one position at a time, so `max_open_positions` above 1 has no effect yet. Option-selling margin isn't modelled (sells are sized by risk and max lots only). The target premium is shown for risk/reward but not enforced.
+- **Paper stop vs backtest:** paper trades now exit at a premium stop-loss; backtests and replay have no such stop, so paper results will differ from them.
 - **Prediction rule:** its option P&L hasn't been backtested yet; a "Prediction score ≥ X" Backtest filter is proposed.
 - **No strategy profitable after costs:** none of the 28 configurations was profitable over five years except EMA 20/50 30m (about break-even). See [BACKTESTING.md](BACKTESTING.md).
 

@@ -8,6 +8,7 @@ import { dmy, hm, inr, num, pnlClass, todayIST } from "../../utils/format";
 import { Card, Pill, Stat } from "../common/Card";
 import { Button, Field, inputCls, Segmented } from "../common/Controls";
 import { PendingOrder } from "./PendingOrder";
+import { PRESETS } from "./RiskManagement";
 
 const STATE = { stopped: ["Stopped", "neutral"], waiting: ["Waiting for market", "info"], running: ["Running", "good"], halted: ["Halted", "warn"], error: ["ERROR: check positions", "bad"] } as const;
 
@@ -77,10 +78,32 @@ export function EnginePanel() {
               <Field label="Min score">
                 <input type="number" min={0} max={100} step={5} className={inputCls} value={cfg.min_score} onChange={(e) => set({ min_score: Number(e.target.value) })} />
               </Field>
-            ) : (
+            ) : cfg.trade_mode !== "paper" ? (
               <Field label="Lots">
                 <input type="number" min={1} className={inputCls} value={cfg.lots} onChange={(e) => set({ lots: Math.max(1, Number(e.target.value)) })} />
               </Field>
+            ) : <div />}
+            {cfg.trade_mode === "paper" && (
+              <div className="col-span-2 space-y-2 rounded-xl border border-orange-300 p-3 dark:border-orange-900">
+                <div className="text-xs font-semibold uppercase text-orange-600">Risk per trade (lots are calculated)</div>
+                <Segmented value={PRESETS.find((x) => x.pct === cfg.risk_pct)?.key ?? "custom"}
+                  onChange={(v) => { const pr = PRESETS.find((x) => x.key === v); if (pr) set({ risk_pct: pr.pct }); }}
+                  options={[...PRESETS.map((x) => ({ value: x.key, label: `${x.pct}%` })), { value: "custom", label: "Custom" }]} />
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Risk per trade %"><input type="number" min={0.05} max={100} step={0.05} className={inputCls} value={cfg.risk_pct} onChange={(e) => set({ risk_pct: Number(e.target.value) })} /></Field>
+                  <Field label="Daily risk %"><input type="number" min={0} max={100} step={0.5} className={inputCls} value={cfg.daily_risk_pct} onChange={(e) => set({ daily_risk_pct: Number(e.target.value) })} /></Field>
+                  <Field label="Max lots / trade"><input type="number" min={1} className={inputCls} value={cfg.max_lots} onChange={(e) => set({ max_lots: Math.max(1, Number(e.target.value)) })} /></Field>
+                  <Field label="Max open positions"><input type="number" min={1} max={1} className={inputCls} value={cfg.max_open_positions} onChange={(e) => set({ max_open_positions: Math.max(1, Number(e.target.value)) })} /></Field>
+                  <Field label="Keep at least ₹"><input type="number" min={0} step={5000} className={inputCls} value={cfg.min_balance} onChange={(e) => set({ min_balance: Math.max(0, Number(e.target.value)) })} /></Field>
+                  <Field label="Stop-loss">
+                    <select className={inputCls} value={cfg.stop_mode} onChange={(e) => set({ stop_mode: e.target.value as EngineConfig["stop_mode"] })}>
+                      <option value="atr">ATR × delta</option><option value="pct">% of premium</option></select></Field>
+                  {cfg.stop_mode === "atr"
+                    ? <Field label="ATR multiple"><input type="number" min={0.25} step={0.25} className={inputCls} value={cfg.stop_atr} onChange={(e) => set({ stop_atr: Number(e.target.value) })} /></Field>
+                    : <Field label="Stop % below premium"><input type="number" min={1} max={99} className={inputCls} value={cfg.stop_pct} onChange={(e) => set({ stop_pct: Number(e.target.value) })} /></Field>}
+                </div>
+                <p className="text-[11px] text-slate-500">Paper trades exit when the option premium reaches the stop-loss. The engine holds one position at a time.</p>
+              </div>
             )}
             {cfg.signal_mode === "prediction" && (
               <Field label="Strategy" className="col-span-2">

@@ -95,6 +95,9 @@ export interface EngineConfig {
   max_daily_loss: number; max_trades_per_day: number;
   signal_mode: "cross" | "prediction"; strategy: string; min_score: number;
   order_confirmation: "manual" | "auto";
+  // paper trading risk management (ignored by live and replay)
+  risk_pct: number; daily_risk_pct: number; max_open_positions: number; max_lots: number; min_balance: number;
+  stop_mode: "atr" | "pct"; stop_atr: number; stop_pct: number;
 }
 
 export type EngineState = "stopped" | "waiting" | "running" | "halted" | "error";
@@ -122,6 +125,35 @@ export interface LiveTrade {
   signal_ts: string | null; entry_ts: string | null; entry_price: number | null;
   exit_ts: string | null; exit_price: number | null; exit_reason: string | null;
   gross: number | null; net: number | null; status: "OPEN" | "CLOSED";
+  slippage?: number | null; charges?: Record<string, number> | null;
+  risk?: RiskCalc | null; stop_premium?: number | null; target_premium?: number | null; paper_account_id?: number | null;
+}
+
+/** The paper risk calculation (options/sizing.risk_size + the engine's checks). */
+export interface RiskCalc {
+  decision: "TRADE" | "NO TRADE"; reason: string | null; side?: string;
+  capital: number; risk_pct: number; risk_amount?: number; available?: number | null; min_balance?: number; max_lots?: number | null;
+  entry: number | null; stop: number | null; target?: number | null; lot_size: number | null;
+  stop_distance?: number; risk_per_lot?: number; slippage_per_lot?: number; charges_per_lot?: number; cost_per_lot?: number | null;
+  lots_by_risk?: number; lots_by_cash?: number | null; lots: number; qty: number; limited_by?: string;
+  investment?: number; entry_charges?: number | null; charges?: number; slippage?: number; max_loss?: number; balance_after?: number | null;
+  target_profit?: number; risk_reward?: number | null; margin_note?: string;
+  stop_method?: string; checks?: Record<string, boolean>; contract?: string; signal_ts?: string; calculated_at?: string;
+  balance?: number; day_start_capital?: number; daily_limit?: number | null; pnl_today?: number;
+}
+
+export interface PaperRiskSettings {
+  risk_pct: number; daily_risk_pct: number; max_daily_loss: number; max_trades_per_day: number; max_open_positions: number;
+  max_lots: number; min_balance: number; stop_mode: "atr" | "pct"; stop_atr: number; stop_pct: number;
+}
+
+export interface PaperAccount {
+  account_id: number; starting_capital: number; started_at: string; balance: number; available: number; invested: number;
+  realised_total: number; trades_total: number; day: string; day_start_capital: number; realised_today: number;
+  mtm: number | null; pnl_today: number; daily_limit: number | null; remaining_risk: number | null; risk_used_pct: number | null;
+  open_risk: number; consecutive_losses: number; max_drawdown: number; max_drawdown_pct: number | null;
+  risk_pct: number; risk_amount: number; limit_reached: boolean; engine_running: boolean;
+  presets: Record<string, number>; settings: PaperRiskSettings; defaults: PaperRiskSettings;
 }
 
 // ------------------------------------------------------------------ backtest

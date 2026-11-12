@@ -34,14 +34,21 @@
 ## Comparison (`services/backtest/research.py`, Compare page)
 Every strategy × timeframe (7 × 4 = 28) runs over all stored data, and a compact summary is kept in `strategy_results`. **Walk-forward:** each year uses the setup with the best net P&L on earlier years only.
 
-### Results (11 Nov 2021 → 11 Nov 2026, 1 lot of 65, after all costs)
-- **All 28 configurations are complete.** Only two of 84 strategy × mode results were positive:
-  - EMA 20/50 30m ATM sell: +₹8,807
-  - EMA 20/50 30m ATM buy: +₹2,048 (profit factor ≈ 1.0)
-- **EMA 9/21 15m ATM buy:** −₹1,80,326 over 982 trades. It lost every year from 2021 to 2025.
-- **5-minute ATM buy:** −₹3.3 to −₹7.7 lakh.
-- **1-minute ATM buy:** −₹12.7 to −₹49.2 lakh, because there are far more trades and so far more costs.
-- **Walk-forward totals:** ATM buy −₹52,537; ITM 5 buy −₹82,819; ATM sell −₹52,684.
+### Results with NSE lot sizes (11 Nov 2021 → 11 Nov 2026, 1 lot, after all costs; re-run 12 Nov 2026)
+Each trade uses its contract's NSE lot size (50, 25, 75 or 65; see `lot_sizes`). The earlier fixed-65 results are kept in `strategy_results` for comparison.
+
+| Result | NSE lot sizes | Fixed lot of 65 |
+|---|---|---|
+| Positive strategy × mode results (of 84) | 2 | 2 |
+| EMA 20/50 30m ATM sell | +₹1,674 (PF 1.008) | +₹8,807 |
+| EMA 20/50 30m ATM buy | +₹571 (PF 1.003) | +₹2,048 |
+| EMA 9/21 15m ATM buy (984 trades) | −₹1,58,676 (PF 0.84) | −₹1,85,783 |
+| 5-minute ATM buy, range across strategies | −₹2.6 to −₹6.3 lakh | −₹3.3 to −₹7.7 lakh |
+| 1-minute ATM buy, range across strategies | −₹11.5 to −₹43.0 lakh | −₹12.7 to −₹49.2 lakh |
+| Walk-forward (out-of-sample) ATM buy / ITM 5 buy / ATM sell | −₹37,883 / −₹45,012 / −₹44,519 | −₹52,537 / −₹82,819 / −₹52,684 |
+
+- **EMA 9/21 15m ATM buy by year (NSE lots):** 2021 −₹27,074; 2022 −₹29,580; 2023 −₹27,181; 2024 −₹29,037; 2025 −₹50,946; 2026 +₹5,142.
+- **Why losses shrank:** from May 2024 to Dec 2024 the real lot was 25 (not 65), and before that 50, so those years carried smaller positions. 2025 used 75. The conclusion doesn't change: the two EMA 20/50 30m results are break-even, and everything else lost money after costs.
 
 Signal engine at 15m: base hit rate 26%; scores of 50+ hit 38% (29 signals); AUC 0.587.
 

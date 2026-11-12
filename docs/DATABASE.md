@@ -17,6 +17,7 @@
 | 0006_prediction_trades | Score/stop/target/ATR columns on `live_trades` |
 | 0007_live_alerts | `live_alerts` |
 | 0008_lot_sizes | `lot_sizes`, seeded from NSE circulars 47854, 61415, 64625 and 70616 |
+| 0009_paper_risk | `paper_accounts`; `live_trades.risk` (JSONB), `stop_premium`, `target_premium`, `paper_account_id` |
 
 ## Tables
 | Table | Key | Holds |
@@ -31,7 +32,8 @@
 | `bt_runs` | param_hash | Cached backtest results and signal analyses (JSONB) |
 | `strategy_results` | (strategy, timeframe, settings_hash) | Compact five-year comparison results |
 | `live_sessions` | id | Each engine start: mode, config, stop reason |
-| `live_trades` | id | Engine trades: contract, entry/exit, P&L, charges, signal mode, score, stop/target |
+| `live_trades` | id | Engine trades: contract, entry/exit, P&L, charges, signal mode, score, stop/target. Paper trades also store the pre-trade risk calculation (`risk`), the enforced premium stop, the target and their virtual account |
+| `paper_accounts` | id | Virtual paper accounts: starting capital, start and close time. The active one has `closed_at` NULL; balance = capital + closed paper net P&L booked to it |
 | `live_events` | id | Engine event log |
 | `live_alerts` | id, unique `alert_key` | Notifications, stored once per signal |
 | `schema_migrations` | version | Applied migrations |

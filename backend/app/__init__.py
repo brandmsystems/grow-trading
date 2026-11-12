@@ -21,7 +21,7 @@ def create_app() -> Flask:
         data_manager.recover_interrupted()
     except Exception as exc:  # the account page still works without Postgres
         log.error("Database init failed: %s", exc)
-    from app.api import account, backtest, data, frontend, live, pages, research
-    for mod in (pages, account, backtest, data, research, live, frontend):
+    from app.api import account, backtest, data, frontend, live, pages, paper, research
+    for mod in (pages, account, backtest, data, research, live, paper, frontend):
         app.register_blueprint(mod.bp)
     return app

@@ -60,8 +60,14 @@ def live_trades():
 def make(cfg_over=None, broker=None, start_day=None):
     market = ReplayMarket("synthetic", START - timedelta(days=12),
                           datetime.combine(start_day or START, time(9, 0)))
+    over = cfg_over or {}
+    # These tests check engine mechanics with a fixed number of lots. Since 12 Nov paper trades are
+    # sized by the risk module (tested in test_paper_risk.py); these settings make it size exactly
+    # `lots` and keep its premium stop and daily limit out of the way. The calculation still runs.
+    fixed_lots = {"risk_pct": 100, "max_lots": over.get("lots", 1), "stop_mode": "pct", "stop_pct": 99,
+                  "daily_risk_pct": 0}
     cfg = le.EngineConfig(**{"exec_mode": "ATM_BUY", "max_daily_loss": 0, "max_trades_per_day": 100,
-                             **(cfg_over or {})})
+                             **fixed_lots, **over})
     eng = le.Engine(cfg, market, broker or PaperBroker(market))
     eng.start(threaded=False)
     return eng, market
@@ -147,7 +153,9 @@ def test_failed_exit_is_retried():
 
 
 def test_daily_loss_limit_halts():
-    eng, market = make({"max_daily_loss": 1})   # any loss trips it
+    # Replay: the open-loss halt as live and replay use it. In paper mode a ₹1 limit now refuses every
+    # entry beforehand (maximum loss > remaining limit); that and the paper halt are in test_paper_risk.py.
+    eng, market = make({"max_daily_loss": 1, "trade_mode": "replay"})   # any loss trips it
     days = [d for d in (START + timedelta(days=i) for i in range(5, 26)) if d.weekday() < 5]
     for d in days:
         run_days(eng, market, [d])

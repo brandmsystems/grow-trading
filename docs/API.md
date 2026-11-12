@@ -66,6 +66,15 @@
 
 The status payload includes `pending_order` (id, side, contract, qty, LTP, signal time, `expires`) while a live order waits for confirmation.
 
+## Paper risk: `api/paper.py`
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/paper/account` | Virtual account (balance, available, starting capital) and today's risk monitor: starting daily capital, P&L, daily limit, remaining risk, consecutive losses, max drawdown, open-position risk, risk used %; presets; current and default risk settings |
+| POST | `/api/paper/account` | Body `{"capital", "confirm": "RESET"}`: start a new virtual account (409 while a paper position is open). Old trades keep their account |
+| POST | `/api/paper/risk-calc` | Body `capital`, `risk_pct`, `entry`, `stop` or `stop_pct`, `lot_size`, `max_lots`, optional `side`, `available`, `min_balance`, `target`: the same calculation the paper engine runs (decision, reason and every figure) |
+
+Engine config adds paper-only fields: `risk_pct` (1), `daily_risk_pct` (3), `max_open_positions` (1), `max_lots` (10), `min_balance` (0), `stop_mode` (`atr`/`pct`), `stop_atr` (1), `stop_pct` (30). `/api/live/trades` rows include `risk`, `stop_premium`, `target_premium`, `paper_account_id`.
+
 ## React app (`api/frontend.py`)
 `GET /app`, `/app/<path>` serve the built React app from `frontend/dist`. Unknown paths fall back to `index.html` for client-side routes. Nothing outside `dist` is ever served. If the app hasn't been built, it returns 404 with build instructions.
 

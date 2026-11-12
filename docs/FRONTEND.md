@@ -49,6 +49,15 @@ Light and dark themes are both supported; dark is the default.
 | Historical Charts | `/app/history` | `GET /api/data/overview`, `GET /api/data/candles` | Stored NIFTY candles at 1/5/15/30 min with optional EMA 9/21, date range, earlier/later/latest, zoom and pan |
 | Account & Settings | `/app/account` | `GET /api/status, /api/profile, /api/funds`, `POST /api/login` | Groww connection and re-login; funds; profile; theme, sound and browser notification permission; order calculator defaults |
 
+**Paper trading risk (Live Trading page, paper mode):**
+- **Risk Management card** (replaces the Order Calculator in paper mode):
+  - presets 0.5/1/1.5/2% or custom
+  - inputs: virtual capital (defaults to available balance), risk %, entry premium (defaults to the recommended contract's Groww premium), stop-loss as % below or a price, lot size (the contract's), max lots
+  - shows the 11 figures and TRADE / NO TRADE with the reason, recalculated as you type (`POST /api/paper/risk-calc`, the engine's own function)
+- **Daily Risk card:** starting daily capital, today's P&L, daily loss limit, remaining risk budget, consecutive losses, max drawdown, open-position risk, risk used % with a bar, next trade's risk, virtual account balance/available and **Reset account** (type RESET; disabled while the paper engine runs).
+- **Paper Trades & Risk:** every paper trade with risk %, capital, risk ₹, stop distance, lots × lot size, max loss, gross, charges + slippage, net and R:R. Clicking a trade shows the full risk calculation saved at entry, its checks, exit reason and net vs max loss.
+- **Trading Controls (paper):** risk per trade (presets/custom), daily risk %, max lots, max open positions, minimum balance, stop-loss method (ATR × delta or % of premium) and its value. Lots are calculated, not entered.
+
 **One shared live poll:** `context/LiveContext.tsx` polls `/api/live/dashboard` once for the whole app, every 2 s while the market is open or the engine runs, otherwise every 10 s, with backoff when the backend is unreachable. The header, Overview, Live Trading, Signals and Options all read that one response, so changing pages never duplicates calls.
 
 ## Notifications

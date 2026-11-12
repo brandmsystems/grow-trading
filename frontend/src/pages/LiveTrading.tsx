@@ -6,6 +6,8 @@ import { PremiumCard, SpotCard } from "../components/market/MarketCards";
 import { RecommendationCard } from "../components/trading/RecommendationCard";
 import { OrderCalculator } from "../components/trading/OrderCalculator";
 import { EnginePanel } from "../components/trading/EnginePanel";
+import { DailyRisk, RiskCalculator, usePaperAccount } from "../components/trading/RiskManagement";
+import { PaperTrades } from "../components/trading/PaperTrades";
 import { CandleChart, type ChartMarker, type PriceLevel } from "../components/charts/CandleChart";
 import { AlertList } from "../components/layout/NotificationPanel";
 import { Card } from "../components/common/Card";
@@ -17,6 +19,9 @@ export default function LiveTrading() {
   const { data, trades, fresh } = useLive();
   const { settings, update } = useSettings();
   const running = data && data.state !== "stopped";
+  const paper = (running ? data?.config?.trade_mode : settings.engine.trade_mode) === "paper";
+  const tradeKey = `${trades.length}|${trades.filter((t) => t.status === "CLOSED").length}`;
+  const account = usePaperAccount(tradeKey);
 
   // Engine entries/exits from today's trades, drawn on the chart.
   const markers = useMemo<ChartMarker[]>(() => trades.flatMap((t) => {
@@ -73,10 +78,17 @@ export default function LiveTrading() {
         </div>
         <div className="space-y-4">
           <RecommendationCard data={data} flash={!!fresh} />
-          <OrderCalculator data={data} />
+          {paper ? <RiskCalculator data={data} acct={account.acct} /> : <OrderCalculator data={data} />}
           <EnginePanel />
         </div>
       </div>
+
+      {paper && (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <DailyRisk acct={account.acct} err={account.err} reload={() => void account.reload()} />
+          <div className="xl:col-span-2"><PaperTrades refreshKey={tradeKey} /></div>
+        </div>
+      )}
 
       <Card title="Notifications">
         <AlertList alerts={data.alerts ?? []} freshId={fresh?.id} limit={12} />

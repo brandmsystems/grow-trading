@@ -162,6 +162,20 @@ class GrowwMarket:
         self._instr = (day, df)
         return df
 
+    def option_delta(self, c: Contract) -> float | None:
+        """The contract's delta from Groww's option chain (cached 30 s per expiry)."""
+        from app.services.options.contracts import chain_row
+        from app.utils.numbers import to_float
+        key = c.expiry
+        cached = getattr(self, "_chain_cache", {}).get(key)
+        if not cached or (_time.monotonic() - cached[0]) > 30:
+            chain = self._gc.call("get_option_chain", exchange="NSE", underlying="NIFTY",
+                                  expiry_date=c.expiry.isoformat(), timeout=10)
+            self._chain_cache = {**getattr(self, "_chain_cache", {}), key: (_time.monotonic(), chain)}
+            cached = self._chain_cache[key]
+        row = chain_row(cached[1], c.strike, c.opt_type)
+        return to_float(((row or {}).get("greeks") or {}).get("delta"))
+
     def contract(self, day: date, expiry: date, strike: float, opt_type: str) -> Contract | None:
         df = self._instruments(day)
         m = df[(df["expiry"] == expiry) & (df["strike_price"].astype(float) == float(strike))

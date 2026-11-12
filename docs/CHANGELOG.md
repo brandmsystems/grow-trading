@@ -2,6 +2,16 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: Paper trading risk management
+- **Your decisions:** premium stop-loss enforced on paper trades (ATR × delta by default, or % of premium); daily-limit halt lasts until the next session; virtual account with a running balance.
+- **Sizing core:** `options/sizing.risk_size` (risk amount, risk per lot incl. slippage and charges, lots capped by risk, cash after minimum balance and max lots, TRADE / NO TRADE with reason). The Live dashboard's `size_position` now calls it (its formula and results are unchanged).
+- **Engine (paper only):** before every entry, `_paper_risk` runs the calculation on the contract's live premium, plus the daily-limit, remaining-daily-risk, balance, lot and open-position checks; failures are a HOLD alert with every reason and the calculation. Accepted trades store `risk`, `stop_premium`, `target_premium` and `paper_account_id`. Premium stop-loss exits; daily limit = min(₹ limit, daily risk % of the day's starting capital). Live and replay unchanged.
+- **Virtual account:** `paper_accounts` (migration 0009), `trading/paper_account.py`; `GET/POST /api/paper/account`, `POST /api/paper/risk-calc`.
+- **Market data:** `GrowwMarket.option_delta` (option chain, cached 30 s) for the ATR stop.
+- **Frontend:** Risk Management, Daily Risk and Paper Trades & Risk cards; risk settings in Trading Controls.
+- **Tests:** `tests/test_paper_risk.py` (56): 0.5/1/1.5/2% and custom, capital amounts, premiums, stop distances, lot sizes 25/50/65/75, insufficient capital, minimum balance, one lot over budget, max lots, missing premium/stop, slippage and charges included, every trade stores its calculation, premium stop exits, ATR stop with and without delta, remaining-daily-risk refusal, daily limit halt and next-day resume, open-position limit, replay unchanged, API.
+- **Existing engine tests:** they test mechanics in paper mode with fixed lots, which paper trading no longer uses. Their shared `make()` helper now passes risk settings that size exactly `lots` and keep the premium stop and daily limit out of the way (the calculation still runs); `test_daily_loss_limit_halts` runs in replay mode, where the open-loss halt still applies as before. No assertion was changed. **219 passed** (163 + 56). React build passes; Live page checked at 1440 and 390 px with no overflow or console errors.
+
 ## 12 Nov: Phase 1, historical data
 - **Synthetic rows:** backed up to `data/backups/synthetic_2026-11-12_*.csv.gz` (counts verified), then deleted from the production database: 223,305 candles, 515 fetch-log rows, 316 contracts, 18 expiries, 1 cached run. 4 synthetic engine trades kept.
 - **Lot sizes:** migration `0008_lot_sizes` with NIFTY lot sizes from NSE/FAOP/47854, 61415, 64625 and 70616, by expiry cycle and first expiry. `services/options/lot_sizes.py` looks up a contract's lot size. Groww's current instrument list matches (65 on all 18 listed expiries).

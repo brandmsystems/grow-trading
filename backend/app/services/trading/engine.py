@@ -34,8 +34,11 @@ from app.utils.timeutil import parse_hm
 from app.services.notifications import alerts
 from app.services.trading import charges as costs
 from app.database import db
+from app.services.options import sizing
+from app.services.strategy import indicators as ind
 from app.services.strategy import signals
 from app.services.strategy import strategies
+from app.services.trading import paper_account
 from app.services.strategy import rules as st
 from app.services.market_data.live import Contract
 from app.services.trading.brokers import OrderUnknown
@@ -64,6 +67,15 @@ class EngineConfig:
     min_score: float = 50.0            # prediction mode: minimum score to open a trade
     order_confirmation: str = "manual" # live mode: manual = you confirm each entry order; auto = engine places it
     costs: dict = field(default_factory=lambda: costs.DEFAULT_COSTS.to_dict())
+    # Paper trading only (live and replay use `lots` and are unaffected):
+    risk_pct: float = 1.0              # risk per trade, % of available virtual capital
+    daily_risk_pct: float = 3.0        # daily loss limit, % of the day's starting capital (0 = off)
+    max_open_positions: int = 1        # the engine holds one position at a time
+    max_lots: int = 10                 # cap per trade
+    min_balance: float = 0.0           # ₹ that must stay available after an entry
+    stop_mode: str = "atr"             # atr: premium - delta x stop_atr x NIFTY ATR | pct: premium x (1 - stop_pct %)
+    stop_atr: float = 1.0
+    stop_pct: float = 30.0
 
     def validate(self) -> "EngineConfig":
         if self.trade_mode not in ("paper", "live", "replay"):
@@ -91,6 +103,22 @@ class EngineConfig:
         if not 0 <= self.min_score <= 100:
             raise ValueError("minimum score must be between 0 and 100")
         self.costs = {**costs.DEFAULT_COSTS.to_dict(), **{k: float(v) for k, v in (self.costs or {}).items()}}
+        self.risk_pct, self.daily_risk_pct = float(self.risk_pct), float(self.daily_risk_pct)
+        if not 0 < self.risk_pct <= 100:
+            raise ValueError("risk per trade must be above 0% and at most 100%")
+        if not 0 <= self.daily_risk_pct <= 100:
+            raise ValueError("daily risk must be between 0% and 100%")
+        self.max_open_positions, self.max_lots = int(self.max_open_positions), int(self.max_lots)
+        if self.max_open_positions < 1 or self.max_lots < 1:
+            raise ValueError("maximum open positions and maximum lots must be at least 1")
+        self.min_balance = float(self.min_balance)
+        if self.min_balance < 0:
+            raise ValueError("minimum balance can't be negative")
+        if self.stop_mode not in ("atr", "pct"):
+            raise ValueError("stop_mode must be atr or pct")
+        self.stop_atr, self.stop_pct = float(self.stop_atr), float(self.stop_pct)
+        if self.stop_atr <= 0 or not 0 < self.stop_pct < 100:
+            raise ValueError("stop ATR multiple must be positive and stop % between 0 and 100")
         return self
 
 
@@ -126,6 +154,8 @@ class Engine:
         self.last_spot: dict | None = None        # {"ts", "price"} latest NIFTY quote
         self.pending: dict | None = None          # live entry order waiting for the user's confirmation
         self.conn_error: str | None = None
+        self.last_atr: float | None = None        # NIFTY ATR of the latest signal bar (paper stop-loss)
+        self.paper = self.cfg.trade_mode == "paper"
 
     # ------------------------------------------------------------ logging / persistence
     def log(self, msg: str, level: str = "info"):
@@ -152,6 +182,7 @@ class Engine:
                     nifty=round(leg.signal_close, 2), reason=why, **extra)
 
     def _insert_trade(self, row: dict) -> int:
+        row = {k: (json.dumps(v, default=str) if isinstance(v, dict) else v) for k, v in row.items()}
         cols = ", ".join(row)
         vals = ", ".join(f":{k}" for k in row)
         with self.dbe.begin() as c:
@@ -184,6 +215,7 @@ class Engine:
                 "qty": r["qty"], "entry_price": r["entry_price"], "entry_ts": r["entry_ts"],
                 "signal_ts": r["signal_ts"], "entry_ref": r["signal_close"], "score": r.get("score"),
                 "stop_ref": r.get("stop_ref"), "target_ref": r.get("target_ref"), "atr_ref": r.get("atr_ref"),
+                "stop_premium": r.get("stop_premium"), "target_premium": r.get("target_premium"), "risk": r.get("risk"),
             }
             self.log(f"Resumed open {r['side']} position {r['trading_symbol']} x{r['qty']} from earlier", "warn")
         # stale OPEN trades from previous days can't be managed (MIS is auto squared off by the broker)
@@ -280,6 +312,7 @@ class Engine:
             if self.position and self.exit_failures:
                 self._exit(self.position.get("pending_reason", "retry"))   # retry a failed exit
             self._risk_check(now)
+            self._premium_stop()
 
             nxt = self._next_bar_close(self.processed_until)
             if nxt is not None and now >= nxt + timedelta(seconds=self.cfg.bar_grace_sec):
@@ -335,6 +368,9 @@ class Engine:
 
         bars = st.add_emas(st.resample(spot, self.cfg.timeframe))
         bars = bars[bars["close_ts"] <= pd.Timestamp(bar_close)]
+        if not bars.empty:   # paper stop-loss: NIFTY ATR of the signal timeframe, as the dashboard uses
+            atr = ind.atr(bars).iloc[-1]
+            self.last_atr = float(atr) if pd.notna(atr) and atr > 0 else None
         today = bars[bars["day"] == self.day]
         self.bars_today = [{"t": r.start.isoformat(), "c_ts": r.close_ts.isoformat(), "o": r.open, "h": r.high,
                             "l": r.low, "c": r.close, "e9": round(r.ema9, 2), "e21": round(r.ema21, 2)}
@@ -429,6 +465,7 @@ class Engine:
                 continue
             self.log(f"{word} signal {ts:%H:%M} scored {score:.1f} ({signals.band(score)}){hist_txt}. "
                      f"NIFTY ref {entry:.2f}, stop {stop:.2f}, target {target:.2f}")
+            self.last_atr = atr
             leg = st.Leg(day=self.day, direction=d, entry_ts=ts, signal_close=entry,
                          signal_bar_start=pd.Timestamp(c["start"]).to_pydatetime(), ordinal=0)
             self._try_entry(now, leg, refs={"score": round(score, 2), "stop_ref": round(stop, 2),
@@ -479,11 +516,119 @@ class Engine:
         if not c:
             self.log(f"Contract NIFTY {expiry} {int(strike)} {typ} not found; entry skipped", "error")
             return
-        qty = self.cfg.lots * c.lot_size
+        if self.paper:
+            risk = self._paper_risk(leg, c, side)
+            if risk["decision"] != "TRADE":
+                self.log(f"{dirn} signal at {leg.entry_ts:%H:%M}: NO TRADE. {risk['reason']}", "warn")
+                self._hold(leg, f"risk check: {risk['reason']}", risk=risk, **(refs or {}))
+                return
+            qty = risk["qty"]
+            refs = {**(refs or {}), "risk": risk, "stop_premium": risk["stop"], "target_premium": risk.get("target"),
+                    "paper_account_id": risk["account_id"]}
+            self.log(f"Risk: {risk['risk_pct']:g}% of ₹{risk['capital']:,.0f} = ₹{risk['risk_amount']:,.0f}; "
+                     f"premium {risk['entry']:.2f}, stop {risk['stop']:.2f}, risk/lot ₹{risk['risk_per_lot']:,.0f} → "
+                     f"{risk['lots']} lot(s) × {risk['lot_size']} = {qty}; max loss ₹{risk['max_loss']:,.0f}")
+        else:
+            qty = self.cfg.lots * c.lot_size
         if self.cfg.trade_mode == "live" and self.cfg.order_confirmation == "manual":
             self._propose(now, leg, c, side, qty, strike, typ, expiry, refs)
             return
         self._execute_entry(leg, c, side, qty, strike, typ, expiry, refs)
+
+    # ------------------------------------------------------------ paper risk management
+    def _paper_stop(self, c, side: str, premium: float) -> tuple[float | None, float | None, str, str | None]:
+        """(stop premium, target premium, method text, error). Buys stop below the premium, sells above."""
+        sgn = 1 if side == "BUY" else -1
+        if self.cfg.stop_mode == "pct":
+            stop = premium * (1 - sgn * self.cfg.stop_pct / 100)
+            target = premium * (1 + sgn * 2 * self.cfg.stop_pct / 100)
+            how = f"{self.cfg.stop_pct:g}% of the premium (target 2× that distance)"
+        else:
+            if not self.last_atr:
+                return None, None, "", "NIFTY ATR unavailable, so no stop-loss can be calculated."
+            try:
+                delta = self.market.option_delta(c)
+            except Exception as exc:
+                return None, None, "", f"Option delta unavailable ({exc}), so no stop-loss can be calculated."
+            if not delta:
+                return None, None, "", "Option delta unavailable, so no stop-loss can be calculated."
+            move = abs(delta) * self.last_atr
+            stop = premium - sgn * self.cfg.stop_atr * move
+            target = premium + sgn * signals.TARGET_ATR * move
+            how = (f"delta {abs(delta):.2f} × {self.cfg.stop_atr:g} × NIFTY ATR {self.last_atr:.2f} "
+                   f"(target {signals.TARGET_ATR:g}× ATR)")
+        rnd = costs._round_tick_down if side == "BUY" else costs._round_tick_up
+        stop = rnd(stop)
+        if stop <= 0:
+            return None, None, how, "The stop-loss works out at or below zero; no position size can be calculated."
+        return stop, round(target, 2), how, None
+
+    def _paper_risk(self, leg, c, side: str) -> dict:
+        """Steps 1-10 of the paper risk rules: capital, risk %, premium, stop, risk per lot, lots, then
+        the daily-loss, balance, lot and open-position checks. Returns the full calculation."""
+        acct = paper_account.state(self.day, self.cfg, eng=self.dbe)
+        base = {"account_id": acct["account_id"], "balance": acct["balance"],
+                "day_start_capital": acct["day_start_capital"], "daily_limit": acct["daily_limit"],
+                "pnl_today": acct["pnl_today"], "contract": c.trading_symbol, "signal_ts": leg.entry_ts.isoformat()}
+        try:
+            premium = round(float(self.market.option_ltp(c)), 2)
+        except Exception as exc:
+            premium = None
+            base["premium_error"] = str(exc)
+        stop = target = None
+        how, err = "", None
+        if premium:
+            stop, target, how, err = self._paper_stop(c, side, premium)
+        if acct["available"] <= 0:
+            r = {"decision": "NO TRADE", "reason": f"No virtual capital available (₹{acct['available']:,.2f}).",
+                 "capital": acct["available"], "risk_pct": self.cfg.risk_pct, "entry": premium, "stop": stop,
+                 "lot_size": c.lot_size, "lots": 0, "qty": 0}
+        else:
+            r = sizing.risk_size(side, premium, stop, c.lot_size, acct["available"], self.cfg.risk_pct,
+                                 available=acct["available"], max_lots=self.cfg.max_lots,
+                                 min_balance=self.cfg.min_balance, target=target, cfg=self.cost_cfg,
+                                 include_slippage=True)
+        r.update(base, stop_method=how)
+        if err:
+            r.update(decision="NO TRADE", reason=err)
+        with self.dbe.connect() as cx:
+            open_n = cx.execute(text("SELECT count(*) FROM live_trades WHERE trade_mode='paper' AND status='OPEN'")).scalar()
+        within_daily = r["decision"] != "TRADE" or acct["daily_limit"] is None or r["max_loss"] <= acct["remaining_risk"]
+        r["checks"] = {
+            "premium_and_stop": bool(premium) and stop is not None and not err,
+            "one_lot_within_risk": (r.get("lots_by_risk") or 0) > 0,
+            "available_balance": r.get("lots_by_cash") is None or r["lots_by_cash"] > 0,
+            "max_lots": r.get("lots", 0) <= self.cfg.max_lots,
+            "daily_loss_limit": not acct["limit_reached"],
+            "remaining_daily_risk": within_daily,
+            "open_positions": open_n < self.cfg.max_open_positions,
+        }
+        problems = []
+        if acct["limit_reached"]:
+            problems.append(f"Daily loss limit reached (today {acct['pnl_today']:,.2f} ≤ -{acct['daily_limit']:,.0f}).")
+        if open_n >= self.cfg.max_open_positions:
+            problems.append(f"{open_n} paper position(s) already open (maximum {self.cfg.max_open_positions}).")
+        if not within_daily:
+            problems.append(f"Maximum loss ₹{r['max_loss']:,.0f} exceeds the ₹{acct['remaining_risk']:,.0f} "
+                            f"left in today's loss limit.")
+        if problems:   # record every failed check, not just the first
+            first = [r["reason"]] if r["decision"] != "TRADE" and r.get("reason") else []
+            r.update(decision="NO TRADE", reason=" ".join(first + problems))
+        r["calculated_at"] = self.market.now().isoformat()
+        return r
+
+    def _premium_stop(self):
+        """Paper trades exit when the option premium reaches the stop-loss (checked every tick)."""
+        p = self.position
+        if not (self.paper and p and p.get("stop_premium") is not None):
+            return
+        ltp = self.last_ltp.get(p["contract"].trading_symbol)
+        if ltp is None:
+            return
+        hit = ltp <= p["stop_premium"] if p["side"] == "BUY" else ltp >= p["stop_premium"]
+        if hit:
+            self.log(f"Premium {ltp:.2f} reached the stop-loss {p['stop_premium']:.2f}: exiting", "warn")
+            self._exit("stop_loss")
 
     # ------------------------------------------------------------ manual confirmation (live mode)
     def _propose(self, now: datetime, leg, c, side, qty, strike, typ, expiry, refs):
@@ -616,13 +761,23 @@ class Engine:
         self.last_ltp[p["contract"].trading_symbol] = ltp
         return self._pnl(p, ltp)["net"]
 
+    def _daily_limit(self) -> float:
+        """₹ daily loss limit. Paper: the smaller of max_daily_loss and daily_risk_pct of the day's starting capital."""
+        if not self.paper:
+            return self.cfg.max_daily_loss
+        if getattr(self, "_limit_day", None) != self.day:
+            st_ = paper_account.state(self.day, self.cfg, eng=self.dbe)
+            self._limit_day, self._limit_val = self.day, st_["daily_limit"] or 0.0
+        return self._limit_val
+
     def _risk_check(self, now: datetime):
         m = self.mtm() if self.position else 0.0      # also refreshes LTP for the UI
-        if m is None or not self.cfg.max_daily_loss or self.state in ("halted", "error"):
+        limit = self._daily_limit()
+        if m is None or not limit or self.state in ("halted", "error"):
             return
         total = self.realised_today + m
-        if total <= -abs(self.cfg.max_daily_loss):
-            self.log(f"Daily loss limit hit ({total:,.2f} ≤ -{self.cfg.max_daily_loss:,.0f}): squaring off", "warn")
+        if total <= -abs(limit):
+            self.log(f"Daily loss limit hit ({total:,.2f} ≤ -{limit:,.0f}): squaring off", "warn")
             if self.position:
                 self._exit("daily_loss_limit")
             self._halt("Daily loss limit reached: no more trades today")
