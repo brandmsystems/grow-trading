@@ -2,6 +2,10 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: Phase 1 complete (option history downloaded)
+- **Option history:** 22,042 requests, 0 failed, about 3 h. Scope coverage 100% (172,120 contract-days; 2,061 with no trades). 67.1 M option candles in total, 53.5 M with OI. Integrity: 0 invalid prices or OHLC, 0 non-minute timestamps; 165 older 15:30 candles flagged, not deleted.
+- **Fix:** the provider now records weekend special sessions (Budget days, Muhurat) in the fetch log when they return candles; back-filled 1,288 rows from stored candles and 32 no-trade days (3 re-checked with Groww).
+
 ## 12 Nov: Paper trading risk management
 - **Your decisions:** premium stop-loss enforced on paper trades (ATR × delta by default, or % of premium); daily-limit halt lasts until the next session; virtual account with a running balance.
 - **Sizing core:** `options/sizing.risk_size` (risk amount, risk per lot incl. slippage and charges, lots capped by risk, cash after minimum balance and max lots, TRADE / NO TRADE with reason). The Live dashboard's `size_position` now calls it (its formula and results are unchanged).

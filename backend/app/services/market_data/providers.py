@@ -185,7 +185,7 @@ class GrowwProvider(Provider):
         counts = df.groupby(df["ts"].dt.date).size().to_dict() if not df.empty else {}
         d = day
         while d <= last:
-            if d.weekday() < 5 and d < today:
+            if (d.weekday() < 5 or d in counts) and d < today:   # weekend special sessions too
                 db.mark_fetched(symbol, d, int(counts.get(d, 0)))
             d += timedelta(days=1)
 

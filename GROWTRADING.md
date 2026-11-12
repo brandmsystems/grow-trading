@@ -11,7 +11,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Area | Status |
 |---|---|
 | Groww connection | **Working:** paid Trading API plan, TOTP key, token roles include `live_data` and `back_test` |
-| Historical data | **Done:** NIFTY spot and near-month futures, 1-minute, 11 Nov 2021 → today; validated. Option history (ATM ±10, CE/PE, all expiries) downloading; NSE lot-size history stored |
+| Historical data | **Done:** NIFTY spot, near-month futures and options (ATM ±10 strikes, CE/PE, all 264 expiries), 1-minute, 11 Nov 2021 → today; validated. NSE lot-size history stored |
 | Strategies, backtest, comparison | **Done:** 7 strategies × 4 timeframes, all 28 computed with real option prices |
 | Signal engine | **Done:** scores tested only on years the model hadn't seen |
 | Paper / replay engine (crossover and prediction modes) | **Done and tested.** Paper now sizes every trade from a risk budget (virtual account, risk %, premium stop-loss, daily limit) and stores the calculation with the trade |
@@ -259,13 +259,21 @@ Decisions you made at the gate: option scope ATM ±10 strikes, CE and PE, all we
 | Synthetic test rows | **Removed:** 223,305 `SYNTH:` candles plus their fetch-log, contract, expiry and cached-run rows, exported first to `data/backups/synthetic_2026-11-12_*.csv.gz` (row counts verified before deleting). 4 synthetic engine trades kept, as trade history is never deleted. A test now checks the production database has no `SYNTH:` candles |
 | Historical lot sizes | **Done:** migration 0008 `lot_sizes`, copied from NSE/FAOP/47854, 61415, 64625 and 70616 (read from the PDFs). NIFTY: 50 → 25 (weekly 2 May 2024, monthly 30 May 2024) → 75 (weekly 2 Jan 2025, monthly 27 Feb 2025) → 65 (weekly 6 Jan 2026, monthly 27 Jan 2026). Groww's current instrument list (18 expiries, all 65) matches |
 | Backtests | Default lot size is now each contract's NSE lot size; a fixed lot size is still available. Each trade records `lot_size` and `lot_source`. All 28 configurations re-run in 94 min (old fixed-65 results kept): still 2 of 84 positive, both break-even; EMA 9/21 15m ATM buy −₹1,58,676 (was −₹1,85,783). See [docs/BACKTESTING.md](docs/BACKTESTING.md) |
-| Option history | **New** `market_data/options_history.py`: for every stored session, CE and PE within 10 strikes of that day's ATM (from the day's spot low/high), for every expiry a backtest can pick. 21,702 contracts, 264 expiries, 172,120 contract-days. Resumable (only never-requested days are fetched), stoppable, failed requests reported and retried on the next run; 0-row days recorded, never filled |
+| Option history | **Done: 100% of the scope downloaded** (172,120 of 172,120 contract-days; 2,061 days the contract didn't trade; 67.1 M option candles stored in total, 53.5 M with OI). 22,042 requests in about 3 h, 0 failed. **New** `market_data/options_history.py`: for every stored session, CE and PE within 10 strikes of that day's ATM (from the day's spot low/high), for every expiry a backtest can pick. 21,702 contracts, 264 expiries, 172,120 contract-days. Resumable (only never-requested days are fetched), stoppable, failed requests reported and retried on the next run; 0-row days recorded, never filled |
 | Futures freshness | **Fixed:** the daily live refresh now updates futures as well as spot, and today's completed futures candles are stored as they are read |
 | Data page | Spot, futures and options cards (counts, range, latest candle, last successful download), intervals, option coverage by month with download/resume/stop, NSE lot-size table |
 | Contract metadata | Kept in the existing `contracts` and `expiries` tables (no duplicate table); cycle (weekly/monthly) is derived from the expiry list and lot size from `lot_sizes` |
 | Tests | New `tests/test_options_data.py` and two backtest tests (see CHANGELOG for counts) |
 
+**Integrity (all 67.1 M option candles):** 0 invalid prices, 0 inconsistent OHLC, 0 non-minute timestamps. 165 candles are stamped 15:30 (the closing minute) on weekdays from Aug to Nov 2026, written by an older version of the option fetch before it kept 09:15–15:29 only. They are real Groww candles, unused (exits are by 15:00), and left in place; delete them only if you approve.
+
+**Weekend special sessions:** 6 sessions (20 Jan, 2 Mar, 18 May 2024; 1 Feb 2025; 1 Feb and 8 Nov 2026) have spot and option candles, but the fetch log only recorded weekdays. The provider now also records any day that returned candles; the log was back-filled from the stored candles (1,288 rows), plus 32 days requested with no trades (3 re-checked with Groww on 8 Nov).
+
+**Database size:** 15 GB (`candles_1m`).
+
 **Not available from any source used:** historical IV/Greeks snapshots (Groww has no option-chain history). OI is stored with every option candle.
+
+**Phase 1 gate:** data coverage, validation, contract metadata (contracts, expiries, lot sizes) and integrity are tested. Waiting for your approval to start Phase 2.
 
 ### Paper trading risk management (12 Nov 2026)
 Requested as prompt 13. Paper only; live and replay unchanged. Every paper trade calculates risk %, risk amount, stop-loss, risk per lot (with slippage and charges), lots and quantity **before** the simulated fill and stores it in `live_trades.risk`. Failed checks give NO TRADE with the exact reasons. Premium stop-loss enforced (ATR × delta by default); daily limit halts new entries until the next session; virtual account with a running balance (`paper_accounts`). Details: [docs/STRATEGY.md](docs/STRATEGY.md#paper-trading-risk-management-12-nov-2026), [docs/FRONTEND.md](docs/FRONTEND.md). Tests: 56 new.

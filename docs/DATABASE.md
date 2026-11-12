@@ -43,7 +43,8 @@
 |---|---|
 | NIFTY 1-minute candles | 462,805 (11 Nov 2021 → today) |
 | Monthly futures contracts | 63 |
-| Option contracts | 21,702 in the ATM ±10 scope (download in progress; see the Market Data page) |
+| Option contracts | 21,750 with candles (100% of the 21,702-contract ATM ±10 scope, plus earlier backtest contracts); 67.1 M option candles, 53.5 M with OI |
+| Database size | 15 GB |
 | Comparison results | 28 with the fixed lot of 65, plus 28 with NSE lot sizes |
 
 **Synthetic rows removed (12 Nov 2026):** 223,305 `SYNTH:` candles, 515 fetch-log rows, 316 contracts, 18 expiries and 1 cached run were exported to `data/backups/synthetic_2026-11-12_*.csv.gz` and then deleted. The 4 synthetic engine trades in `live_trades` are kept (trade history is never deleted); the app already excludes them.

@@ -32,7 +32,8 @@
 - **First live order not yet seen:** manual confirmation is tested on replayed days with a counting broker, but no real Groww order has been placed through it yet.
 - **`_now()` exists in three modules** (backtest engine, history, providers). Tests patch each one separately, so they were left as they are.
 - **Market status:** no holiday calendar, so it shows "open" on NSE holidays.
-- **Option history download:** runs about 110 requests a minute (Groww rate limit). Until it finishes, the Market Data page shows partial option coverage.
+- **165 option candles at 15:30** (Aug–Nov 2026) from an older fetch version; real but outside the stored 09:15–15:29 window. Unused; awaiting your decision to delete or keep.
+- **Option history refresh:** new sessions are not downloaded automatically; press *Download or resume options* on the Market Data page (only new days are fetched).
 - **Download status after a restart:** starting the app marks any download still `running` as `interrupted`. A download run in a separate process keeps going and records its real final status when it ends.
 - **No historical IV/Greeks:** Groww has no option-chain history; OI is stored with each option candle.
 - **Paper risk:** the engine holds one position at a time, so `max_open_positions` above 1 has no effect yet. Option-selling margin isn't modelled (sells are sized by risk and max lots only). The target premium is shown for risk/reward but not enforced.
