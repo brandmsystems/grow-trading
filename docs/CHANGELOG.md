@@ -2,6 +2,17 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: Phase 0 audit (master programme)
+- Read-only audit; no code changes. Baseline: 140 tests pass, TypeScript check passes.
+- **Found:**
+  - stale futures (refresh only updates spot)
+  - CE/PE premium, option chain and Greeks available from Groww but not exposed
+  - no historical lot sizes
+  - no Telegram, no WebSockets
+  - live chart lacks VWAP/volume/RSI/MACD
+  - synthetic test rows in the production DB
+- Details and plan: GROWTRADING.md §10.
+
 ## 11 Nov: Frontend redesign (frontend only)
 - **New app shell:**
   - collapsible left sidebar (icon rail on tablets)

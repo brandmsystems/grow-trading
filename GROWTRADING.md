@@ -2,7 +2,7 @@
 
 The complete record of Grow Trading: what it does, how it's built, what has been verified, and what's pending. Detailed topics live in [docs/](docs/); this file summarises them and links to each.
 
-*Last updated: 11 Nov 2026, after the frontend redesign.*
+*Last updated: 12 Nov 2026, Phase 0 audit of the master programme.*
 
 ---
 
@@ -187,7 +187,72 @@ Dated details: [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
 ---
 
-## 10. Known issues and pending work
+## 10. Phase 0 audit (12 Nov 2026): master programme
+
+Read-only audit before the "master development" programme. No working code was changed.
+
+### Baseline claims checked
+| Claim | Verified result |
+|---|---|
+| Groww paid API works | **Yes.** Token roles: `order`, `live_data`, `non_trading`, `order_read_only`, `back_test` |
+| 5 years of NIFTY spot + futures 1-minute data | **Yes for spot:** 462,743 candles, 11 Nov 2021 → today, 1,229 complete days, 8 partial (4 special sessions + 4 real Groww gaps), 72 no-data weekdays. **Futures: 61 contracts, but stale** (see issues) |
+| 7 strategies × 4 timeframes, 28 configurations computed | **Yes:** 28 rows in `strategy_results` |
+| Signal scoring with out-of-sample testing | **Yes:** 4 stored analyses (5/15/30m EMA 9/21 + one other) |
+| Paper and replay engines tested; live confirmation | **Yes** in tests (manual confirmation, limits, retries, error state). **No real Groww order has been placed yet** |
+| Alerts stored and shown | **Yes:** `live_alerts` (unique key) |
+| 9 React pages | **Yes;** type check passes |
+| 7 migrations | **Yes:** 0001–0007 applied |
+| 140 tests | **Yes: 140 passed** (365 s) |
+| WebSockets pending | **Confirmed:** `flask-socketio` not installed, no socket code |
+
+### Data integrity (database)
+- **Spot candles:** 0 duplicates, 0 invalid OHLC rows, 0 out-of-hours candles stored. The only index is the `(symbol, ts)` primary key, which fits every current query.
+- **Size:** `candles_1m` is 3.07 GB.
+- **Options:** 7,927 contracts, 12.7 M candles, 16 Nov 2021 → today, with OI.
+  - **Only the contracts that backtests needed** (ATM / ITM 5 at each signal). This is not a full option chain.
+  - 1,426 of 36,713 contract-days returned no candles.
+- **Expiries:** 269 weekly/monthly (2021-11-03 → 2026-12-29), including 61 confirmed monthly futures expiries. The contracts table has 54,294 symbols across 263 expiries.
+- **Test data in the live database:** 223,305 synthetic `SYNTH:` candles, unused by the app.
+
+### Groww capabilities (verified live, 12 Nov, market open)
+| Capability | Available | Used by the app today |
+|---|---|---|
+| Option chain per expiry (all strikes: LTP, OI, volume, IV, delta/gamma/theta/vega/rho) | **Yes** (264 strikes for 17 Nov) | Only to verify the recommended strike |
+| Option quote: LTP, day change, % change, volume, OI, OI change | **Yes** | LTP only |
+| Greeks per contract | **Yes** | No |
+| Expired option candles with OI (back to Nov 2021) | **Yes** | Yes, per backtest need |
+| Expired contract lists | Yes, but some strikes are missing | Standard symbol used as fallback |
+| **Historical lot sizes** | **No** (the instrument master knows only current contracts) | A fixed lot size (65) is used for every year |
+| **Historical option-chain snapshots (IV/Greeks history)** | **No** | n/a |
+| Real-time feed (`GrowwFeed` in the SDK) | **Available, not used** | The app polls instead |
+
+### Gaps and issues found
+1. **Futures are stale (bug).** 11 Nov futures stop at 14:50 and today's are missing. Automatic refreshes (`GrowwProvider.ensure_spot`) update spot only, so VWAP/volume strategies and signal features read incomplete futures.
+2. **CE/PE premiums:** the live feed returns one recommended contract. Groww's chain has live CE **and** PE premiums, change, volume, OI, OI change, IV and Greeks, none of which the app exposes yet.
+3. **No option-chain or expiry-list endpoint** for the frontend.
+4. **Historical lot sizes are not modelled:** NIFTY's lot size has changed several times since 2021. Backtest P&L uses one size for every year, so per-year rupee figures are scaled wrong for years with a different lot size. Groww has no lot-size history, so an authoritative source (NSE circulars) is needed.
+5. **No Telegram integration:** only a mention in `notifications/alerts.py`.
+6. **No WebSockets:** polling every 2 s (open) or 10 s (closed).
+7. **Live chart:** EMA 9/21 only. No VWAP, volume, RSI or MACD panels; no 1-minute live chart (the feed accepts 5/15/30).
+8. **Duplicates:**
+   - `manager.snapshot()` (used by `/api/live/status`) and `feed.Feed` both compute a NIFTY quote and EMAs.
+   - `_now()` in 3 modules (kept because tests patch each one).
+   - Legacy server-rendered pages still served alongside React.
+9. **Live trading:** never exercised against Groww with a real order.
+10. **Synthetic test candles** (223k rows) sit in the production database.
+
+### Proposed plan (each phase stops at its gate for review)
+| Phase | Work | Needs your decision |
+|---|---|---|
+| 1. Data | Fix the futures refresh. Add an index-free coverage report for futures and options. Option-chain history download (scope below). Contract metadata table (symbol, expiry, strike, type, lot size, source). Historical lot-size table from NSE circulars. Remove synthetic rows from the production DB | **Option-history scope; lot-size source; deleting synthetic rows** |
+| 2. Research | Backtests use the historical lot size (changes ₹ results); calibration per band shown on screen; option-analysis endpoints (chain, expiries, CE+PE) | **Approve re-running results with historical lot sizes** |
+| 3. Live + WebSockets | Flask-SocketIO push (spot, CE/PE premiums, signals, engine, P&L, alerts) with heartbeat, stale detection, reconnect and polling fallback. Live chart: VWAP, volume, RSI, MACD, 1-minute | Groww feed vs polling inside the server |
+| 4. Telegram | Bot alerts with thresholds, quiet hours, retries, history, test message | **Bot token + chat ID (in `.env`)** |
+| 5. Paper | Virtual funds, positions, multiple strategies | — |
+| 6. Live | Funds/position verification, partial fills, emergency stop-all, logs. First real order only with you present | **Approval for a supervised 1-lot live test** |
+| 7. Final | Full tests, build, browser checks, docs | — |
+
+## 11. Known issues and pending work
 Full list: [docs/TODO.md](docs/TODO.md).
 
 **Pending:**
