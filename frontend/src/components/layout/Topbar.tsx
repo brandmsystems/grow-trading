@@ -9,7 +9,7 @@ const STATE_LABEL: Record<string, string> = { stopped: "Engine off", waiting: "W
 /** Header: market status, Groww connection, engine state, notifications, sound and theme. */
 export function Topbar({ title, onBell }: { title: string; onBell: () => void }) {
   const { settings, update } = useSettings();
-  const { data, connection, updatedAt, unread } = useLive();
+  const { data, connection, transport, updatedAt, unread } = useLive();
   const mk = data?.feed?.market ?? data?.market;
   const q = data?.feed?.quote;
   const sig = data?.feed?.signal;
@@ -37,6 +37,11 @@ export function Topbar({ title, onBell }: { title: string; onBell: () => void })
           <span className="hidden items-center gap-1.5 text-xs sm:flex" title={updatedAt ? `Last update ${updatedAt.toLocaleTimeString()}${data?.feed?.error ? ` · ${data.feed.error}` : ""}` : undefined}>
             <Dot tone={groww} pulse={groww === "good" && mk?.state === "open"} />{growwText}
           </span>
+          {connection === "online" && (
+            <span className="hidden sm:inline-flex" title={transport === "socket" ? "Updates are pushed over a WebSocket" : "WebSocket unavailable: the app is polling the server instead"}>
+              <Pill tone={transport === "socket" ? "good" : "warn"}>{transport === "socket" ? "Live push" : "Polling"}</Pill>
+            </span>
+          )}
           {mk && <span className="hidden md:inline-flex"><Pill tone={mk.state === "open" ? "good" : mk.state === "preopen" ? "warn" : "neutral"}>{mk.label}</Pill></span>}
           <span className="hidden lg:inline-flex"><Pill tone={st === "running" ? "good" : st === "error" ? "bad" : st === "halted" ? "warn" : "neutral"}>
             {STATE_LABEL[st] ?? st}{st !== "stopped" && mode ? ` · ${mode.toUpperCase()}` : ""}

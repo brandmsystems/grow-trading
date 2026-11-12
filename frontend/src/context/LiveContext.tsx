@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { useDashboard, type Connection } from "../hooks/useDashboard";
+import { useDashboard, type Connection, type Transport } from "../hooks/useDashboard";
 import { beep, useAlerts } from "../hooks/useAlerts";
 import { getLiveTrades } from "../services/api";
 import { useSettings } from "./SettingsContext";
@@ -13,6 +13,7 @@ interface LiveValue {
   data: Dashboard | null;
   error: string | null;
   connection: Connection;
+  transport: Transport;
   updatedAt: Date | null;
   refresh: () => void;
   trades: LiveTrade[];
@@ -32,7 +33,7 @@ const SEEN_KEY = "gt-alerts-seen";
 export function LiveProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
   const eng = settings.engine;
-  const { data, error, connection, updatedAt, refresh } = useDashboard({
+  const { data, error, connection, transport, updatedAt, refresh } = useDashboard({
     tf: settings.timeframe, mode: eng.trade_mode, exec_mode: eng.exec_mode, capital: settings.capital, risk_pct: settings.riskPct,
   });
   const fresh = useAlerts(data?.alerts, settings.sound);
@@ -63,6 +64,18 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     prevConn.current = connection;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection]);
+  // Live push lost (fell back to polling) or restored: worth knowing, as updates slow down.
+  const prevTransport = useRef<Transport>("polling");
+  const hadSocket = useRef(false);
+  useEffect(() => {
+    if (transport === "polling" && prevTransport.current === "socket")
+      push({ kind: "connection", tone: "warn", text: "Live push interrupted: polling until the WebSocket reconnects" });
+    if (transport === "socket" && prevTransport.current === "polling" && hadSocket.current)
+      push({ kind: "connection", tone: "good", text: "Live push (WebSocket) reconnected" });
+    if (transport === "socket") hadSocket.current = true;
+    prevTransport.current = transport;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transport]);
   useEffect(() => {
     const st = data?.state ?? null;
     if (st && prevState.current && st !== prevState.current) {
@@ -86,7 +99,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ data, error, connection, updatedAt, refresh, trades, fresh, events, unread, markRead }}>
+    <Ctx.Provider value={{ data, error, connection, transport, updatedAt, refresh, trades, fresh, events, unread, markRead }}>
       {children}
     </Ctx.Provider>
   );

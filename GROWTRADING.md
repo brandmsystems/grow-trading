@@ -19,8 +19,8 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Alerts | Stored once per signal (`live_alerts`), shown on the Live page |
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
 | React frontend (Phase 5 + redesign) | **All 9 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
-| WebSocket updates (Phase 6) | **Not started** |
-| Tests | **244 pass**; React production build and type check pass |
+| WebSocket updates | **Done (master Phase 3):** Socket.IO push with REST polling fallback; tested after market hours |
+| Tests | **273 pass**; React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
@@ -67,8 +67,8 @@ docs/             documentation
 ```
 
 **Communication:**
-- **Now:** the React app calls the REST API. The live dashboard polls `/api/live/dashboard` with backoff and automatic recovery ([docs/API.md](docs/API.md)).
-- **Planned (Phase 6):** Socket.IO push ([docs/FRONTEND.md](docs/FRONTEND.md)).
+- **REST API** for everything ([docs/API.md](docs/API.md)).
+- **Live dashboard:** pushed over Socket.IO (`/socket.io`); REST polling of `/api/live/dashboard` is the automatic fallback ([docs/FRONTEND.md](docs/FRONTEND.md)).
 
 ---
 
@@ -161,7 +161,7 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
   - all 9 pages at 6 widths (1920–360 px): no overflow and no console errors
   - controls and notifications checked in a real browser
 - **What they cover:** credentials, trading rules, charges, providers, backtest end-to-end, data manager, research and signals, live engine (it must equal the backtest), prediction mode, alerts, live feed.
-- **Not yet tested:** WebSocket updates (Phase 6). The React dashboard was checked in a browser at desktop and phone width against live Groww data and a replay.
+- **Not yet tested:** WebSocket push during market hours (it was tested after the close). The React dashboard was checked in a browser at desktop and phone width against live Groww data and a replay.
 
 ---
 
@@ -173,7 +173,7 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 | 3. Structure | `backend/`, `frontend/` (pending), `data/`, `scripts/`, `docs/`, `start.py`, `.env.example` |
 | 4. Backend migration | `git mv` + mechanical import rewrite, no logic changes. Then blueprints, brokers/options/notifications split, shared helpers, env credentials, Grow Trading naming. 135 tests pass, and all pages and APIs answer |
 | 5. React | All pages in React after the frontend redesign (sidebar layout, 54/54 responsive checks pass). Live-order confirmation in the UI |
-| 6. WebSockets | Not started |
+| 6. WebSockets | Done in master Phase 3 (12 Nov) |
 | 7. Verification | Backend done; frontend pending |
 | 8. Docs | This file, README and docs/* updated |
 
@@ -275,6 +275,18 @@ Decisions you made at the gate: option scope ATM ±10 strikes, CE and PE, all we
 
 **Phase 1 gate:** data coverage, validation, contract metadata (contracts, expiries, lot sizes) and integrity are tested. Waiting for your approval to start Phase 2.
 
+### Phase 3: live data and WebSockets (12 Nov 2026)
+| Item | Result |
+|---|---|
+| Live spot | Unchanged from earlier work (price, change, high/low, previous close, market status, updated time, stale states) |
+| CE/PE premiums | **New:** live CE and PE for the recommended strike (else ATM): premium, change, volume, OI, IV, delta, LIVE / DELAYED / CLOSED / UNAVAILABLE; never the spot price |
+| WebSockets | **New:** Socket.IO push of the whole dashboard (spot, premiums, signals, engine, position, P&L, notifications) with heartbeat, sequence numbers, change detection and shared rooms |
+| Reconnection and fallback | Auto-reconnect (1–10 s); stale after 15 s without events; REST polling only while the socket is down |
+| React | Header *Live push / Polling*; socket closed on unmount; connection events in notifications |
+| Tests | 14 new; 273 pass; React build passes; real client and browser checks (after hours) |
+
+**Phase 3 gate:** push, reconnect, stale detection and fallback are tested against the running server, **but only with the market closed**. Live ticks during a session still need checking. Waiting for your approval to start Phase 4 (Telegram), which needs a bot token and chat ID in `.env`.
+
 ### Phase 2: strategy and backtesting (12 Nov 2026)
 Existing strategies, engine, rules and raw signal scores are unchanged.
 | Item | Result |
@@ -306,7 +318,7 @@ The strategy's signals are unchanged; explanations, plan and patterns are contex
 Full list: [docs/TODO.md](docs/TODO.md).
 
 **Pending:**
-- Socket.IO push (Phase 6)
+- Telegram notifications (Phase 4)
 
 **Known issues:**
 - **No holiday calendar.**

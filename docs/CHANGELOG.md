@@ -2,6 +2,14 @@
 
 All dates are 2026, IST.
 
+## 12 Nov: Phase 3, live data and WebSockets
+- **Socket.IO push:** new `api/realtime.py` (Flask-SocketIO, threading mode, `simple-websocket`). Pushes the `/api/live/dashboard` payload per settings room; heartbeats, sequence numbers, change detection, 1 s / 5 s ticks. `app.py` runs `socketio.run`. New dependencies: `flask-socketio`, `simple-websocket` (backend), `socket.io-client` 4.8.1 (frontend).
+- **One builder:** `live.dashboard_args` and `live.dashboard_payload` are shared by the REST endpoint and the socket (no duplicate API).
+- **CE/PE premium monitor:** `Feed.premiums` (in the dashboard as `premiums`). While the market is closed it uses the instrument master and the quote only (no option-chain call), keeping the existing "no chain call when closed" behaviour.
+- **React:** `useDashboard` uses the socket with REST polling as fallback; header *Live push / Polling* badge; premium card rewritten on live CE and PE data.
+- **Tests:** `tests/test_realtime.py` (14): hello, immediate state on subscribe, invalid settings, heartbeat vs change, shared rooms, room moves and cleanup, build errors, tick speed, REST and socket sharing one builder, premium monitor (ATM on HOLD, follows the recommendation, closed, failures, index-like price rejected, delayed). **273 passed.** React build passes.
+- **Checked for real:** a Node Socket.IO client against the running server (WebSocket transport, increasing sequence numbers, reconnect after a server restart); browser: *Live push* with 0 REST dashboard calls in 30 s, and with WebSocket blocked, *Polling* at about one call per 10 s. Market closed during these checks.
+
 ## 12 Nov: Phase 2, strategy and backtesting
 - **Calibration (signals.py, analysis v3):** Wilson 95% ranges on band and score-group hit rates; bootstrap AUC range; walk-forward Platt calibration compared with the historical average (Brier skill); per-signal calibrated estimate; plain verdict. Raw scores are unchanged (checked: all 15-minute v2 and v3 scores identical), so prediction mode trades exactly as before. EMA 9/21 analyses rebuilt for 5, 15 and 30 min.
 - **Live confidence text** shows the band's 95% range, the calibrated estimate and the verdict.

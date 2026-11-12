@@ -61,9 +61,9 @@
 ## Frontend ↔ backend
 - **React app** (`frontend/`, served at `/app`):
   - calls the REST API through `src/services/api.ts`
-  - the live dashboard polls `GET /api/live/dashboard` every 2 s (market open or engine running) or 10 s, with backoff and automatic recovery
+  - the live dashboard receives `dashboard` events over Socket.IO (`/socket.io`, see API.md, Real-time push); REST polling of `GET /api/live/dashboard` (2 s open / 10 s closed, with backoff) is the fallback while the socket is down or stale
   - in development, Vite (5173) proxies `/api` and `/socket.io` to Flask (5000)
 - **One interface:** the old server-rendered pages were removed; `/` and old addresses redirect to `/app`.
-- **Planned (Phase 6):** Flask-SocketIO pushes quotes, signals and alerts, with polling kept as the fallback.
+- **Server:** `backend/app.py` runs `socketio.run` (Werkzeug, threads, `simple-websocket`) on 127.0.0.1:5000.
 
 See [FRONTEND.md](FRONTEND.md).

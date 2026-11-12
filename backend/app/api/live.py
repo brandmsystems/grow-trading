@@ -44,42 +44,61 @@ def options_chain():
         return api_error(exc, 502)
 
 
-@bp.get("/api/live/dashboard")
-def live_dashboard():
-    """Everything the Live page shows, in one poll: engine status, NIFTY feed, signal, option, size."""
+def dashboard_args(a) -> dict:
+    """Validate the dashboard parameters (query string or socket subscription). Raises ValueError."""
     from app.services.market_data import feed as live_feed
-    a = request.args
     try:
         tf = int(a.get("tf", 5))
         if tf not in (1, 5, 15, 30):
             raise ValueError("timeframe must be 1, 5, 15 or 30")
-        entry_start, cutoff = a.get("entry_start", "09:30"), a.get("cutoff", "14:30")
+        entry_start, cutoff = str(a.get("entry_start", "09:30")), str(a.get("cutoff", "14:30"))
         live_feed._hm(entry_start), live_feed._hm(cutoff)
-        capital = float(a["capital"]) if a.get("capital") else None
+        capital = float(a["capital"]) if a.get("capital") not in (None, "") else None
         risk_pct = float(a.get("risk_pct", 1))
-        if capital is not None and capital <= 0:
-            raise ValueError("capital must be positive")
-        if not 0 < risk_pct <= 100:
-            raise ValueError("risk % must be between 0 and 100")
-    except (TypeError, ValueError) as exc:
-        return api_error(exc, 400)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError(str(exc)) from exc
+    if capital is not None and capital <= 0:
+        raise ValueError("capital must be positive")
+    if not 0 < risk_pct <= 100:
+        raise ValueError("risk % must be between 0 and 100")
+    mode = a.get("mode") or None
+    if mode not in (None, "paper", "live", "replay"):
+        raise ValueError("unknown mode")
+    return {"tf": tf, "entry_start": entry_start, "cutoff": cutoff, "exec_mode": str(a.get("exec_mode", "ATM_BUY")),
+            "roll": str(a.get("roll", "1")) != "0", "capital": capital, "risk_pct": risk_pct, "mode": mode}
+
+
+def dashboard_payload(p: dict) -> dict:
+    """Everything the Live page shows: engine status, NIFTY feed, signal, option, size. Used by the
+    REST endpoint and by the Socket.IO push (app/api/realtime.py), so both send the same data."""
+    from app.services.market_data import feed as live_feed
     try:
         config.load_keys()
-        feed = live_feed.feed().dashboard(tf, entry_start, cutoff, a.get("exec_mode", "ATM_BUY"),
-                                          a.get("roll", "1") != "0", capital, risk_pct)
+        feed = live_feed.feed().dashboard(p["tf"], p["entry_start"], p["cutoff"], p["exec_mode"],
+                                          p["roll"], p["capital"], p["risk_pct"])
     except config.KeysError as exc:
         feed = {"error": str(exc), "kind": "keys"}
     except Exception as exc:
         log.exception("dashboard feed failed")
         feed = {"error": str(exc) or type(exc).__name__}
-    try:   # after the feed, so a signal it just recorded is in this response
-        s = live_manager.status(a.get("mode"), tf, with_snapshot=False)
-        mode = (s.get("config") or {}).get("trade_mode") if s["state"] != "stopped" else (a.get("mode") or "paper")
-        s["alerts"] = live_manager.recent_alerts((live_feed.SIGNAL_MODE, mode), limit=20)
+    # after the feed, so a signal it just recorded is in this response
+    s = live_manager.status(p["mode"], p["tf"], with_snapshot=False)
+    mode = (s.get("config") or {}).get("trade_mode") if s["state"] != "stopped" else (p["mode"] or "paper")
+    s["alerts"] = live_manager.recent_alerts((live_feed.SIGNAL_MODE, mode), limit=20)
+    s["feed"] = feed
+    return s
+
+
+@bp.get("/api/live/dashboard")
+def live_dashboard():
+    try:
+        p = dashboard_args(request.args)
+    except ValueError as exc:
+        return api_error(exc, 400)
+    try:
+        return jsonify({"ok": True, "data": dashboard_payload(p)})
     except Exception as exc:
         return api_error(exc, 500)
-    s["feed"] = feed
-    return jsonify({"ok": True, "data": s})
 
 
 @bp.post("/api/live/start")

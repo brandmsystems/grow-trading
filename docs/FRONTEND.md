@@ -85,6 +85,12 @@ Light and dark themes are both supported; dark is the default.
 
 **One shared live poll:** `context/LiveContext.tsx` polls `/api/live/dashboard` once for the whole app, every 2 s while the market is open or the engine runs, otherwise every 10 s, with backoff when the backend is unreachable. The header, Overview, Live Trading, Signals and Options all read that one response, so changing pages never duplicates calls.
 
+## Live updates (Phase 3)
+- **Push first:** one Socket.IO connection for the whole app (in `LiveProvider`). The header shows **Live push** while it delivers, or **Polling** when the app has fallen back to REST.
+- **Fallback:** when the socket is disconnected or no event arrived for 15 s, the app polls `/api/live/dashboard` (2 s open, 10 s closed). While the socket is healthy, no dashboard requests are made.
+- **Notifications:** "Live push interrupted" and "reconnected" appear in the notification panel.
+- **CE/PE premium card:** both sides for one strike (the recommended contract, else ATM): premium, change, volume, OI, IV, delta and a LIVE / DELAYED / CLOSED / UNAVAILABLE label. Delayed premiums are dimmed with the age of the last good quote.
+
 ## Notifications
 - **Sources:**
   - signal and trade alerts from the server (`live_alerts`, stored once per signal, so never duplicated)
@@ -113,7 +119,7 @@ Light and dark themes are both supported; dark is the default.
 | `components/charts/` | `CandleChart` (candles, optional EMAs, cross/trade markers, price levels), `SeriesChart`: `LineChart` (equity) and `BarsChart` (monthly P&L) |
 | `components/common/` | `Card` (with colour accent), `Stat`, `InfoTip`, `Pill`, `Dot`, `BigValue`; `Controls`: `Field`, `Segmented`, `Button`, `PageHeader`, `inputCls`/`selectInline`; `States`: `Loading`, `Empty`, `ErrorNote`, `Warning`, `Limitation`, `Progress` |
 | `context/` | `SettingsContext` (theme, sound, timeframe, capital, risk %, engine form, sidebar state; saved per browser), `LiveContext` (shared live poll, today's trades, alerts, status events, unread count) |
-| `hooks/` | `useDashboard` (polling with backoff), `useAlerts` (new-alert detection, sound, notifications, `describe`), `useApi` (load/reload with loading and error) + `waitForJob` |
+| `hooks/` | `useDashboard` (Socket.IO push with sequence checks and stale detection; REST polling with backoff as fallback; socket closed on unmount), `useAlerts` (new-alert detection, sound, notifications, `describe`), `useApi` (load/reload with loading and error) + `waitForJob` |
 | `services/api.ts` | Every API call. `request` returns the full envelope (`data`, `job`, `hash`); `api` returns `data` |
 | `types/api.ts` | Types for every response used |
 | `utils/format.ts` | ₹ (incl. lakh/crore), numbers, %, IST dates and times, chart time |

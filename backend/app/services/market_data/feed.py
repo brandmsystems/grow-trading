@@ -335,9 +335,87 @@ class Feed:
         return self._get(f"chain|{expiry}", CHAIN_TTL, lambda: self.api(
             "get_option_chain", exchange="NSE", underlying="NIFTY", expiry_date=expiry.isoformat(), timeout=10))
 
-    def _opt_quote(self, symbol: str) -> _Entry:
-        return self._get(f"oq|{symbol}", OPT_QUOTE_TTL, lambda: self.api(
+    def _opt_quote(self, symbol: str, ttl: float = OPT_QUOTE_TTL) -> _Entry:
+        return self._get(f"oq|{symbol}", ttl, lambda: self.api(
             "get_quote", trading_symbol=symbol, exchange="NSE", segment="FNO", timeout=5))
+
+    # -------------------------------------------------- CE / PE premium monitor (Phase 3)
+    def premiums(self, q: dict, day: date, now: datetime, open_: bool, roll: bool, sig: dict) -> dict:
+        """Live CE and PE premiums for one strike: the recommended contract's strike and expiry when
+        there is a verified recommendation, otherwise the ATM strike of the expiry the strategy would use.
+        Every number is from Groww (chain + the contract's own quote). Never derived from the spot."""
+        rec = sig.get("rec") or {}
+        spot = q.get("price")
+        out = {"strike": None, "expiry": None, "basis": None, "ce": None, "pe": None, "error": None}
+        if rec.get("verified") and rec.get("strike") and rec.get("expiry"):
+            strike, expiry = float(rec["strike"]), date.fromisoformat(rec["expiry"])
+            out["basis"] = "recommended contract's strike"
+        else:
+            if not spot:
+                return {**out, "error": "NIFTY spot unavailable, so no ATM strike can be chosen."}
+            strike = float(st.atm_strike(spot))
+            try:
+                expiry = st.pick_expiry(day, self.market.expiries(day), roll)
+            except Exception as exc:
+                return {**out, "strike": strike, "error": f"Could not load NIFTY expiries from Groww: {exc}"}
+            if not expiry:
+                return {**out, "strike": strike, "error": "No usable NIFTY expiry found."}
+            out["basis"] = "at the money (nearest strike to spot)"
+        out.update(strike=strike, expiry=expiry.isoformat(), days_to_expiry=(expiry - day).days)
+        # While open, the chain adds IV, delta and a symbol cross-check. While closed it isn't called
+        # (no needless Groww calls after hours); the instrument master gives the symbol instead.
+        ch = self._chain(expiry) if open_ else None
+        if ch is not None and ch.value is None:
+            return {**out, "error": f"Option chain unavailable: {ch.error}"}
+
+        def side(typ: str) -> dict:
+            try:
+                c = self.market.contract(day, expiry, strike, typ)
+            except Exception as exc:
+                return {"state": "unavailable", "error": f"Instrument master unavailable: {exc}"}
+            if not c:
+                return {"state": "unavailable", "error": f"NIFTY {expiry} {strike:.0f} {typ} not found in the instrument master."}
+            sym = c.trading_symbol
+            r = {"symbol": sym, "chain_ltp": None, "oi": None, "volume": None, "iv": None, "delta": None}
+            if ch is not None:
+                row = chain_row(ch.value, strike, typ)
+                if not row or not row.get("trading_symbol"):
+                    return {"state": "unavailable", "error": f"{strike:.0f} {typ} is not in the {expiry} option chain."}
+                if row["trading_symbol"] != sym:
+                    return {"state": "unavailable", "error": f"Option chain symbol {row['trading_symbol']} does not match the instrument master ({sym})."}
+                g = row.get("greeks") or {}
+                r.update({"chain_ltp": _f(row.get("ltp")), "oi": _f(row.get("open_interest")),
+                          "volume": _f(row.get("volume")), "iv": _f(g.get("iv")), "delta": _f(g.get("delta"))})
+            oq = self._opt_quote(sym, OPT_QUOTE_TTL if open_ else CLOSED_TTL)
+            v = oq.value or {}
+            price = _f(v.get("last_price"))
+            age = max(0.0, (now - oq.good_at).total_seconds()) if oq.good_at else None
+            if price and spot and (abs(price - spot) < 1 or price > spot * 0.5):
+                return {**r, "state": "unavailable", "error": "Groww returned an index-like price for this option; not shown."}
+            if not price:
+                state = "unavailable"
+            elif not open_:
+                state = "closed"
+            elif oq.error or age is None or age > LIVE_MAX_AGE:
+                state = "delayed"
+            else:
+                state = "live"
+            ltt = v.get("last_trade_time")
+            r.update({"premium": price, "change": _f(v.get("day_change")), "change_pct": _f(v.get("day_change_perc")),
+                      "prev_close": _f((v.get("ohlc") or {}).get("close")),
+                      "volume": _f(v.get("volume")) if v.get("volume") is not None else r["volume"],
+                      "oi": _f(v.get("open_interest")) if v.get("open_interest") is not None else r["oi"],
+                      "last_trade": datetime.fromtimestamp(ltt).isoformat() if isinstance(ltt, (int, float)) and ltt > 0 else None,
+                      "state": state, "as_of": oq.good_at.isoformat() if oq.good_at else None,
+                      "age_sec": None if age is None else round(age), "error": oq.error})
+            return r
+        out["ce"], out["pe"] = side("CE"), side("PE")
+        try:
+            c = self.market.contract(day, expiry, strike, "CE")
+            out["lot_size"] = c.lot_size if c else None
+        except Exception:
+            out["lot_size"] = None
+        return out
 
     # -------------------------------------------------- option chain (Options Analysis page)
     def option_chain(self, expiry: date | None = None, width: int = CHAIN_WIDTH, quote_width: int = CHAIN_QUOTE_WIDTH) -> dict:
@@ -562,6 +640,11 @@ class Feed:
                 else:
                     sig["rec"] = self.recommend(sig, q["price"], bars, day, now, exec_mode, roll, capital, risk_pct)
             out["signal"] = sig
+            try:
+                out["premiums"] = self.premiums(q, day, now, out["market"]["state"] == "open", roll, sig)
+            except Exception as exc:
+                log.warning("premium monitor failed: %s", exc)
+                out["premiums"] = {"error": f"Premium monitor failed: {exc}", "ce": None, "pe": None}
             # Explanation, plan and patterns: closed bars only; none of them changes the signal.
             sday = chart_day or day
             try:

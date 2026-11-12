@@ -70,7 +70,7 @@ export interface Feed {
   crosses?: Cross[];
   signal: Signal;
   markers?: { ts: string; kind: string; action: "BUY CE" | "BUY PE" | "EXIT" | "HOLD" }[];
-  explain?: Explanation; plan?: TradingPlan | null; patterns?: CandlePattern[];
+  explain?: Explanation; plan?: TradingPlan | null; patterns?: CandlePattern[]; premiums?: Premiums;
   error?: string; kind?: string;
 }
 
@@ -351,4 +351,15 @@ export interface OptionChain {
   rows: { strike: number; atm: boolean; ce: ChainSide | null; pe: ChainSide | null }[];
   totals: { ce_oi: number; pe_oi: number; ce_volume: number; pe_volume: number; pcr: number | null };
   chain_as_of: string | null; chain_error: string | null; quotes_as_of: string | null; quotes_error: string | null; market: string;
+}
+
+// ------------------------------------------------------------------ CE / PE premium monitor (Phase 3)
+export interface PremiumSide {
+  symbol?: string; premium?: number | null; change?: number | null; change_pct?: number | null; prev_close?: number | null;
+  volume?: number | null; oi?: number | null; iv?: number | null; delta?: number | null; chain_ltp?: number | null;
+  last_trade?: string | null; state: "live" | "delayed" | "closed" | "unavailable"; as_of?: string | null; age_sec?: number | null; error?: string | null;
+}
+export interface Premiums {
+  strike: number | null; expiry: string | null; basis: string | null; days_to_expiry?: number; lot_size?: number | null;
+  ce: PremiumSide | null; pe: PremiumSide | null; error: string | null;
 }

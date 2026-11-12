@@ -10,7 +10,7 @@
 | 3. New folder structure | Done |
 | 4. Backend migration (no logic changes) | Done |
 | 5. React frontend connected to Flask | **Done:** all 9 pages in React (redesign, 11 Nov). Old server-rendered pages removed 12 Nov |
-| 6. WebSocket live updates (Flask-SocketIO, auto-reconnect) | **Not started**; `flask-socketio` not installed yet |
+| 6. WebSocket live updates (Flask-SocketIO, auto-reconnect) | **Done in master Phase 3 (12 Nov)**; tested after market hours only |
 | 7. Full verification (tests, Groww connectivity, live data, React build) | Pending |
 | 8. Documentation per phase | Ongoing |
 
@@ -25,10 +25,12 @@
   - stronger regularisation chosen by walk-forward validation for the signal model (changes scores, so prediction-mode trades)
   - a "require N confirmations" or "score ≥ X" entry filter, backtested first
   - custom EMA periods as new strategy settings (existing defaults unchanged)
-- Phase 6: Flask-SocketIO push for quotes, signals and alerts.
 
 ## Known issues
-- **Polling delay:** with the engine stopped, the app polls every 10 s, so an engine started from elsewhere appears up to 10 s later. Phase 6 (Socket.IO) removes this.
+- **Live push not yet seen during market hours:** Socket.IO push, reconnect and fallback were tested after the close (market closed, engine stopped). The 1 s ticks while open, and premium states going LIVE/DELAYED on real quotes, still need a check during a session.
+- **Push payload size:** each `dashboard` event is about 32 KB (5-minute chart). While the market is open it changes almost every second, so about 32 KB/s per settings combination; fine on a local machine.
+- **Idle updates:** with the market closed and the engine stopped, the server ticks every 5 s, so an engine started from another tab shows up within about 5 s.
+- **EXIT as a separate call:** after an opposite crossover or 15:00 the recommendation shows HOLD with the exit reason (exit alerts are separate). A distinct EXIT label is not added yet.
 - **Live premiums not seen during market hours yet:** the redesign was checked after the close. The CE/PE premium panel was checked with HOLD and replay data, not with a live BUY signal.
 - **First live order not yet seen:** manual confirmation is tested on replayed days with a counting broker, but no real Groww order has been placed through it yet.
 - **`_now()` exists in three modules** (backtest engine, history, providers). Tests patch each one separately, so they were left as they are.

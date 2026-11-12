@@ -1,5 +1,5 @@
 import { ArrowDownRight, ArrowUpRight, BarChart3, Gauge, Layers, LineChart as LineIcon, Minus } from "lucide-react";
-import type { Dashboard, LiveTrade } from "../../types/api";
+import type { Dashboard, PremiumSide, LiveTrade } from "../../types/api";
 import { dmy, hm, hms, inr, num, pct, pnlClass, signed, todayIST } from "../../utils/format";
 import { BigValue, Card, Dot, Pill, Stat } from "../common/Card";
 import { Limitation } from "../common/States";
@@ -46,41 +46,57 @@ export function SpotCard({ data, compact = false }: { data: Dashboard; compact?:
 }
 
 /** Option premium: the actual price of the selected CE or PE contract (never the index). */
+const PREM_STATE: Record<PremiumSide["state"], { tone: "good" | "warn" | "neutral" | "bad"; label: string }> = {
+  live: { tone: "good", label: "LIVE" }, delayed: { tone: "warn", label: "DELAYED" }, closed: { tone: "neutral", label: "CLOSED" },
+  unavailable: { tone: "bad", label: "UNAVAILABLE" },
+};
+
+/** Live CE and PE premiums for one strike (the recommended one, else ATM), from Groww quotes. */
 export function PremiumCard({ data }: { data: Dashboard }) {
-  const sig = data.feed?.signal;
-  const rec = sig?.rec;
-  const has = rec?.verified && rec.premium != null;
+  const pm = data.feed?.premiums;
+  const rec = data.feed?.signal?.rec;
+  const selType = rec?.verified ? rec.opt_type : null;
   const side = (t: "CE" | "PE") => {
-    const sel = has && rec!.opt_type === t;
+    const s = t === "CE" ? pm?.ce : pm?.pe;
+    const sel = selType === t;
     const tone = t === "CE" ? "border-green-300 bg-green-50 dark:border-green-900 dark:bg-green-950/30" : "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/30";
+    const st = s ? PREM_STATE[s.state] : null;
     return (
       <div className={`rounded-xl border p-3 ${sel ? tone : "border-slate-200 dark:border-slate-800"}`}>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-1">
           <Pill tone={t === "CE" ? "good" : "bad"}>{t === "CE" ? "CALL (CE)" : "PUT (PE)"}</Pill>
-          {sel && <span className="text-[11px] font-semibold text-slate-500">SELECTED</span>}
+          {sel ? <span className="text-[11px] font-semibold text-slate-500">SELECTED</span> : st && <Pill tone={st.tone}>{st.label}</Pill>}
         </div>
-        {sel ? (
+        {s?.premium != null ? (
           <>
-            <div className="num mt-2 text-xl font-bold">₹{num(rec!.premium)}</div>
-            <div className="text-xs text-slate-500">Strike {num(rec!.strike, 0)} · {dmy(rec!.expiry)}</div>
-            <div className="mt-1 grid grid-cols-3 gap-1 text-[11px] text-slate-500">
-              <span>OI {rec!.oi != null ? num(rec!.oi, 0) : "—"}</span>
-              <span>IV {rec!.iv != null ? num(rec!.iv, 1) : "—"}</span>
-              <span>Δ {rec!.delta != null ? num(rec!.delta, 2) : "—"}</span>
+            <div className={`num mt-2 text-xl font-bold ${s.state === "delayed" || s.state === "unavailable" ? "opacity-60" : ""}`}>₹{num(s.premium)}</div>
+            <div className={`num text-xs ${(s.change ?? 0) > 0 ? "text-gain" : (s.change ?? 0) < 0 ? "text-loss" : "text-slate-500"}`}>
+              {s.change != null ? `${s.change > 0 ? "+" : s.change < 0 ? "−" : ""}${num(Math.abs(s.change))} (${s.change_pct != null ? `${num(s.change_pct, 2)}%` : "—"})` : "change —"}
             </div>
+            <div className="mt-1 grid grid-cols-2 gap-x-2 text-[11px] text-slate-500">
+              <span>Vol {s.volume != null ? num(s.volume, 0) : "—"}</span><span>OI {s.oi != null ? num(s.oi, 0) : "—"}</span>
+              <span>IV {s.iv != null ? num(s.iv, 1) : "—"}</span><span>Δ {s.delta != null ? num(s.delta, 2) : "—"}</span>
+            </div>
+            {s.state === "delayed" && <p className="mt-1 text-[11px] text-orange-600">Last good quote {s.age_sec != null ? `${s.age_sec}s ago` : ""}{s.error ? `: ${s.error}` : ""}</p>}
           </>
         ) : (
-          <p className="mt-2 text-xs text-slate-500">{has ? "Not the recommended side." : sig?.action === "HOLD" ? "No contract selected while the signal is HOLD." : rec?.error ?? "No verified contract."}</p>
+          <p className="mt-2 text-xs text-slate-500">{s?.error ?? pm?.error ?? "No quote yet."}</p>
         )}
       </div>
     );
   };
+  const asOf = pm?.ce?.as_of ?? pm?.pe?.as_of;
   return (
     <Card accent="neutral" title="NIFTY Options Premium" icon={<Layers size={16} className="text-slate-500" />}
-      right={has ? `as of ${hms(rec!.quote_as_of)}` : undefined}>
+      right={asOf ? `as of ${hms(asOf)}` : undefined}>
+      {pm?.strike != null && (
+        <div className="mb-2 text-xs text-slate-500">
+          <b className="num text-slate-700 dark:text-slate-200">{num(pm.strike, 0)}</b> · expiry {dmy(pm.expiry)}{pm.days_to_expiry != null ? ` (${pm.days_to_expiry}d)` : ""} · {pm.basis}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">{side("CE")}{side("PE")}</div>
       <div className="mt-2">
-        <Limitation>Premium = price of one option contract, not the NIFTY index. The backend returns only the recommended contract, with no premium change or volume.</Limitation>
+        <Limitation>Premium = the option contract's own price from Groww, never the NIFTY index. Change is against the contract's previous close.</Limitation>
       </div>
     </Card>
   );

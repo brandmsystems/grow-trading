@@ -24,4 +24,6 @@ def create_app() -> Flask:
     from app.api import account, backtest, data, frontend, live, pages, paper, research
     for mod in (pages, account, backtest, data, research, live, paper, frontend):
         app.register_blueprint(mod.bp)
+    from app.api import realtime
+    realtime.init_app(app)      # Socket.IO push at /socket.io (Phase 3)
     return app
