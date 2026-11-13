@@ -10,6 +10,12 @@ least min_score open a trade. Exits are the signal's NIFTY stop (1 x ATR) or tar
 (2 x ATR), judged on completed 1-minute candles exactly like the Signals outcome, or the
 15:00 square-off. Opposite crosses don't exit in this mode.
 
+Trend mode (signal_mode="trend", added 13 Nov at the user's request): at every bar close inside the
+entry window, if no position is open, enter in the direction EMA 9 vs EMA 21 points (BUY CE when
+EMA 9 > EMA 21, BUY PE when below), even without a fresh crossover. A position is exited when the
+trend flips (the opposite crossover), then the next entry follows the new trend. All other checks
+(paper risk sizing and stop, daily trade limit, daily loss limit, 15:00 square-off) are unchanged.
+
 Event handling per evaluation (after each signal bar closes + a grace period):
   * exit events (opposite cross) are applied before entry events at the same time;
   * entries are skipped if stale (> STALE_ENTRY_SEC after the signal bar closed),
@@ -63,7 +69,7 @@ class EngineConfig:
     bar_grace_sec: int = 5             # wait after bar close before evaluating
     max_candle_wait_sec: int = 60      # wait for the bar's last 1m candle to appear
     stale_entry_sec: int = 180         # don't enter if the signal is older than this
-    signal_mode: str = "cross"         # cross: every crossover | prediction: scored signals only
+    signal_mode: str = "cross"         # cross: every crossover | prediction: scored signals only | trend: whenever EMAs agree
     strategy: str = "ema_9_21"         # prediction mode: whose crosses are scored
     min_score: float = 50.0            # prediction mode: minimum score to open a trade
     order_confirmation: str = "manual" # live mode: manual = you confirm each entry order; auto = engine places it
@@ -97,8 +103,8 @@ class EngineConfig:
         self.max_trades_per_day = int(self.max_trades_per_day)
         if self.order_confirmation not in ("manual", "auto"):
             raise ValueError("order_confirmation must be manual or auto")
-        if self.signal_mode not in ("cross", "prediction"):
-            raise ValueError("signal_mode must be cross or prediction")
+        if self.signal_mode not in ("cross", "prediction", "trend"):
+            raise ValueError("signal_mode must be cross, prediction or trend")
         if self.strategy not in strategies.STRATEGIES:
             raise ValueError("unknown strategy")
         self.min_score = float(self.min_score)
@@ -387,6 +393,9 @@ class Engine:
                           "ema9": round(float(last["ema9"]), 2), "ema21": round(float(last["ema21"]), 2),
                           "evaluated_at": now.isoformat()}
 
+        if self.cfg.signal_mode == "trend":
+            return self._evaluate_trend(now, bar_close, last)
+
         legs, _ = st.generate_legs(bars, {self.day}, _hm(self.cfg.entry_start), _hm(self.cfg.cutoff))
         lo, hi = pd.Timestamp(self.processed_until), pd.Timestamp(bar_close)
         events = []
@@ -403,6 +412,29 @@ class Engine:
             else:
                 self._try_entry(now, leg)
         self.processed_until = bar_close
+
+    # ------------------------------------------------------------ trend mode
+    def _evaluate_trend(self, now: datetime, bar_close: datetime, last) -> None:
+        """Enter whenever EMA 9 and EMA 21 agree on a direction; exit when they flip."""
+        self.processed_until = bar_close
+        e9, e21 = float(last["ema9"]), float(last["ema21"])
+        if pd.Timestamp(last["close_ts"]) != pd.Timestamp(bar_close) or not (e9 == e9 and e21 == e21) or e9 == e21:
+            return
+        d = 1 if e9 > e21 else -1
+        word = "up (EMA 9 above EMA 21)" if d > 0 else "down (EMA 9 below EMA 21)"
+        if self.position and self.position["direction"] != d:
+            self.log(f"Trend flipped {word} on bar closing {bar_close:%H:%M}: exiting")
+            self._exit("opposite_cross")
+        t = bar_close.time()
+        if not (_hm(self.cfg.entry_start) <= t <= _hm(self.cfg.cutoff)) or t >= st.SQUARE_OFF:
+            return
+        if self.position:
+            self.log(f"{bar_close:%H:%M} trend {word}: position already open, holding")
+            return
+        self.log(f"{bar_close:%H:%M} trend {word}: entering")
+        leg = st.Leg(day=self.day, direction=d, entry_ts=bar_close, signal_close=float(last["close"]),
+                     signal_bar_start=pd.Timestamp(last["start"]).to_pydatetime(), ordinal=self.trades_today + 1)
+        self._try_entry(now, leg)
 
     # ------------------------------------------------------------ prediction mode
     def _regime_row(self, spot: pd.DataFrame):

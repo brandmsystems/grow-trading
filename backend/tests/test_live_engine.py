@@ -396,3 +396,45 @@ def test_paper_mode_never_waits_for_confirmation():
     eng, market = make({"timeframe": 15}, start_day=d)
     run_days(eng, market, [d])
     assert eng.pending is None and live_trades()
+
+
+def test_trend_mode_enters_with_the_ema_trend_without_waiting_for_a_cross():
+    """Trend mode (13 Nov): when flat, enter at the first bar close in the window in the direction of
+    EMA 9 vs EMA 21; exit when the trend flips. Cross mode is unchanged (test_engine_matches_backtest)."""
+    from app.services.strategy import rules as st
+    days = [d for d in (START + timedelta(days=i) for i in range(5, 12)) if d.weekday() < 5]
+    eng, market = make({"signal_mode": "trend", "timeframe": 15})
+    run_days(eng, market, days)
+    got = live_trades()
+    assert got and all(g["status"] == "CLOSED" for g in got)
+
+    full = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(days[-1], time(15, 31)))
+    bars = st.add_emas(st.resample(full.spot_1m(days[-1]), 15))
+    trend = {pd_ts.to_pydatetime(): (1 if e9 > e21 else -1)
+             for pd_ts, e9, e21 in zip(bars["close_ts"], bars["ema9"], bars["ema21"])}
+    for g in got:
+        d = 1 if g["direction"] == "Bullish" else -1
+        assert trend[g["signal_ts"]] == d                          # always with the trend at the signal bar
+        assert time(9, 30) <= g["signal_ts"].time() <= time(14, 30)
+        assert g["signal_mode"] == "trend"
+    # every day starts trading at the first bar in the window (09:30), no crossover needed
+    first = {}
+    for g in got:
+        first.setdefault(g["day"], g["signal_ts"].time())
+    assert set(first) == set(days) and all(t == time(9, 30) for t in first.values())
+    # positions never overlap
+    for a, b in zip(got, got[1:]):
+        assert a["exit_ts"] <= b["entry_ts"]
+    # more entries than every-crossover mode on the same days
+    clean = [r["id"] for r in got]
+    with db.engine().begin() as c:
+        c.execute(text("TRUNCATE live_trades, live_events, live_sessions RESTART IDENTITY CASCADE"))
+    eng2, m2 = make({"signal_mode": "cross", "timeframe": 15})
+    run_days(eng2, m2, days)
+    assert len(clean) >= len(live_trades())
+
+
+def test_trend_mode_is_a_valid_signal_mode():
+    assert le.EngineConfig(signal_mode="trend").validate().signal_mode == "trend"
+    with pytest.raises(ValueError):
+        le.EngineConfig(signal_mode="always").validate()

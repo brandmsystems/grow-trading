@@ -575,8 +575,13 @@ class Feed:
                     "nifty_stop": round(spot - d * STOP_ATR * atr, 2), "nifty_target": round(spot + d * TARGET_ATR * atr, 2)})
         avail, merr = self.margin()
         cap = capital if capital and capital > 0 else avail
-        if not cap:
+        if cap is None:
             rec["sizing_error"] = f"Available margin unknown ({merr}). Enter your capital to size the trade."
+            return rec
+        if cap <= 0:
+            # Groww reports zero or a negative option-buy balance (e.g. after buying with the whole balance).
+            rec["sizing_error"] = (f"Groww option-buy balance is ₹{cap:,.2f}, so no size can be given. "
+                                   "Enter your capital to size the trade.")
             return rec
         rec["sizing"] = size_position(entry, stop, target, c.lot_size, cap, risk_pct, avail)
         if merr:

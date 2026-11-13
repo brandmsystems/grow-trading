@@ -102,7 +102,7 @@ export interface EngineConfig {
   exec_mode: "ITM5_BUY" | "ATM_BUY" | "ATM_SELL";
   timeframe: number; entry_start: string; cutoff: string; lots: number; roll_on_expiry_day: boolean;
   max_daily_loss: number; max_trades_per_day: number;
-  signal_mode: "cross" | "prediction"; strategy: string; min_score: number;
+  signal_mode: "cross" | "trend" | "prediction"; strategy: string; min_score: number;
   order_confirmation: "manual" | "auto";
   // paper trading risk management (ignored by live and replay)
   risk_pct: number; daily_risk_pct: number; max_open_positions: number; max_lots: number; min_balance: number;

@@ -13,6 +13,15 @@
   - **Square-off:** anything still open is closed at the 15:00 1-minute open. Signals from bars closing at or after 15:00 are ignored.
 - **Cross #:** the trade's rank among that day's in-window crosses.
 
+### Engine entry modes (`trading/engine.py`, `signal_mode`)
+| Mode | Enters | Exits (besides stop, limits and 15:00) | Backtested |
+|---|---|---|---|
+| `cross` (default) | Only on the bar where EMA 9 crosses EMA 21 | Opposite crossover | Yes (the engine reproduces the backtest exactly) |
+| `trend` (13 Nov) | At any bar close in the window when flat, in the direction EMA 9 vs EMA 21 points | When the trend flips (opposite crossover) | **No** |
+| `prediction` | Crossovers scoring at least `min_score` | NIFTY stop 1×ATR / target 2×ATR | Through the Signals analysis |
+
+In `trend` mode, a position stopped out is re-entered at the next bar close if the trend still agrees, up to the daily trade limit.
+
 ## Option selection
 | Mode | Bullish | Bearish |
 |---|---|---|

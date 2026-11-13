@@ -2,6 +2,11 @@
 
 All dates are 2026, IST.
 
+## 13 Nov: trend entry mode, dashboard sizing fix
+- **New engine signal mode `trend`** ("Whenever the trend agrees"), added at the user's request: at each bar close inside the entry window, if no position is open, the engine enters in the direction of EMA 9 vs EMA 21 (BUY CE above, BUY PE below) without waiting for a crossover. It exits when the trend flips and re-enters the other way. Risk sizing, the premium stop, the daily trade and loss limits and the 15:00 square-off all still apply. `cross` and `prediction` are unchanged. This mode has not been backtested: the backtester still tests crossover entries only.
+- **Fix:** the live dashboard stopped updating when Groww reported a zero or negative option-buy balance and no capital was entered ("capital must be positive"). It now shows "Groww option-buy balance is ₹X, so no size can be given" and keeps updating.
+- **Tests:** a zero/negative balance test (feed) and two trend-mode engine tests.
+
 ## 12 Nov: Phase 3, live data and WebSockets
 - **Socket.IO push:** new `api/realtime.py` (Flask-SocketIO, threading mode, `simple-websocket`). Pushes the `/api/live/dashboard` payload per settings room; heartbeats, sequence numbers, change detection, 1 s / 5 s ticks. `app.py` runs `socketio.run`. New dependencies: `flask-socketio`, `simple-websocket` (backend), `socket.io-client` 4.8.1 (frontend).
 - **One builder:** `live.dashboard_args` and `live.dashboard_payload` are shared by the REST endpoint and the socket (no duplicate API).

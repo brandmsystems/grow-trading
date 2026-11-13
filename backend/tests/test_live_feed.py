@@ -340,3 +340,24 @@ def test_signal_alert_is_stored_once():
         with conn.cursor() as cur:
             cur.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
         conn.close()
+
+
+@pytest.mark.parametrize("balance", [0.0, -1250.5])
+def test_zero_or_negative_margin_does_not_break_dashboard(no_alert_store, balance):
+    """Groww can report a zero or negative option-buy balance (e.g. after buying with the whole
+    balance). With no capital entered, the dashboard must still build and explain why no size is given."""
+    class BrokeApi(FakeApi):
+        def __call__(self, fn, **kw):
+            if fn == "get_available_margin_details":
+                self.calls.append((fn, kw))
+                return {"fno_margin_details": {"option_buy_balance_available": balance}}
+            return super().__call__(fn, **kw)
+
+    now = first_buy_time().entry_ts + timedelta(seconds=30)
+    f, _ = make_feed(now, BrokeApi())
+    r = f.dashboard(tf=5, capital=None, risk_pct=2)["signal"]["rec"]
+    assert r["verified"] and "sizing" not in r
+    assert "option-buy balance" in r["sizing_error"]
+    # an entered capital still sizes the trade (limited by the cash actually available)
+    r2 = f.dashboard(tf=5, capital=100000, risk_pct=2)["signal"]["rec"]
+    assert "sizing" in r2 and r2["sizing"]["capital"] == 100000
