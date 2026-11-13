@@ -19,9 +19,11 @@ export function SpotCard({ data, compact = false }: { data: Dashboard; compact?:
         </span>} />
       {!compact && (
         <>
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat label="Day high" value={num(q?.high)} className="text-sm text-gain" sub={q?.from_high != null ? `${signed(q.from_high)} from high` : undefined} />
             <Stat label="Day low" value={num(q?.low)} className="text-sm text-loss" sub={q?.from_low != null ? `${signed(q.from_low)} from low` : undefined} />
+            <Stat label="Day range" value={q?.high != null && q?.low != null ? `${num(q.high - q.low)} pts` : "—"} className="text-sm"
+              sub={q?.high != null && q?.low != null && q?.prev_close ? `${num(((q.high - q.low) / q.prev_close) * 100)}% of prev close` : "high − low"} />
             <Stat label="Prev close" value={num(q?.prev_close)} className="text-sm" sub={q?.change_pct != null ? `${signed(q.change_pct)}% today` : undefined} />
           </div>
           {q?.range_pct != null && (
