@@ -18,8 +18,9 @@ export function SpotCard({ data, compact = false }: { data: Dashboard; compact?:
           {signed(q?.change)} ({signed(q?.change_pct)}%)
         </span>} />
       {!compact && (
-        <>
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="@container">
+          {/* Columns follow the card's own width (it is narrow in the 4-up Overview row), not the window's. */}
+          <div className="mt-3 grid grid-cols-2 gap-2 @md:grid-cols-4">
             <Stat label="Day high" value={num(q?.high)} className="text-sm text-gain" sub={q?.from_high != null ? `${signed(q.from_high)} from high` : undefined} />
             <Stat label="Day low" value={num(q?.low)} className="text-sm text-loss" sub={q?.from_low != null ? `${signed(q.from_low)} from low` : undefined} />
             <Stat label="Day range" value={q?.high != null && q?.low != null ? `${num(q.high - q.low)} pts` : "—"} className="text-sm"
@@ -28,13 +29,14 @@ export function SpotCard({ data, compact = false }: { data: Dashboard; compact?:
           </div>
           {q?.range_pct != null && (
             <div className="mt-3" aria-label="Position in today's range">
-              <div className="flex justify-between text-[11px] text-slate-500"><span>Low {num(q.low)}</span><span>{num(q.range_pct, 0)}% of today's range</span><span>High {num(q.high)}</span></div>
+              <div className="flex justify-between gap-2 whitespace-nowrap text-[11px] text-slate-500"><span>Low {num(q.low)}</span><span>High {num(q.high)}</span></div>
               <div className="relative mt-1 h-2 rounded-full bg-gradient-to-r from-red-400 via-slate-300 to-green-500 dark:via-slate-600">
                 <div className="absolute -top-1 h-4 w-1.5 -translate-x-1/2 rounded bg-blue-600 ring-2 ring-white dark:ring-slate-900" style={{ left: `${Math.min(100, Math.max(0, q.range_pct))}%` }} />
               </div>
+              <div className="mt-1 text-center text-[11px] text-slate-500">{num(q.range_pct, 0)}% of today's range</div>
             </div>
           )}
-        </>
+        </div>
       )}
       <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
         Index value · {up ? "rising" : down ? "falling" : "flat"} vs previous close · updated {hms(q?.as_of)}
@@ -64,10 +66,10 @@ export function PremiumCard({ data }: { data: Dashboard }) {
     const tone = t === "CE" ? "border-green-300 bg-green-50 dark:border-green-900 dark:bg-green-950/30" : "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/30";
     const st = s ? PREM_STATE[s.state] : null;
     return (
-      <div className={`rounded-xl border p-3 ${sel ? tone : "border-slate-200 dark:border-slate-800"}`}>
-        <div className="flex items-center justify-between gap-1">
+      <div className={`@container min-w-0 rounded-xl border p-3 ${sel ? tone : "border-slate-200 dark:border-slate-800"}`}>
+        <div className="flex flex-wrap items-center justify-between gap-1">
           <Pill tone={t === "CE" ? "good" : "bad"}>{t === "CE" ? "CALL (CE)" : "PUT (PE)"}</Pill>
-          {sel ? <span className="text-[11px] font-semibold text-slate-500">SELECTED</span> : st && <Pill tone={st.tone}>{st.label}</Pill>}
+          {sel ? <span className="whitespace-nowrap text-[11px] font-semibold text-slate-500">SELECTED</span> : st && <Pill tone={st.tone}>{st.label}</Pill>}
         </div>
         {s?.premium != null ? (
           <>
@@ -75,7 +77,7 @@ export function PremiumCard({ data }: { data: Dashboard }) {
             <div className={`num text-xs ${(s.change ?? 0) > 0 ? "text-gain" : (s.change ?? 0) < 0 ? "text-loss" : "text-slate-500"}`}>
               {s.change != null ? `${s.change > 0 ? "+" : s.change < 0 ? "−" : ""}${num(Math.abs(s.change))} (${s.change_pct != null ? `${num(s.change_pct, 2)}%` : "—"})` : "change —"}
             </div>
-            <div className="mt-1 grid grid-cols-2 gap-x-2 text-[11px] text-slate-500">
+            <div className="mt-1 grid grid-cols-1 gap-x-2 whitespace-nowrap text-[11px] text-slate-500 @[11rem]:grid-cols-2">
               <span>Vol {s.volume != null ? num(s.volume, 0) : "—"}</span><span>OI {s.oi != null ? num(s.oi, 0) : "—"}</span>
               <span>IV {s.iv != null ? num(s.iv, 1) : "—"}</span><span>Δ {s.delta != null ? num(s.delta, 2) : "—"}</span>
             </div>

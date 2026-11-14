@@ -21,7 +21,6 @@ from app.services.strategy import rules as st
 
 log = logging.getLogger("backtest")
 
-WARMUP_DAYS = 3
 WHIPSAW_BARS = 2
 DEFAULTS = {
     "dataset": "groww",
@@ -71,6 +70,8 @@ def _session_asof(spot: pd.DataFrame) -> datetime | None:
 
 
 def normalise(params: dict) -> dict:
+    """Fill defaults, coerce types and validate backtest parameters. The result is what gets
+    hashed for the result cache, so two equivalent requests share one stored run."""
     p = {**DEFAULTS, **{k: v for k, v in params.items() if v is not None}}
     p["costs"] = {**costs.DEFAULT_COSTS.to_dict(), **(params.get("costs") or {})}
     p["end_date"] = str(p["end_date"] or _now().date())
@@ -109,6 +110,8 @@ def _day_range(symbol: str, day: date) -> pd.DataFrame:
 
 
 def ensure_data(params: dict, progress=None) -> dict:
+    """Download what a backtest needs (spot, near-month futures for VWAP, expiries) and clear
+    cached runs, since their results were computed on the older data."""
     p = normalise(params)
     prov = providers.get(p["dataset"])
     s, e = date.fromisoformat(p["start_date"]), date.fromisoformat(p["end_date"])
@@ -124,6 +127,14 @@ def ensure_data(params: dict, progress=None) -> dict:
 
 
 def run(params: dict, progress=None, use_cache: bool = True, save: bool = True) -> dict:
+    """Run one backtest: spot candles -> strategy bars -> crossover legs -> option trades per mode.
+
+    Each leg is priced for every execution mode (ATM buy, ITM 5 buy, ATM sell) with the leg's
+    expiry, the NSE lot size in force for that expiry and real option candles at the fill times
+    (a closed trade with no option candle within 3 minutes of entry or exit is skipped, never
+    estimated). Costs come from charges.round_trip. An unfinished session is cut at the last
+    completed minute, so no bar or fill uses data from the future. Results are cached by
+    parameter hash."""
     p = normalise(params)
     h = param_hash(p)
     if use_cache:

@@ -10,7 +10,7 @@ import { Decision, RiskRows } from "./RiskManagement";
 
 const REASON: Record<string, string> = {
   opposite_cross: "opposite crossover", square_off: "15:00 square-off", stop_loss: "stop-loss", stop: "NIFTY stop",
-  target: "target", daily_loss_limit: "daily loss limit", manual_stop: "you stopped", manual_square_off: "you squared off",
+  target: "target", time_exit: "5-min time exit", daily_loss_limit: "daily loss limit", manual_stop: "you stopped", manual_square_off: "you squared off",
 };
 
 function StopHistory({ tradeId }: { tradeId: number }) {

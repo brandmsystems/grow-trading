@@ -102,7 +102,8 @@ export interface EngineConfig {
   exec_mode: "ITM5_BUY" | "ATM_BUY" | "ATM_SELL";
   timeframe: number; entry_start: string; cutoff: string; lots: number; roll_on_expiry_day: boolean;
   max_daily_loss: number; max_trades_per_day: number;
-  signal_mode: "cross" | "trend" | "prediction"; strategy: string; min_score: number;
+  signal_mode: "cross" | "trend" | "prediction" | "scalp"; strategy: string; min_score: number;
+  scalp_config?: string; scalp_exit?: "time" | "sl_target"; hold_min?: number; target_pct?: number;
   order_confirmation: "manual" | "auto";
   // paper trading risk management (ignored by live and replay)
   risk_pct: number; daily_risk_pct: number; max_open_positions: number; max_lots: number; min_balance: number;
@@ -363,3 +364,40 @@ export interface Premiums {
   strike: number | null; expiry: string | null; basis: string | null; days_to_expiry?: number; lot_size?: number | null;
   ce: PremiumSide | null; pe: PremiumSide | null; error: string | null;
 }
+
+// ------------------------------------------------------------------ 5-minute scalping analyzer
+export interface ScalpStats {
+  trades: number; net_pnl: number; gross_pnl: number; win_rate: number; profit_factor: number | null; max_drawdown: number;
+  max_drawdown_pct?: number; wins?: number; losses?: number; avg_win?: number; avg_loss?: number; brokerage?: number; taxes?: number;
+  slippage?: number; avg_hold_min?: number | null; risk_reward?: number | null; exits?: Record<string, number>; [k: string]: unknown;
+}
+export interface ScalpGroup { net: number; gross: number; trades: number; win_rate: number }
+export interface ScalpConfig extends ScalpStats {
+  key: string; strategy: string; strategy_label: string; contract: "ATM_BUY" | "ITM5_BUY"; contract_label: string;
+  exit: string; exit_label: string; exit_kind: "time" | "sl_target"; stop: number | null; target: number | null;
+  ce: ScalpStats; pe: ScalpStats; yearly: Record<string, ScalpGroup>; monthly?: Record<string, ScalpGroup>; regimes?: Record<string, ScalpGroup>;
+  equity?: [string, number][]; skipped: Record<string, number>;
+  risk?: Record<string, { trades: number; net_pnl: number; gross_pnl: number; win_rate: number; profit_factor: number | null; max_drawdown: number; max_drawdown_pct: number; brokerage: number; taxes: number; slippage: number; avg_lots: number; too_small: number }>;
+  in_sample: { trades: number; net_pnl: number; profit_factor: number | null; max_drawdown: number } | null;
+  out_of_sample: { trades: number; net_pnl: number; profit_factor: number | null; max_drawdown: number } | null;
+  oos_net: number | null; in_sample_score: number | null; score: number;
+  verdict: { consistent: boolean; checks: Record<string, boolean>; years_positive: string };
+}
+export interface ScalpTrade {
+  day: string; signal_ts: string; entry_ts: string; exit_ts: string; hold_min: number; direction: string; opt_type: "CE" | "PE";
+  symbol: string; strike: number; expiry: string; lot_size: number; qty: number; spot: number; entry: number; exit: number;
+  entry_fill: number; exit_fill: number; reason: string; gross: number; slippage: number; brokerage: number; taxes: number;
+  charges: number; friction: number; net: number; regime: string;
+}
+export interface ScalpExisting {
+  strategy: string; label: string; timeframe: number; contract: string; trades: number; net_pnl: number; win_rate: number;
+  profit_factor: number | null; max_drawdown: number; years_positive: string;
+}
+export interface ScalpRun {
+  run_id: number; start_date: string; end_date: string; created_at: string; generated_at: string;
+  configs: ScalpConfig[]; ranking: string[]; best: string | null; top_in_sample: string | null; split_day: string | null;
+  consistent: string[]; selection_rule: string; signals: Record<string, number>; existing: ScalpExisting[];
+  walk_forward: { rows: { year: string; trained_on: string; pick: string | null; pick_label: string | null; oos_net: number; oos_trades: number }[]; total_oos: number };
+  settings: Record<string, unknown>;
+}
+export interface ScalpPaperTrade extends LiveTrade { strategy: string | null; scalp_config: string | null; signal_mode: string }

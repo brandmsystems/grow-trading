@@ -106,7 +106,7 @@ export function EnginePanel() {
               </select></Field>
             <Field label="Signals">
               <select className={inputCls} value={cfg.signal_mode} onChange={(e) => set({ signal_mode: e.target.value as EngineConfig["signal_mode"] })}>
-                <option value="cross">Every crossover</option><option value="trend">Whenever the trend agrees</option><option value="prediction">Prediction score</option>
+                <option value="cross">Every crossover</option><option value="trend">Whenever the trend agrees</option><option value="prediction">Prediction score</option><option value="scalp" disabled>5-min scalp (start it on the Scalping page)</option>
               </select></Field>
             {cfg.signal_mode === "prediction" ? (
               <Field label="Min score">

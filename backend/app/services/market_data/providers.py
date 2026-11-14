@@ -151,6 +151,16 @@ class GrowwProvider(Provider):
         return db.load_expiries(self.dataset)
 
     def option_symbol(self, expiry: date, strike: float, typ: str) -> str | None:
+        """The stored trading symbol for a contract, else the standard name (see below).
+
+        A backtest asks for the same few contracts many times (three modes per signal), so
+        answers backed by a stored contract are remembered on this provider, which lives for one
+        run or one replay. Contracts are never deleted or renamed, so a remembered answer cannot
+        go stale. Misses are not remembered: a download running meanwhile may still add them."""
+        known = self.__dict__.setdefault("_contract_symbols", {})
+        key = (expiry, float(strike), typ)
+        if key in known:
+            return known[key]
         if not db.has_contracts(self.dataset, expiry):
             resp = self._call("get_contracts", exchange=self.EXCHANGE, underlying_symbol="NIFTY",
                               expiry_date=expiry.isoformat())
@@ -163,8 +173,11 @@ class GrowwProvider(Provider):
             db.save_contracts(self.dataset, rows)
         # Groww's list for an expired expiry can miss strikes that did trade; their candles
         # are still served under the standard name. If none exist, the trade is skipped.
-        return (db.find_contract(self.dataset, expiry, strike, typ)
-                or f"NSE-NIFTY-{expiry:%d%b%y}-{int(strike)}-{typ}")
+        stored = db.find_contract(self.dataset, expiry, strike, typ)
+        if stored:
+            known[key] = stored
+            return stored
+        return f"NSE-NIFTY-{expiry:%d%b%y}-{int(strike)}-{typ}"
 
     def ensure_option_day(self, symbol: str, day: date) -> None:
         """Fetch the contract from `day` to its expiry (up to 30 days) in one request.

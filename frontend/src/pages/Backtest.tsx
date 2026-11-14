@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Play, Settings2 } from "lucide-react";
 import { useSettings } from "../context/SettingsContext";
@@ -19,6 +19,23 @@ const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct
 const COST_LABEL: Record<string, string> = { slippage_pct: "Slippage %", slippage_pts: "Slippage pts", brokerage_per_order: "Brokerage / order ₹",
   stt_sell_pct: "STT on sell %", exchange_pct: "Exchange %", sebi_per_crore: "SEBI ₹/crore", stamp_buy_pct: "Stamp on buy %", gst_pct: "GST %" };
 const PCT_KEYS = new Set(["slippage_pct", "stt_sell_pct", "exchange_pct", "stamp_buy_pct", "gst_pct"]);
+
+const ROW_STEP = 300;
+
+/** One trade in the list. Memoised: picking a trade re-renders only the old and new rows. */
+const TradeRow = memo(function TradeRow({ t, selected, onSelect }: { t: BtTrade; selected: boolean; onSelect: (id: string) => void }) {
+  return (
+    <button onClick={() => onSelect(t.id)}
+      className={`grid w-full grid-cols-[1fr_auto] gap-1 rounded-lg px-2 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800/60 ${selected ? "bg-violet-50 dark:bg-violet-950/30" : ""}`}>
+      <span className="min-w-0">
+        <span className="num text-xs text-slate-500">{t.day} {hm(t.entry_ts)}→{hm(t.exit_ts)}</span>
+        <span className="flex items-center gap-1.5"><Pill tone={t.direction === "Bullish" ? "good" : "bad"}>{t.side} {t.opt_type}</Pill>
+          <span className="truncate text-xs text-slate-500">{num(t.strike, 0)} · #{t.ordinal} · {t.exit_reason === "square_off" ? "15:00" : t.exit_reason === "open" ? "open" : "cross"}{t.whipsaw ? " · whipsaw" : ""}</span></span>
+      </span>
+      <span className={`num self-center font-semibold ${pnlClass(t.net)}`}>{inr(t.net, true, 0)}</span>
+    </button>
+  );
+});
 
 function metricsOf(trades: BtTrade[], capital: number) {
   const n = trades.length, wins = trades.filter((t) => t.net > 0).length;
@@ -95,8 +112,17 @@ export default function Backtest() {
     && (cross === "all" || (cross === "4+" ? t.ordinal >= 4 : t.ordinal === Number(cross))), [year, outcome, dir, tFrom, tTo, cross]);
   const list = useMemo(() => all.filter(keep), [all, keep]);
   const filtered = dir !== "all" || !!tFrom || !!tTo || cross !== "all";
-  const m = metricsOf(list, result?.params.capital ?? 100000);
+  const capital = result?.params.capital ?? 100000;
+  const m = useMemo(() => metricsOf(list, capital), [list, capital]);
   const sel = list.find((t) => t.id === selId) ?? list[0];
+  // A five-year 1-minute run has 20,000+ trades: the list renders them in steps as you scroll
+  // (same scroll box, same rows), so opening the page or picking a trade stays quick.
+  const [shown, setShown] = useState(ROW_STEP);
+  useEffect(() => setShown(ROW_STEP), [list]);
+  const onListScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (shown < list.length && el.scrollTop + el.clientHeight >= el.scrollHeight - 200) setShown((s) => s + ROW_STEP);
+  };
 
   const equity = useMemo(() => MODES.map(({ value, label }) => {
     const byDay = new Map<string, number>();
@@ -257,19 +283,9 @@ export default function Backtest() {
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
             <Card title={`Trades (${list.length})`} className="xl:col-span-2" bodyClass="px-2 pb-2">
-              <div className="scroll-thin max-h-[560px] overflow-y-auto">
+              <div className="scroll-thin max-h-[560px] overflow-y-auto" onScroll={onListScroll}>
                 {list.length === 0 && <Empty title="No trades match" className="m-2" />}
-                {list.map((t) => (
-                  <button key={t.id} onClick={() => setSelId(t.id)}
-                    className={`grid w-full grid-cols-[1fr_auto] gap-1 rounded-lg px-2 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800/60 ${sel?.id === t.id ? "bg-violet-50 dark:bg-violet-950/30" : ""}`}>
-                    <span className="min-w-0">
-                      <span className="num text-xs text-slate-500">{t.day} {hm(t.entry_ts)}→{hm(t.exit_ts)}</span>
-                      <span className="flex items-center gap-1.5"><Pill tone={t.direction === "Bullish" ? "good" : "bad"}>{t.side} {t.opt_type}</Pill>
-                        <span className="truncate text-xs text-slate-500">{num(t.strike, 0)} · #{t.ordinal} · {t.exit_reason === "square_off" ? "15:00" : t.exit_reason === "open" ? "open" : "cross"}{t.whipsaw ? " · whipsaw" : ""}</span></span>
-                    </span>
-                    <span className={`num self-center font-semibold ${pnlClass(t.net)}`}>{inr(t.net, true, 0)}</span>
-                  </button>
-                ))}
+                {list.slice(0, shown).map((t) => <TradeRow key={t.id} t={t} selected={sel?.id === t.id} onSelect={setSelId} />)}
               </div>
             </Card>
             <div className="space-y-4 xl:col-span-3">

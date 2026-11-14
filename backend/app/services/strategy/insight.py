@@ -250,10 +250,6 @@ def trading_plan(day: date, now: datetime, quote: dict, today1m: pd.DataFrame, p
     }
 
 
-def plan_key(plan: dict) -> tuple:
-    return (plan["preferred"], plan["bullish_level"], plan["bearish_level"])
-
-
 def plan_change_reason(old: dict | None, new: dict) -> str | None:
     """Why the plan changed (None when it didn't). Judged on closed-bar values only."""
     if old is None:

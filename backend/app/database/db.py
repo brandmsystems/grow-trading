@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import psycopg2.extensions
 from psycopg2.extras import execute_values
@@ -82,14 +83,36 @@ def upsert_candles(symbol: str, df: pd.DataFrame, eng=None) -> int:
     return len(rows)
 
 
+_CANDLE_COLS = ["open", "high", "low", "close", "volume", "oi"]
+
+
 def load_candles(symbol: str, start: datetime, end: datetime, eng=None) -> pd.DataFrame:
+    """1-minute candles for [start, end), oldest first: ts (naive IST wall clock) + OHLCV + OI.
+
+    The hottest query in the app (every backtest loads spot plus hundreds of option windows),
+    so it skips the per-value Python timestamp cast: PostgreSQL returns the IST wall-clock
+    instant as integer microseconds, and numpy builds the frame in one pass. The result is
+    identical to `pd.read_sql` + `_cast_timestamptz` (same values and dtypes, checked bit for
+    bit on spot, futures and options). The columns are never NULL (upsert_candles writes 0 for
+    missing volume/OI), so the float conversion cannot change a value.
+    """
     eng = eng or engine()
-    df = pd.read_sql(
-        text("SELECT ts, open, high, low, close, volume, oi FROM candles_1m "
-             "WHERE symbol=:s AND ts>=:a AND ts<:b ORDER BY ts"),
-        eng, params={"s": symbol, "a": start, "b": end},
-    )
-    df["ts"] = pd.to_datetime(df["ts"])
+    raw = eng.raw_connection()
+    try:
+        with raw.cursor() as cur:
+            cur.execute("SELECT (extract(epoch FROM ts AT TIME ZONE 'Asia/Kolkata') * 1000000)::bigint, "
+                        "open, high, low, close, volume, oi FROM candles_1m "
+                        "WHERE symbol=%s AND ts>=%s AND ts<%s ORDER BY ts", (symbol, start, end))
+            rows = cur.fetchall()
+    finally:
+        raw.close()
+    if not rows:   # same empty frame read_sql produced: object columns, datetime ts
+        df = pd.DataFrame([], columns=["ts", *_CANDLE_COLS])
+        df["ts"] = pd.to_datetime(df["ts"])
+        return df
+    values = np.array(rows, dtype=np.float64)
+    df = pd.DataFrame(values[:, 1:], columns=_CANDLE_COLS)
+    df.insert(0, "ts", pd.to_datetime(np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows)), unit="us"))
     return df
 
 

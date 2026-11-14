@@ -19,8 +19,11 @@
 | `cross` (default) | Only on the bar where EMA 9 crosses EMA 21 | Opposite crossover | Yes (the engine reproduces the backtest exactly) |
 | `trend` (13 Nov) | At any bar close in the window when flat, in the direction EMA 9 vs EMA 21 points | When the trend flips (opposite crossover) | **No** |
 | `prediction` | Crossovers scoring at least `min_score` | NIFTY stop 1×ATR / target 2×ATR | Through the Signals analysis |
+| `scalp` (13 Nov, paper/replay only) | Confirmed crossovers of the chosen strategy on completed 5-minute bars | After `hold_min` (5) minutes, or earlier at the premium stop / target (`sl_target`) | Yes: the 5-minute scalping analyzer ([SCALPING.md](SCALPING.md)). No configuration was profitable after costs |
 
 In `trend` mode, a position stopped out is re-entered at the next bar close if the trend still agrees, up to the daily trade limit.
+
+`cross` and `trend` always trade EMA 9/21, whatever `strategy` is set to. Only `prediction` and `scalp` use the selected strategy, which is why the Live page shows the strategy picker in prediction mode only. All seven strategies (EMA 9/21, 5/20, 8/21, 20/50, and 9/21 with VWAP, RSI or MACD) run in the backtester, Compare and Signals; the scalping analyzer tests six of them (all but EMA 8/21).
 
 ## Option selection
 | Mode | Bullish | Bearish |

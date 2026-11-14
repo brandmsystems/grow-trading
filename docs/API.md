@@ -43,6 +43,13 @@
 | POST | `/api/research/run` | Compute missing configurations (job, research lane) |
 | GET | `/api/signals?strategy=&tf=` | Stored signal analysis (or `null`). Version 3 adds `model.auc_ci`, `model.calibration_wf` (walk-forward Brier vs average, per year), `model.calibrator`, `model.verdict`, a 95% `ci` on each band and reliability group, and `calibrated` on each signal. Older (v2) analyses are not served; rebuild them |
 | POST | `/api/signals/build` | Body `{"strategy", "tf"}`: build the analysis (job) |
+| GET | `/api/scalping` | Latest 5-minute scalping run: every configuration (summary fields), ranking, best, consistency list, walk-forward, existing-strategy comparison; `job` if a run is active. `data` is `null` before the first run |
+| GET | `/api/scalping/config?key=` | One configuration in full (monthly, yearly, regimes, CE/PE, equity, risk sizing) plus `trade_list` |
+| POST | `/api/scalping/run` | Re-run the whole analysis (job `scalping`, research lane) |
+| POST | `/api/scalping/paper/start` | Body `{"key", "mode": "paper"\|"replay", "replay_day"?, "risk": {risk_pct, daily_risk_pct, max_trades_per_day, max_lots, max_daily_loss, min_balance}}`. Starts the engine in scalp mode on a tested configuration. `live` is refused |
+| GET | `/api/scalping/paper/trades?key=&mode=` | Engine trades opened in scalp mode, newest first |
+
+Details: [SCALPING.md](SCALPING.md).
 
 ## Live: `api/live.py`
 | Method | Path | Purpose |

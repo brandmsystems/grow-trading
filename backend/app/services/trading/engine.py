@@ -1,8 +1,13 @@
-"""Live / paper trading engine for the 9/21 EMA crossover.
+"""Live / paper / replay trading engine.
 
 The engine re-derives today's trade sequence from CLOSED bars with exactly the
-same code the backtester uses (strategy.generate_legs) and acts on events it has
+same code the backtester uses (rules.generate_legs) and acts on events it has
 not processed yet. Live and backtest logic therefore cannot drift apart.
+
+Which strategy is traded depends on the signal mode: crossover ("cross") and trend modes
+always trade EMA 9/21 (rules.add_emas), whatever `strategy` says; prediction and scalp
+modes use `cfg.strategy` (strategies.prepare). The Live page only offers a strategy
+choice in prediction mode for that reason.
 
 Prediction mode (signal_mode="prediction"): crosses of the chosen strategy are scored
 with the Signals-page model (same features, signals.features). Only crosses scoring at
@@ -15,6 +20,12 @@ entry window, if no position is open, enter in the direction EMA 9 vs EMA 21 poi
 EMA 9 > EMA 21, BUY PE when below), even without a fresh crossover. A position is exited when the
 trend flips (the opposite crossover), then the next entry follows the new trend. All other checks
 (paper risk sizing and stop, daily trade limit, daily loss limit, 15:00 square-off) are unchanged.
+
+Scalp mode (signal_mode="scalp", 13 Nov, paper and replay only): a configuration tested on the
+5-Minute Scalping page. Confirmed crossovers of the chosen strategy on completed 5-minute bars open
+a trade; it exits after `hold_min` minutes ("time"), or earlier at the premium stop (stop_pct) or
+target (target_pct) ("sl_target"). The premium stop is enforced in both exit rules: in "time" mode it
+is a protective stop the backtest does not have (the paper risk rules require one).
 
 Event handling per evaluation (after each signal bar closes + a grace period):
   * exit events (opposite cross) are applied before entry events at the same time;
@@ -57,6 +68,8 @@ STALE_PRICE_SEC = 15      # an option price older than this never triggers a pap
 
 @dataclass
 class EngineConfig:
+    """Everything one engine run is configured with. `validate()` normalises types and refuses
+    combinations the engine must never run (for example scalp mode with real money)."""
     trade_mode: str = "paper"          # paper | live | replay (stored real candles, simulated clock)
     exec_mode: str = "ATM_BUY"         # ITM5_BUY | ATM_BUY | ATM_SELL
     timeframe: int = 15
@@ -69,8 +82,12 @@ class EngineConfig:
     bar_grace_sec: int = 5             # wait after bar close before evaluating
     max_candle_wait_sec: int = 60      # wait for the bar's last 1m candle to appear
     stale_entry_sec: int = 180         # don't enter if the signal is older than this
-    signal_mode: str = "cross"         # cross: every crossover | prediction: scored signals only | trend: whenever EMAs agree
-    strategy: str = "ema_9_21"         # prediction mode: whose crosses are scored
+    signal_mode: str = "cross"         # cross: every crossover | prediction: scored signals only | trend: whenever EMAs agree | scalp
+    scalp_exit: str = "time"           # scalp mode: time = exit after hold_min | sl_target = stop/target, at most hold_min
+    hold_min: int = 5                  # scalp mode: maximum holding time in minutes
+    target_pct: float = 10.0           # scalp mode, sl_target: target = premium x (1 + target_pct %)
+    scalp_config: str = ""             # scalp mode: the analyzer configuration key it was started from
+    strategy: str = "ema_9_21"         # prediction and scalp modes: whose crosses are used (cross/trend trade EMA 9/21)
     min_score: float = 50.0            # prediction mode: minimum score to open a trade
     order_confirmation: str = "manual" # live mode: manual = you confirm each entry order; auto = engine places it
     costs: dict = field(default_factory=lambda: costs.DEFAULT_COSTS.to_dict())
@@ -86,6 +103,8 @@ class EngineConfig:
     stop_points: float = 20.0
 
     def validate(self) -> "EngineConfig":
+        """Coerce numeric fields and raise ValueError for any setting outside its allowed range.
+        Called before every start, so a bad request can never reach the trading loop."""
         if self.trade_mode not in ("paper", "live", "replay"):
             raise ValueError("trade_mode must be paper, live or replay")
         if self.exec_mode not in st.MODES:
@@ -103,8 +122,22 @@ class EngineConfig:
         self.max_trades_per_day = int(self.max_trades_per_day)
         if self.order_confirmation not in ("manual", "auto"):
             raise ValueError("order_confirmation must be manual or auto")
-        if self.signal_mode not in ("cross", "prediction", "trend"):
-            raise ValueError("signal_mode must be cross, prediction or trend")
+        if self.signal_mode not in ("cross", "prediction", "trend", "scalp"):
+            raise ValueError("signal_mode must be cross, prediction, trend or scalp")
+        if self.signal_mode == "scalp":
+            if self.trade_mode == "live":
+                raise ValueError("Scalping runs in paper mode only; real-money scalping is not enabled.")
+            if int(self.timeframe) != 5:
+                raise ValueError("Scalping uses 5-minute candles: set the timeframe to 5.")
+            if self.scalp_exit not in ("time", "sl_target"):
+                raise ValueError("scalp exit must be time or sl_target")
+            self.hold_min, self.target_pct = int(self.hold_min), float(self.target_pct)
+            if not 1 <= self.hold_min <= 60:
+                raise ValueError("holding time must be 1 to 60 minutes")
+            if not 0 < self.target_pct <= 500:
+                raise ValueError("target % must be above 0")
+            if not 0 < float(self.stop_pct) < 100:
+                raise ValueError("stop % must be between 0 and 100")
         if self.strategy not in strategies.STRATEGIES:
             raise ValueError("unknown strategy")
         self.min_score = float(self.min_score)
@@ -293,6 +326,12 @@ class Engine:
 
     # ------------------------------------------------------------ main loop step
     def tick(self):
+        """One step of the trading loop (every second in paper/live; every 10 simulated seconds in replay).
+
+        Order matters: refresh the spot price, expire an unconfirmed live order, then the exits
+        (15:00 square-off, NIFTY stop/target, scalp time/target exits, retry of a failed exit),
+        then the daily loss check and the paper premium stop, and only then evaluate a newly
+        closed signal bar, so an exit is always applied before a new entry."""
         with self._lock:
             now = self.market.now()
             if self.day != now.date():
@@ -318,6 +357,8 @@ class Engine:
                 self._exit("square_off")
             if self.position and self.position.get("stop_ref") is not None:
                 self._check_refs(now)
+            if self.position and self.cfg.signal_mode == "scalp":
+                self._scalp_exits(now)
             if self.position and self.exit_failures:
                 self._exit(self.position.get("pending_reason", "retry"))   # retry a failed exit
             self._risk_check(now)
@@ -374,6 +415,8 @@ class Engine:
             self.log(f"1m candle {last_needed:%H:%M} missing; evaluating {bar_close:%H:%M} bar without it", "warn")
         if self.cfg.signal_mode == "prediction":
             return self._evaluate_prediction(now, bar_close, spot)
+        if self.cfg.signal_mode == "scalp":
+            return self._evaluate_scalp(now, bar_close, spot)
 
         bars = st.add_emas(st.resample(spot, self.cfg.timeframe))
         bars = bars[bars["close_ts"] <= pd.Timestamp(bar_close)]
@@ -435,6 +478,85 @@ class Engine:
         leg = st.Leg(day=self.day, direction=d, entry_ts=bar_close, signal_close=float(last["close"]),
                      signal_bar_start=pd.Timestamp(last["start"]).to_pydatetime(), ordinal=self.trades_today + 1)
         self._try_entry(now, leg)
+
+    # ------------------------------------------------------------ scalp mode
+    def _evaluate_scalp(self, now: datetime, bar_close: datetime, spot: pd.DataFrame) -> None:
+        """Confirmed crossovers of the chosen strategy on completed 5-minute bars (as the scalping analyzer)."""
+        key = self.cfg.strategy
+        fut = None
+        if strategies.STRATEGIES[key].confirm == "vwap" and hasattr(self.market, "futures_1m"):
+            fut = self.market.futures_1m(self.day)
+        bars = strategies.prepare(spot, fut, self.cfg.timeframe, key)
+        bars = bars[bars["close_ts"] <= pd.Timestamp(bar_close)].reset_index(drop=True)
+        today = bars[bars["day"] == self.day]
+        self.bars_today = [{"t": r.start.isoformat(), "c_ts": r.close_ts.isoformat(), "o": r.open, "h": r.high,
+                            "l": r.low, "c": r.close, "e9": round(r.fast, 2), "e21": round(r.slow, 2)}
+                           for r in today.itertuples(index=False)]
+        lo = pd.Timestamp(self.processed_until)
+        self.processed_until = bar_close
+        if today.empty:
+            self.log(f"No NIFTY candles for today yet (holiday?) at {bar_close:%H:%M}", "warn")
+            return
+        last = today.iloc[-1]
+        self.last_eval = {"bar_close": bar_close.isoformat(), "close": round(float(last["close"]), 2),
+                          "ema9": round(float(last["fast"]), 2), "ema21": round(float(last["slow"]), 2),
+                          "evaluated_at": now.isoformat()}
+        s = strategies.STRATEGIES[key]
+        start_t, cut_t = _hm(self.cfg.entry_start), _hm(self.cfg.cutoff)
+        for _, c in st.find_crosses(bars, "fast", "slow").iterrows():
+            ts = pd.Timestamp(c["close_ts"])
+            if not (lo < ts <= pd.Timestamp(bar_close)) or c["day"] != self.day:
+                continue
+            ts = ts.to_pydatetime()
+            if not (start_t <= ts.time() <= cut_t) or ts.time() >= st.SQUARE_OFF:
+                continue
+            d = int(c["direction"])
+            word = "Bullish" if d > 0 else "Bearish"
+            if s.confirm and not bool(c["bull_ok"] if d > 0 else c["bear_ok"]):
+                self.log(f"{word} {s.label} cross at {ts:%H:%M} not confirmed by {s.confirm.upper()}: no trade")
+                continue
+            self.log(f"{word} {s.label} cross on the 5-min bar closing {ts:%H:%M}: scalp entry")
+            leg = st.Leg(day=self.day, direction=d, entry_ts=ts, signal_close=float(c["close"]),
+                         signal_bar_start=pd.Timestamp(c["start"]).to_pydatetime(), ordinal=0)
+            self._try_entry(now, leg)
+
+    def _scalp_exits(self, now: datetime) -> None:
+        """Time exit hold_min minutes after the fill; premium target exit (sl_target). In paper mode the
+        stop is _premium_stop (levels from the risk calculation). Replay has no paper risk sizing, so its
+        stop and target are set from the entry fill and both are checked here."""
+        p = self.position
+        if not p or p.get("exiting"):
+            return
+        entered = pd.Timestamp(p["entry_ts"]).to_pydatetime().replace(tzinfo=None)
+        if (now - entered).total_seconds() >= self.cfg.hold_min * 60:
+            self.log(f"Held {self.cfg.hold_min} min: time exit")
+            self._exit("time_exit")
+            return
+        sym = p["contract"].trading_symbol
+        if not self.paper:
+            if p.get("stop_premium") is None and not p.get("scalp_levels_set"):
+                stop, tgt, how, _ = self._paper_stop(p["contract"], p["side"], float(p["entry_price"]))
+                p.update(stop_premium=stop, target_premium=tgt, scalp_levels_set=True)
+                self._update_trade(p["id"], {"stop_premium": stop, "target_premium": tgt})
+                self.log(f"Scalp levels from the fill {p['entry_price']:.2f}: {how}")
+            try:
+                self.last_ltp[sym], self.last_ltp_at[sym] = float(self.market.option_ltp(p["contract"])), self.market.now()
+            except Exception:
+                return
+        ltp, at = self.last_ltp.get(sym), self.last_ltp_at.get(sym)
+        if ltp is None or at is None or (self.market.now() - at).total_seconds() > STALE_PRICE_SEC:
+            return
+        buy = p["side"] == "BUY"
+        stop = p.get("stop_premium")
+        if not self.paper and stop is not None and ((ltp <= stop) if buy else (ltp >= stop)):
+            self.log(f"Premium {ltp:.2f} reached the stop-loss {stop:.2f}: exiting", "warn")
+            self._exit("stop_loss")
+            return
+        tgt = p.get("target_premium")
+        if self.cfg.scalp_exit == "sl_target" and tgt is not None:
+            if (ltp >= tgt) if buy else (ltp <= tgt):
+                self.log(f"Premium {ltp:.2f} reached the target {tgt:.2f}: exiting")
+                self._exit("target")
 
     # ------------------------------------------------------------ prediction mode
     def _regime_row(self, spot: pd.DataFrame):
@@ -575,6 +697,19 @@ class Engine:
         """(stop premium, target premium, method text, error). Buys stop below the premium, sells above."""
         sgn = 1 if side == "BUY" else -1
         self._last_delta = None
+        if self.cfg.signal_mode == "scalp":
+            stop = premium * (1 - sgn * self.cfg.stop_pct / 100)
+            target = premium * (1 + sgn * self.cfg.target_pct / 100) if self.cfg.scalp_exit == "sl_target" else None
+            how = (f"scalp: stop {self.cfg.stop_pct:g}% of the premium"
+                   + (f", target {self.cfg.target_pct:g}%" if target else
+                      f" (protective), exit after {self.cfg.hold_min} min"))
+            rnd = costs._round_tick_down if side == "BUY" else costs._round_tick_up
+            stop = rnd(stop)
+            if stop <= 0:
+                return None, None, how, "The stop-loss works out at or below zero; no position size can be calculated."
+            if target:
+                target = (costs._round_tick_up if side == "BUY" else costs._round_tick_down)(target)
+            return stop, target, how, None
         if self.cfg.stop_mode == "pct":
             stop = premium * (1 - sgn * self.cfg.stop_pct / 100)
             target = premium * (1 + sgn * 2 * self.cfg.stop_pct / 100)
@@ -803,7 +938,9 @@ class Engine:
             "trading_symbol": c.trading_symbol, "groww_symbol": c.groww_symbol, "strike": strike,
             "opt_type": typ, "expiry": expiry, "qty": qty, "signal_ts": leg.entry_ts,
             "signal_close": leg.signal_close, "entry_ts": fill["ts"], "entry_price": fill["price"],
-            "entry_order_id": fill["order_id"], "status": "OPEN", "signal_mode": self.cfg.signal_mode, **(refs or {})})
+            "entry_order_id": fill["order_id"], "status": "OPEN", "signal_mode": self.cfg.signal_mode,
+            **({"strategy": self.cfg.strategy, "scalp_config": self.cfg.scalp_config or None} if self.cfg.signal_mode == "scalp" else {}),
+            **(refs or {})})
         self.position = {"id": tid, "direction": leg.direction, "side": side, "contract": c, "qty": qty,
                          "entry_price": fill["price"], "entry_ts": fill["ts"], "signal_ts": leg.entry_ts,
                          "entry_ref": leg.signal_close, **(refs or {})}

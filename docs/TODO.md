@@ -25,6 +25,7 @@
   - stronger regularisation chosen by walk-forward validation for the signal model (changes scores, so prediction-mode trades)
   - a "require N confirmations" or "score ≥ X" entry filter, backtested first
   - custom EMA periods as new strategy settings (existing defaults unchanged)
+- **5-minute scalping:** none of the 120 configurations was profitable after costs (see [SCALPING.md](SCALPING.md)). Scalp paper mode has been tested on replays only; it still needs a check during a live session.
 
 ## Known issues
 - **Live push not yet seen during market hours:** Socket.IO push, reconnect and fallback were tested after the close (market closed, engine stopped). The 1 s ticks while open, and premium states going LIVE/DELAYED on real quotes, still need a check during a session.

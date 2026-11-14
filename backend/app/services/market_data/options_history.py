@@ -24,7 +24,6 @@ from app.services.strategy import rules as st
 
 log = logging.getLogger("options_history")
 
-UNDERLYING = "NIFTY"
 RUN_SYMBOL = "NIFTY-OPTIONS"     # data_downloads.symbol for option download runs
 STRIKE_RANGE = 10                # strikes either side of ATM
 WINDOW_DAYS = 29                 # one Groww request covers up to 30 days of 1-minute candles

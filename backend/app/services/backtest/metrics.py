@@ -3,6 +3,8 @@ from __future__ import annotations
 
 
 def compute(trades: list[dict], capital: float = 100_000.0) -> dict:
+    """Summary statistics for a list of trades, in trade order. Drawdown is measured on the
+    equity curve that starts at `capital`; break-even trades count as losses for the win rate."""
     n = len(trades)
     nets = [t["net"] for t in trades]
     gross = round(sum(t["gross"] for t in trades), 2)

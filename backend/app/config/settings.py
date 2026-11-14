@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 # Project root (grow-trading/): keys.txt, .env, the token cache and data/ live there, not in backend/.
 BASE_DIR = Path(__file__).resolve().parents[3]
-BACKEND_DIR = BASE_DIR / "backend"
 load_dotenv(BASE_DIR / ".env")
 
 KEYS_FILE = BASE_DIR / "keys.txt"

@@ -2,7 +2,7 @@
 
 The complete record of Grow Trading: what it does, how it's built, what has been verified, and what's pending. Detailed topics live in [docs/](docs/); this file summarises them and links to each.
 
-*Last updated: 12 Nov 2026, Phase 1 (historical data) of the master programme.*
+*Last updated: 14 Nov 2026, codebase cleanup and performance pass (no behaviour change; backtests 1.4–1.7× faster; see [docs/CHANGELOG.md](docs/CHANGELOG.md)).*
 
 ---
 
@@ -15,15 +15,18 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Strategies, backtest, comparison | **Done:** 7 strategies × 4 timeframes, all 28 computed with real option prices |
 | Signal engine | **Done:** scores tested only on years the model hadn't seen |
 | Paper / replay engine (crossover and prediction modes) | **Done and tested.** Paper now sizes every trade from a risk budget (virtual account, risk %, premium stop-loss, daily limit) and stores the calculation with the trade |
+| 5-minute scalping analyzer | **Done:** 120 configurations (6 EMA strategies × ATM/ITM 5 × 10 exit rules) over five years with real premiums and all costs, plus walk-forward. **None was profitable after costs.** Paper/replay scalp mode for any tested configuration ([docs/SCALPING.md](docs/SCALPING.md)) |
 | Live (real-money) engine | Built with safety rails. **Every entry order waits for your confirmation by default**; tested on replays, no real order placed yet |
 | Alerts | Stored once per signal (`live_alerts`), shown on the Live page |
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
-| React frontend (Phase 5 + redesign) | **All 9 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
+| React frontend (Phase 5 + redesign) | **All 10 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
 | WebSocket updates | **Done (master Phase 3):** Socket.IO push with REST polling fallback; tested after market hours |
-| Tests | **273 pass**; React production build and type check pass |
+| Tests | **292 pass** (13 Nov, incl. 15 scalping tests); React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
+
+**5-minute scalping finding (13 Nov 2026):** 0 of 120 configurations was net positive over 11 Nov 2021 → 12 Nov 2026 (296,170 simulated trades). 88 were positive before costs, but the best gross edge was about ₹27 per trade, against about ₹244 of costs per trade. Even with no slippage, none would have been positive. No configuration was positive out of sample, and the year-by-year walk-forward found no configuration worth trading in any year. See [docs/SCALPING.md](docs/SCALPING.md).
 
 ---
 
@@ -49,14 +52,14 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PROJECT_STRUCTURE.m
 backend/app/
   api/            Flask blueprints: account, backtest, data, research, live, pages (+ common helpers)
   config/         settings: paths, PostgreSQL, credentials (env first, keys.txt fallback)
-  database/       engine (Asia/Kolkata), migration runner, queries, migrations/0001–0010
+  database/       engine (Asia/Kolkata), migration runner, queries, migrations/0001–0012
   services/
     groww/          Groww login and API calls
     market_data/    history (download/validate), providers, live market, live dashboard feed
     options/        option-chain lookup, position sizing
     strategy/       9/21 rules, indicators, 7 strategies, signal engine
     trading/        charges, brokers (order execution), engine, manager
-    backtest/       backtest engine, metrics, comparison/walk-forward
+    backtest/       backtest engine, metrics, comparison/walk-forward, 5-minute scalping analyzer
     notifications/  alerts (stored once per signal)
   workers/        background jobs
   utils/          shared helpers
@@ -86,13 +89,18 @@ docs/             documentation
 - **Costs:** slippage plus the full charge stack.
 - **Prices:** real option candles only; a missing candle skips the trade.
 - **Compare page:** all 28 configurations, with yearly/monthly P&L, win rate, drawdown, equity curves and walk-forward.
+- **5-Minute Scalping page** ([docs/SCALPING.md](docs/SCALPING.md)):
+  - **Signals and fills:** EMA 9/21, 5/20 and 20/50, and 9/21 with VWAP, RSI or MACD, on completed 5-minute bars. Each trade fills at the next option candle's open.
+  - **Contracts and exits:** ATM and ITM 5 are tested separately. Exits are a fixed 5-minute hold, or stop/target (5/10/15% × 5/10/20%) with a 5-minute maximum. Stop/target exits are also sized at 0.5, 1 and 2% risk.
+  - **Choosing a configuration:** ranked by in-sample net ÷ drawdown, then checked out of sample; win rate is never used. The page also shows a year-by-year walk-forward and a comparison with the existing strategies.
+  - **Paper trading:** paper or replay trading of a chosen configuration, with a clickable BUY/SELL transaction table.
 
 ### Signals and prediction
 - **Signals page:** entry reference, stop (1 × ATR), target (2 × ATR), indicator checklist, score with the hit rate its band achieved on unseen data, strong-alert rule.
 - **Prediction mode** in the engine trades only signals scoring at or above your minimum. Live scores were verified to match offline scores exactly.
 
 ### React app (`/app`)
-- **Pages:** Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, Market Data, Historical Charts, Account & Settings.
+- **Pages:** Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, 5-Minute Scalping, Market Data, Historical Charts, Account & Settings.
 - **Layout:** collapsible sidebar on desktop, icon rail on tablets, bottom bar and drawer on phones. The header shows Groww connection, market status, engine state and a notification bell.
 - **Colours:** green for gains, BUY and CE; red for losses and PE; blue for spot; purple for strategy; orange for risk.
 - **Live Trading:** spot vs option premium shown separately; chart with EMA 9/21, crossovers, trade markers and stop/target lines; recommendation; order calculator; controls with live-order confirmation.
@@ -125,7 +133,7 @@ Details: [docs/GROWW_API.md](docs/GROWW_API.md).
 ## 6. Database
 Details: [docs/DATABASE.md](docs/DATABASE.md).
 
-**Setup:** PostgreSQL 17 `groww_trading`, 10 migrations, timestamps in IST.
+**Setup:** PostgreSQL 17 `groww_trading`, 12 migrations, timestamps in IST.
 
 **Main tables:**
 
@@ -133,7 +141,7 @@ Details: [docs/DATABASE.md](docs/DATABASE.md).
 |---|---|
 | Market data | `candles_1m`, `fetch_log`, `expiries`, `contracts` |
 | Downloads and quality | `data_downloads`, `data_day_quality` |
-| Research cache | `bt_runs`, `strategy_results` |
+| Research cache | `bt_runs`, `strategy_results`, `scalp_runs`, `scalp_trades` |
 | Engine | `live_sessions`, `live_trades`, `live_events`, `live_alerts` |
 
 **No existing records were deleted during the restructure.**
@@ -148,7 +156,7 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 | Account | `/api/status`, `/api/login`, `/api/logout`, `/api/profile`, `/api/funds` |
 | Backtest | `/api/bt/*`, `/api/jobs/<id>` |
 | Data | `/api/data/*` |
-| Research | `/api/research*`, `/api/signals*` |
+| Research | `/api/research*`, `/api/signals*`, `/api/scalping*` |
 | Live | `/api/live/*` |
 
 ---
@@ -314,11 +322,27 @@ The five requested items are done:
 
 The strategy's signals are unchanged; explanations, plan and patterns are context. Details: [docs/STRATEGY.md](docs/STRATEGY.md#live-dashboard-insight-12-nov-2026), [docs/FRONTEND.md](docs/FRONTEND.md). Tests: 244 pass.
 
+### 5-minute options scalping (13 Nov 2026)
+- **What was built:** a separate analyzer (`services/backtest/scalping.py`) that tests 120 configurations over the stored five years with real option premiums, NSE lot sizes and all costs. It has in-sample/out-of-sample selection, a year-by-year walk-forward and a five-check consistency verdict. Existing strategies and results are unchanged.
+- **Verdict:** **no configuration was consistently profitable after costs.**
+  - 0 of 120 net positive, 0 positive out of sample, and no walk-forward pick in any year.
+  - The best was EMA 20/50 · ATM · 5-minute hold: gross +₹5,580, net −₹2.13 lakh.
+  - None was profitable even with no slippage.
+  - The existing strategies are no better: 1 of 56 results is net positive (EMA 20/50 30m ATM buy, +₹571, break-even).
+- **Paper trading:** the page can paper-trade or replay any tested configuration (engine `signal_mode="scalp"`). It never chooses one for you, and real-money scalping is refused.
+- **Details:** [docs/SCALPING.md](docs/SCALPING.md).
+
+### Codebase cleanup (14 Nov 2026)
+Audited every module, route, exported name and table; removed only what was verified dead (an empty `models/` package, four unused constants/helpers, two never-called React API wrappers, untracked pre-restructure leftovers). No trading rule, calculation or result changed: three backtests and three risk-sizing cases are identical before and after, and 292 tests pass. Engine docs now state that `cross` and `trend` modes always trade EMA 9/21. Details: [docs/CHANGELOG.md](docs/CHANGELOG.md).
+
+**Performance pass (same day):** faster candle loading, a binary-search fill lookup and per-run contract lookups make backtests 1.4–1.7× faster with byte-identical results. The Backtest page's trade list now renders as you scroll. Measurements in the changelog.
+
 ## 11. Known issues and pending work
 Full list: [docs/TODO.md](docs/TODO.md).
 
 **Pending:**
 - Telegram notifications (Phase 4)
+- Scalp paper mode still needs a check during a live session (tested on a replay of 12 Nov and on synthetic data)
 
 **Known issues:**
 - **No holiday calendar.**

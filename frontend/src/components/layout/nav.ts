@@ -1,5 +1,5 @@
 import {
-  Activity, BarChart3, CandlestickChart, Database, FlaskConical, LayoutDashboard, Layers, Settings, Zap,
+  Activity, BarChart3, CandlestickChart, Database, FlaskConical, LayoutDashboard, Layers, Settings, Timer, Zap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -13,6 +13,7 @@ export const NAV: NavItem[] = [
   { to: "/options", label: "Options Analysis", short: "Options", icon: Layers },
   { to: "/backtest", label: "Backtesting", short: "Backtest", icon: FlaskConical, mobile: true },
   { to: "/compare", label: "Strategy Comparison", short: "Compare", icon: BarChart3 },
+  { to: "/scalping", label: "5-Minute Scalping", short: "Scalping", icon: Timer },
   { to: "/data", label: "Market Data", short: "Data", icon: Database },
   { to: "/history", label: "Historical Charts", short: "Charts", icon: CandlestickChart },
   { to: "/account", label: "Account & Settings", short: "Account", icon: Settings },

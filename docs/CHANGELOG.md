@@ -2,6 +2,58 @@
 
 All dates are 2026, IST.
 
+## 14 Nov: performance pass (no behaviour change)
+- **Where the time went:** a one-year backtest spent about 9 of 16 s in `db.load_candles` (776,000 rows turned into Python objects three times over), plus 2,400 contract lookups (two per priced trade) and full-frame mask scans in `rules.price_at`.
+- **`db.load_candles`:** PostgreSQL returns the IST wall-clock time as integer microseconds, and numpy builds the frame in one pass. This replaces `pd.read_sql` plus a Python cast on every timestamp. The output is identical: values and dtypes checked bit for bit on spot, futures and 40 option contracts, including empty results. The database has no NULL candle values and no fractional seconds (checked over all 68 M rows).
+- **`rules.price_at`:** for frames sorted by time (every caller passes stored candles, oldest first), a binary search finds the fill candle. Unsorted frames use the original code unchanged.
+- **`GrowwProvider.option_symbol`:** remembers contracts it found for the life of one provider (one backtest or one replay). Contracts are never deleted or renamed, so a remembered answer cannot go stale. Misses are not remembered.
+- **Backtest page:** the trade list renders 300 rows at a time as you scroll (same box, same rows; the title still shows the full count), and rows are memoised, so picking a trade no longer re-renders every row. A five-year 1-minute run has up to 22,807 trades.
+- **`requirements.txt`:** declares `numpy` and `requests`, which the code imports directly but which were only installed as dependencies of pandas and growwapi. No new packages.
+- **Measured (same machine, best of 2 runs, old code vs new):**
+
+  | Run | Before | After | Speed-up |
+  |---|---|---|---|
+  | EMA 9/21 15m, 1 year | 12.4 s | 8.2 s | 1.51× |
+  | EMA 8/21 1m, 2.5 months | 16.6 s | 9.9 s | 1.69× |
+  | EMA 9/21 + VWAP 5m, 6 months | 10.5 s | 7.2 s | 1.45× |
+  | EMA 20/50 30m, 2 years | 6.5 s | 4.7 s | 1.39× |
+  | Scalping analyzer, Aug–Nov 2026 | 5.0 s | 4.8 s | 1.05× (already loads in bulk) |
+
+  Loading five years of NIFTY spot needs 29% less peak memory (244 → 174 MB). The full test suite ran in 6 min 29 s (9–10 min before).
+- **Verified identical:** all four backtests, and the scalping analyzer output (old vs new code in one process, compared in full); the same three server backtests and three risk-sizing cases as before the cleanup; **292 tests pass**; the React type check and build pass.
+
+## 14 Nov: codebase cleanup (no behaviour change)
+- **Audit method:** a module import graph from every entry point (`app.py`, `start.py`, the tests), every top-level Python symbol and every exported TypeScript name searched across the code, every Flask route matched against the React client and the tests, and every table matched against the queries. Each hit was read, and its git history checked, before anything was removed.
+- **Removed (dead or obsolete):**
+  - `backend/app/models/`: an empty package nothing imports (tables are defined by the SQL migrations).
+  - `settings.BACKEND_DIR`: unused since the legacy pages were deleted on 12 Nov.
+  - `backtest.engine.WARMUP_DAYS`: replaced by `strategies.warmup_sessions()`.
+  - `options_history.UNDERLYING` and `insight.plan_key`: never used.
+  - React client wrappers `getBrokerPositions` and `downloadForBacktest`: never called. The endpoints stay (`/api/bt/data` is tested; `/api/live/broker` is for checking against Groww).
+  - Untracked leftovers from before the 11 Nov restructure: root `__pycache__/` (compiled modules that no longer exist), root `server.log` (logs are now in `data/logs/`), `backend/tests_tmp/` and the empty `scripts/` folder.
+- **Kept on purpose:** `/api/live/status` and `/api/logout` (documented endpoints, not used by the React app); the four `_now()` helpers (tests patch each one); `lot_sizes.clear_cache` (used by tests); `keys.txt` support (fallback when the Groww variables are not in `.env`).
+- **Docs and comments:**
+  - The engine docstring now says which strategy each mode trades: `cross` and `trend` always use EMA 9/21; `prediction` and `scalp` use the selected strategy. This matches the Live page, which shows the strategy picker in prediction mode only. The same note is in STRATEGY.md.
+  - Added docstrings to the backtest run, parameter normalisation, data download, metrics, engine config/validation/tick, engine start and the scalping run/summary.
+  - Fixed a stale reference (`strategy.generate_legs` → `rules.generate_legs`). PROJECT_STRUCTURE.md updated.
+- **Verified unchanged:**
+  - Backtests (EMA 9/21, EMA 8/21, EMA 9/21 + VWAP; 15m; 1 Oct–12 Nov): identical before and after the cleanup, trade by trade, net P&L included.
+  - Risk sizing: three risk-calculator cases identical.
+  - **292 tests pass** (292 before). The React type check and build pass.
+  - Groww login, profile, funds and option chain respond. Live start without the "LIVE" phrase and scalping in live mode are both refused. The Socket.IO handshake works. All 10 pages return 200.
+
+## 13 Nov: 5-minute options scalping analyzer
+- **New analyzer, `services/backtest/scalping.py`:**
+  - **Configurations:** 6 EMA strategies (9/21, 5/20, 20/50, and 9/21 + VWAP, RSI or MACD) × ATM / ITM 5 × 10 exit rules (fixed 5-minute hold, or stop 5/10/15% × target 5/10/20% with a 5-minute maximum) = 120. Stop/target rules are also sized at 0.5/1/2% risk.
+  - **Data and costs:** completed 5-minute NIFTY bars; entry at the next option candle's open; real premiums; NSE lot sizes; slippage, brokerage and taxes.
+  - **Safeguards:** no look-ahead or repainting; one position at a time for each configuration.
+  - **Selection:** ranked by in-sample net ÷ drawdown, then checked on the out-of-sample 40% of days; year-by-year walk-forward; a five-check consistency verdict; comparison with the existing strategies. Win rate is not used.
+- **Result:** 0 of 120 configurations was net positive over five years (296,170 trades). None was positive even with no slippage. See [SCALPING.md](SCALPING.md).
+- **Engine `signal_mode="scalp"`:** paper and replay only; live is refused. It exits after 5 minutes, or earlier at the premium stop or target. Trades are tagged with `strategy` and `scalp_config` (migration 0012). Replay sets the stop and target from the entry fill.
+- **API:** `/api/scalping`, `/api/scalping/config`, `/api/scalping/run`, `/api/scalping/paper/start`, `/api/scalping/paper/trades`.
+- **React:** a new **5-Minute Scalping** page (`/app/scalping`). The engine panel lists the scalp mode (started from the Scalping page), and the trades table names the time exit.
+- **Tests:** `tests/test_scalping.py` (15). **292 passed** in total. The React type check and build pass.
+
 ## 13 Nov: trend entry mode, dashboard sizing fix
 - **New engine signal mode `trend`** ("Whenever the trend agrees"), added at the user's request: at each bar close inside the entry window, if no position is open, the engine enters in the direction of EMA 9 vs EMA 21 (BUY CE above, BUY PE below) without waiting for a crossover. It exits when the trend flips and re-enters the other way. Risk sizing, the premium stop, the daily trade and loss limits and the 15:00 square-off all still apply. `cross` and `prediction` are unchanged. This mode has not been backtested: the backtester still tests crossover entries only.
 - **Fix:** the live dashboard stopped updating when Groww reported a zero or negative option-buy balance and no capital was entered ("capital must be positive"). It now shows "Groww option-buy balance is ₹X, so no size can be given" and keeps updating.

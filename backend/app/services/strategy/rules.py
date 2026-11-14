@@ -216,6 +216,19 @@ def price_at(df1m: pd.DataFrame, ts: datetime, max_wait_min: int = 3, fallback_p
     if df1m.empty:
         return None, None
     ts = pd.Timestamp(ts)
+    stamps = df1m["ts"]
+    if stamps.is_monotonic_increasing:
+        # Fast path, same answer: candles are stored and loaded oldest first, so the first candle
+        # at or after ts is a binary search away, and the last candle before ts is the one just
+        # before it (it is "same day" only if its date matches, as in the general path below).
+        i = int(stamps.searchsorted(ts, side="left"))
+        if i < len(stamps) and stamps.iloc[i] <= ts + pd.Timedelta(minutes=max_wait_min):
+            r = df1m.iloc[i]
+            return float(r["open"]), r["ts"].to_pydatetime()
+        if fallback_prev and i > 0 and stamps.iloc[i - 1].date() == ts.date():
+            r = df1m.iloc[i - 1]
+            return float(r["close"]), (r["ts"] + pd.Timedelta(minutes=1)).to_pydatetime()
+        return None, None
     after = df1m[(df1m["ts"] >= ts) & (df1m["ts"] <= ts + pd.Timedelta(minutes=max_wait_min))]
     if not after.empty:
         r = after.iloc[0]

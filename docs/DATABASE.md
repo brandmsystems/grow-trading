@@ -19,6 +19,8 @@
 | 0008_lot_sizes | `lot_sizes`, seeded from NSE circulars 47854, 61415, 64625 and 70616 |
 | 0009_paper_risk | `paper_accounts`; `live_trades.risk` (JSONB), `stop_premium`, `target_premium`, `paper_account_id` |
 | 0010_plans_and_stops | `trading_plans` (each plan change with its reason), `paper_stop_changes` (initial and edited paper stops) |
+| 0011_scalping | `scalp_runs` (settings, date range and summary JSON of each 5-minute scalping run), `scalp_trades` (trade list per run and configuration) |
+| 0012_scalp_paper | `live_trades.strategy`, `live_trades.scalp_config` (set for scalp-mode engine trades) |
 
 ## Tables
 | Table | Key | Holds |

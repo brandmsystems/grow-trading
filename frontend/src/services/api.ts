@@ -1,7 +1,8 @@
 // Typed client for the Flask API. Every page goes through these functions (no direct fetch elsewhere).
 import type {
   ApiErr, BtChart, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
-  LiveTrade, LotSize, OptionChain, OptionsCoverage, PaperAccount, Research, RiskCalc, SignalAnalysis, StopChange,
+  LiveTrade, LotSize, OptionChain, OptionsCoverage, PaperAccount, Research, RiskCalc, ScalpConfig, ScalpPaperTrade, ScalpRun,
+  ScalpTrade, SignalAnalysis, StopChange,
 } from "../types/api";
 
 export class ApiError extends Error {
@@ -60,7 +61,6 @@ export const stopEngine = () => api<Dashboard>("/api/live/stop", { json: {} });
 export const squareOff = () => api<Dashboard>("/api/live/squareoff", { json: {} });
 export const confirmOrder = (id: string) => api<Dashboard>("/api/live/confirm", { json: { id } });
 export const rejectOrder = (id: string) => api<Dashboard>("/api/live/reject", { json: { id } });
-export const getBrokerPositions = () => api<unknown>("/api/live/broker");
 
 // ------------------------------------------------------------------ jobs
 export const getJob = (id: string) => api<Job>(`/api/jobs/${encodeURIComponent(id)}`);
@@ -69,7 +69,6 @@ export const getJob = (id: string) => api<Job>(`/api/jobs/${encodeURIComponent(i
 export const getMeta = () => api<BtMeta>("/api/bt/meta");
 /** Returns a hash (cached run) or a job id to poll. */
 export const runBacktest = (p: BtParams & { force?: boolean }) => request<never>("/api/bt/run", { json: p });
-export const downloadForBacktest = (p: BtParams) => request<never>("/api/bt/data", { json: p });
 export const getBtResult = (hash: string) => api<BtResult>(`/api/bt/result/${hash}`);
 export const getBtChart = (hash: string, tradeId: string) => api<BtChart>(`/api/bt/chart/${hash}/${encodeURIComponent(tradeId)}`);
 
@@ -80,6 +79,14 @@ export const runResearch = (entry_start: string, cutoff: string) => request<neve
 export const getSignalAnalysis = (strategy: string, tf: number) =>
   request<SignalAnalysis | null>(`/api/signals?${qs({ strategy, tf })}`);
 export const buildSignalAnalysis = (strategy: string, tf: number) => request<never>("/api/signals/build", { json: { strategy, tf } });
+
+// ------------------------------------------------------------------ 5-minute scalping
+export const getScalping = () => request<ScalpRun | null>("/api/scalping");
+export const runScalping = () => request<never>("/api/scalping/run", { json: {} });
+export const getScalpConfig = (key: string) => api<ScalpConfig & { trade_list: ScalpTrade[] }>(`/api/scalping/config?${qs({ key })}`);
+export const startScalpPaper = (key: string, mode: "paper" | "replay", risk: Record<string, number>, replay_day?: string) =>
+  api<Dashboard>("/api/scalping/paper/start", { json: { key, mode, risk, replay_day } });
+export const getScalpPaperTrades = (key?: string) => api<ScalpPaperTrade[]>(`/api/scalping/paper/trades?${qs({ key })}`);
 
 // ------------------------------------------------------------------ market data
 export const getDataOverview = () => api<DataOverview>("/api/data/overview");

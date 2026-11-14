@@ -1,6 +1,6 @@
 # Project structure
 
-What every folder and file in Grow Trading is responsible for. Updated 11 Nov 2026 (after Phase 4).
+What every folder and file in Grow Trading is responsible for. Updated 14 Nov 2026 (after the codebase cleanup).
 
 ```
 grow-trading/
@@ -12,7 +12,6 @@ grow-trading/
 │   │   ├── api/              HTTP routes, one blueprint per area
 │   │   ├── config/           Settings, .env, credentials
 │   │   ├── database/         PostgreSQL engine, migration runner, queries, migrations/*.sql
-│   │   ├── models/           (reserved; tables are defined by SQL migrations)
 │   │   ├── services/         All business logic (see below)
 │   │   ├── workers/          Background jobs
 │   │   └── utils/            Small shared helpers
@@ -20,7 +19,7 @@ grow-trading/
 │   ├── pytest.ini
 │   └── requirements.txt
 ├── frontend/                 React 19 + TypeScript + Vite + Tailwind app (served at /app)
-│   ├── src/pages/            Overview, LiveTrading, Signals, Options, Backtest, Compare, MarketData, HistoryCharts, Account
+│   ├── src/pages/            Overview, LiveTrading, Signals, Options, Backtest, Compare, Scalping, MarketData, HistoryCharts, Account
 │   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, charts/, common/
 │   ├── src/context/          SettingsContext (preferences), LiveContext (one shared live poll, alerts, trades)
 │   ├── src/hooks/            useDashboard, useAlerts, useApi (+ waitForJob)
@@ -28,8 +27,7 @@ grow-trading/
 │   ├── src/types/, src/utils/
 │   ├── index.html, vite.config.ts, tsconfig.json, package.json
 │   └── dist/                 production build (git-ignored)
-├── data/                     Runtime data (git-ignored): historical/, exports/, logs/
-├── scripts/                  One-off maintenance scripts
+├── data/                     Runtime data (git-ignored): historical/, exports/, logs/ (server.log), backups/
 ├── docs/                     This documentation
 ├── GROWTRADING.md            Master project documentation
 ├── README.md                 Overview and quick start
@@ -80,6 +78,7 @@ Details: [API.md](API.md).
 | `backtest/engine.py` | Backtest with real option prices; chart payloads | `backtest.py` |
 | `backtest/metrics.py` | Win rate, profit factor, payoff, expectancy, drawdown | `metrics.py` |
 | `backtest/research.py` | Strategy × timeframe comparison and walk-forward | `research.py` |
+| `backtest/scalping.py` | 5-minute scalping analyzer, its walk-forward and verdict, and the scalp-mode engine settings for paper trading | `research.py` |
 | `notifications/alerts.py` | Store each alert once; read recent alerts | from engine, feed and manager |
 
 ## Other backend folders
@@ -102,6 +101,7 @@ Details: [API.md](API.md).
 | test_backtest_integration.py | End-to-end backtest, unfinished sessions |
 | test_data_manager.py | Migrations, time zones, downloads, validation, data API |
 | test_research.py | Indicators, strategies, signals, walk-forward |
+| test_scalping.py | Scalping analyzer: exits, no repainting, one position at a time, sizing, verdict, walk-forward, end-to-end run, scalp engine mode |
 | test_live_engine.py | Engine = backtest, safety rails, prediction mode, alerts |
 | test_live_feed.py | Live feed, contract checks, sizing |
 | test_frontend.py | React build served at /app, client-route fallback, no files outside dist |

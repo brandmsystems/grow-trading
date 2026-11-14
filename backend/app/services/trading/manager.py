@@ -32,6 +32,11 @@ def _running() -> bool:
 
 
 def start(cfg_in: dict, confirm: str = "", replay_day: str | None = None, replay_speed: float = 120) -> dict:
+    """Start the single engine instance.
+
+    Replay runs a finished, stored session on a simulated clock with the paper broker. Live needs
+    the typed confirmation phrase and is capped at LIVE_MAX_LOTS; paper and live first check that
+    Groww login, quotes and the expiry list work, so a broken connection fails here, not mid-trade."""
     global _engine, _replay_thread
     with _lock:
         if _running():

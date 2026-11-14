@@ -9,7 +9,7 @@ A NIFTY options trading system built on the Groww Trade API. It covers:
 
 **Status (11 Nov 2026):**
 - The Python backend has been restructured into `backend/app` (Phases 1–4).
-- **The React app is at http://127.0.0.1:5000/app**: 9 pages with a sidebar layout that works on desktop, tablet and phone (Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, Market Data, Historical Charts, Account & Settings). This is the only interface; the old server-rendered pages were removed on 12 Nov. WebSocket push (Phase 6) isn't built yet.
+- **The React app is at http://127.0.0.1:5000/app**: 10 pages with a sidebar layout that works on desktop, tablet and phone (Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, 5-Minute Scalping, Market Data, Historical Charts, Account & Settings). This is the only interface; the old server-rendered pages were removed on 12 Nov. Live updates are pushed over Socket.IO, with REST polling as the fallback.
 - All 140 tests pass.
 
 [GROWTRADING.md](GROWTRADING.md) has the full record and [docs/TODO.md](docs/TODO.md) the pending work.
@@ -60,6 +60,7 @@ cd backend
 | [docs/GROWW_API.md](docs/GROWW_API.md) | Groww login, calls and quirks |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Trading rules, indicators, signals, charges, sizing |
 | [docs/BACKTESTING.md](docs/BACKTESTING.md) | Historical data, backtests, comparison results |
+| [docs/SCALPING.md](docs/SCALPING.md) | 5-minute options scalping analyzer, results and paper trading |
 | [docs/FRONTEND.md](docs/FRONTEND.md) | React pages, layout, colour system, components, API used per page |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Install, configuration, run |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Dated changes |
