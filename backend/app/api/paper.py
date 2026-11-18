@@ -6,7 +6,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
-from app.api.common import api_error
+from app.api.common import api_error, json_body
 from app.services.options import sizing
 from app.services.trading import charges as costs
 from app.services.trading import engine as le
@@ -48,7 +48,7 @@ def paper_account_state():
 
 @bp.post("/api/paper/account")
 def paper_account_reset():
-    body = request.get_json(force=True) or {}
+    body = json_body()
     if body.get("confirm") != "RESET":
         return jsonify({"ok": False, "error": "Type RESET to start a new virtual account."}), 400
     eng = _paper_engine()
@@ -65,7 +65,7 @@ def paper_account_reset():
 @bp.post("/api/paper/position/stop")
 def paper_position_stop():
     """Change the open paper position's stop-loss (refused if it would exceed the risk limits)."""
-    body = request.get_json(force=True) or {}
+    body = json_body()
     eng = _paper_engine()
     if not eng:
         return jsonify({"ok": False, "error": "The paper engine isn't running."}), 409
@@ -101,7 +101,7 @@ def paper_stop_changes():
 @bp.post("/api/paper/risk-calc")
 def paper_risk_calc():
     """The risk calculator: same function and costs the paper engine uses before every trade."""
-    b = request.get_json(force=True) or {}
+    b = json_body()
     try:
         f = lambda k, d=None: (float(b[k]) if b.get(k) not in (None, "") else d)
         side = str(b.get("side") or "BUY").upper()

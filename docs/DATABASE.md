@@ -54,7 +54,23 @@
 
 **Synthetic rows removed (12 Nov 2026):** 223,305 `SYNTH:` candles, 515 fetch-log rows, 316 contracts, 18 expiries and 1 cached run were exported to `data/backups/synthetic_2026-11-12_*.csv.gz` and then deleted. The 4 synthetic engine trades in `live_trades` are kept (trade history is never deleted); the app already excludes them.
 
-**Orphaned tables (not read or written by any code):** `candle_forecasts`, `prediction_log`, `strategy_signals`, `smc_setups`, `pattern_events`, `app_settings`. They come from features removed on 18 Nov (forecast, prediction trading, SMC, pattern trading). They hold history (55, 36 and 2 rows in the first three; the rest are empty), so they are kept. See TODO.
+### Orphaned tables (investigated 18 Nov; **nothing dropped, approval required**)
+Checked against backend, frontend, tests, docs, every migration file, SQL strings and the live database (foreign keys in and out, views, dependent objects). No code, migration file, view or foreign key references any of them.
+
+| Table | Rows | Size | Dependencies | Why it is orphaned |
+|---|---|---|---|---|
+| `candle_forecasts` | 55 | 360 kB | none | Next-candle forecast, removed 18 Nov |
+| `prediction_log` | 36 | 240 kB | none | Automated prediction paper trading, removed 18 Nov |
+| `strategy_signals` | 2 | 64 kB | none | Prediction-system signal log, removed 18 Nov |
+| `smc_setups` | 0 | 32 kB | none | SMC strategy, removed 18 Nov |
+| `pattern_events` | 0 | 32 kB | none | Candle-pattern paper trading, removed 18 Nov |
+| `app_settings` | 0 | 16 kB | none | Never read by the app |
+
+**Why a fresh install differs from this database:** `schema_migrations` lists 17 versions, but only `0001`-`0012` exist as files. `0013_advanced_prediction`, `0014_candle_forecasts`, `0015_pattern_events`, `0016_smc_setups` and `0017_trend_vwap_ema` were applied here and their files were deleted with the features (they were never committed). A fresh database built from the repo has none of these six tables, so the drop migration uses `DROP TABLE IF EXISTS`. The same migrations also added nine columns to `live_trades` that only this database has: `action, analysis, confidence, exit_detail, forecast_id, lots, pattern_event_id, signal_id, smc_setup_id` (all NULL in all 27 rows; nothing reads them). Trading records are never altered, so they stay.
+
+**Backup (taken before any removal):** `data/backups/orphan_tables_2026-11-18.dump` (custom format, 80 kB): the six tables plus `live_trades`. Verified by restoring it into a scratch database and comparing row counts with production (all equal: 55, 0, 0, 36, 0, 2 and 27 for `live_trades`); the scratch database was then dropped. Restoring only the tables back later: `pg_restore --data-only -d groww_trading -t <table> <dump>`.
+
+**Prepared, not applied:** `backend/app/database/pending/0018_drop_orphan_tables.up.sql` and `.down.sql` (the rollback recreates the tables, their sequences, keys and indexes empty). Both were executed against an empty scratch database: the down script created the six tables, the up script removed them. The migration runner reads only `database/migrations/`, so nothing applies them until you approve and copy the up file there as `0018_drop_orphan_tables.sql`. A fresh full `pg_dump` of the 15 GB database was not taken because only these tables would change.
 
 ## Safety
 - **Nothing is deleted** by the app except cached backtest runs, which are cleared when new data arrives (signal analyses are kept).

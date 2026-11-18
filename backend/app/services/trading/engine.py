@@ -41,7 +41,7 @@ import logging
 import threading
 import traceback
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
 
 import pandas as pd
@@ -56,6 +56,8 @@ from app.services.strategy import indicators as ind
 from app.services.strategy import signals
 from app.services.strategy import strategies
 from app.services.trading import paper_account
+from app.services.trading import stops
+from app.services.trading.engine_config import EngineConfig   # re-exported: engine.EngineConfig is the public name
 from app.services.strategy import rules as st
 from app.services.market_data.live import Contract
 from app.services.trading.brokers import OrderUnknown
@@ -64,103 +66,6 @@ log = logging.getLogger("live.engine")
 
 MARKET_OPEN, MARKET_CLOSE = time(9, 15), time(15, 30)
 STALE_PRICE_SEC = 15      # an option price older than this never triggers a paper stop-loss
-
-
-@dataclass
-class EngineConfig:
-    """Everything one engine run is configured with. `validate()` normalises types and refuses
-    combinations the engine must never run (for example scalp mode with real money)."""
-    trade_mode: str = "paper"          # paper | live | replay (stored real candles, simulated clock)
-    exec_mode: str = "ATM_BUY"         # ITM5_BUY | ATM_BUY | ATM_SELL
-    timeframe: int = 15
-    entry_start: str = "09:30"
-    cutoff: str = "14:30"
-    lots: int = 1
-    roll_on_expiry_day: bool = True
-    max_daily_loss: float = 5000.0     # ₹, realised + MTM; 0 disables
-    max_trades_per_day: int = 6
-    bar_grace_sec: int = 5             # wait after bar close before evaluating
-    max_candle_wait_sec: int = 60      # wait for the bar's last 1m candle to appear
-    stale_entry_sec: int = 180         # don't enter if the signal is older than this
-    signal_mode: str = "cross"         # cross: every crossover | prediction: scored signals only | trend: whenever EMAs agree | scalp
-    scalp_exit: str = "time"           # scalp mode: time = exit after hold_min | sl_target = stop/target, at most hold_min
-    hold_min: int = 5                  # scalp mode: maximum holding time in minutes
-    target_pct: float = 10.0           # scalp mode, sl_target: target = premium x (1 + target_pct %)
-    scalp_config: str = ""             # scalp mode: the analyzer configuration key it was started from
-    strategy: str = "ema_9_21"         # prediction and scalp modes: whose crosses are used (cross/trend trade EMA 9/21)
-    min_score: float = 50.0            # prediction mode: minimum score to open a trade
-    order_confirmation: str = "manual" # live mode: manual = you confirm each entry order; auto = engine places it
-    costs: dict = field(default_factory=lambda: costs.DEFAULT_COSTS.to_dict())
-    # Paper trading only (live and replay use `lots` and are unaffected):
-    risk_pct: float = 1.0              # risk per trade, % of available virtual capital
-    daily_risk_pct: float = 3.0        # daily loss limit, % of the day's starting capital (0 = off)
-    max_open_positions: int = 1        # the engine holds one position at a time
-    max_lots: int = 10                 # cap per trade
-    min_balance: float = 0.0           # ₹ that must stay available after an entry
-    stop_mode: str = "atr"             # atr: premium - delta x stop_atr x NIFTY ATR | pct: premium x (1 - stop_pct %)
-    stop_atr: float = 1.0              #   | points: premium - stop_points (fixed premium distance)
-    stop_pct: float = 30.0
-    stop_points: float = 20.0
-
-    def validate(self) -> "EngineConfig":
-        """Coerce numeric fields and raise ValueError for any setting outside its allowed range.
-        Called before every start, so a bad request can never reach the trading loop."""
-        if self.trade_mode not in ("paper", "live", "replay"):
-            raise ValueError("trade_mode must be paper, live or replay")
-        if self.exec_mode not in st.MODES:
-            raise ValueError("unknown execution mode")
-        if int(self.timeframe) not in (5, 15, 30):
-            raise ValueError("timeframe must be 5, 15 or 30")
-        self.timeframe = int(self.timeframe)
-        _hm(self.entry_start), _hm(self.cutoff)
-        if _hm(self.entry_start) >= _hm(self.cutoff):
-            raise ValueError("entry start must be before cutoff")
-        self.lots = int(self.lots)
-        if self.lots < 1:
-            raise ValueError("lots must be >= 1")
-        self.max_daily_loss = float(self.max_daily_loss)
-        self.max_trades_per_day = int(self.max_trades_per_day)
-        if self.order_confirmation not in ("manual", "auto"):
-            raise ValueError("order_confirmation must be manual or auto")
-        if self.signal_mode not in ("cross", "prediction", "trend", "scalp"):
-            raise ValueError("signal_mode must be cross, prediction, trend or scalp")
-        if self.signal_mode == "scalp":
-            if self.trade_mode == "live":
-                raise ValueError("Scalping runs in paper mode only; real-money scalping is not enabled.")
-            if int(self.timeframe) != 5:
-                raise ValueError("Scalping uses 5-minute candles: set the timeframe to 5.")
-            if self.scalp_exit not in ("time", "sl_target"):
-                raise ValueError("scalp exit must be time or sl_target")
-            self.hold_min, self.target_pct = int(self.hold_min), float(self.target_pct)
-            if not 1 <= self.hold_min <= 60:
-                raise ValueError("holding time must be 1 to 60 minutes")
-            if not 0 < self.target_pct <= 500:
-                raise ValueError("target % must be above 0")
-            if not 0 < float(self.stop_pct) < 100:
-                raise ValueError("stop % must be between 0 and 100")
-        if self.strategy not in strategies.STRATEGIES:
-            raise ValueError("unknown strategy")
-        self.min_score = float(self.min_score)
-        if not 0 <= self.min_score <= 100:
-            raise ValueError("minimum score must be between 0 and 100")
-        self.costs = {**costs.DEFAULT_COSTS.to_dict(), **{k: float(v) for k, v in (self.costs or {}).items()}}
-        self.risk_pct, self.daily_risk_pct = float(self.risk_pct), float(self.daily_risk_pct)
-        if not 0 < self.risk_pct <= 100:
-            raise ValueError("risk per trade must be above 0% and at most 100%")
-        if not 0 <= self.daily_risk_pct <= 100:
-            raise ValueError("daily risk must be between 0% and 100%")
-        self.max_open_positions, self.max_lots = int(self.max_open_positions), int(self.max_lots)
-        if self.max_open_positions < 1 or self.max_lots < 1:
-            raise ValueError("maximum open positions and maximum lots must be at least 1")
-        self.min_balance = float(self.min_balance)
-        if self.min_balance < 0:
-            raise ValueError("minimum balance can't be negative")
-        if self.stop_mode not in ("atr", "pct", "points"):
-            raise ValueError("stop_mode must be atr, pct or points")
-        self.stop_atr, self.stop_pct, self.stop_points = float(self.stop_atr), float(self.stop_pct), float(self.stop_points)
-        if self.stop_atr <= 0 or not 0 < self.stop_pct < 100 or self.stop_points <= 0:
-            raise ValueError("stop ATR multiple and stop points must be positive, stop % between 0 and 100")
-        return self
 
 
 _hm = parse_hm   # kept as a module name: other modules and tests call it here
@@ -198,6 +103,9 @@ class Engine:
         self.conn_error: str | None = None
         self.last_atr: float | None = None        # NIFTY ATR of the latest signal bar (paper stop-loss)
         self.paper = self.cfg.trade_mode == "paper"
+        self._last_delta: float | None = None     # |delta| behind the latest ATR stop (stored with the risk calculation)
+        self._limit_day: date | None = None       # the day _limit_val was computed for
+        self._limit_val = 0.0
 
     # ------------------------------------------------------------ logging / persistence
     def log(self, msg: str, level: str = "info"):
@@ -305,6 +213,9 @@ class Engine:
         with self._lock:
             if square_off and self.position:
                 self._exit("manual_stop")
+                if self.position:
+                    self.log(f"Engine stopped while {self.position['contract'].trading_symbol} is still open (the exit "
+                             f"order failed or is unconfirmed): check and close it in the broker app", "error")
             self._stop.set()
             self.state = "stopped"
             self.log(f"Engine stopped ({reason})")
@@ -423,18 +334,10 @@ class Engine:
         if not bars.empty:   # paper stop-loss: NIFTY ATR of the signal timeframe, as the dashboard uses
             atr = ind.atr(bars).iloc[-1]
             self.last_atr = float(atr) if pd.notna(atr) and atr > 0 else None
-        today = bars[bars["day"] == self.day]
-        self.bars_today = [{"t": r.start.isoformat(), "c_ts": r.close_ts.isoformat(), "o": r.open, "h": r.high,
-                            "l": r.low, "c": r.close, "e9": round(r.ema9, 2), "e21": round(r.ema21, 2)}
-                           for r in today.itertuples(index=False)]
-        if today.empty:
-            self.log(f"No NIFTY candles for today yet (holiday?) at {bar_close:%H:%M}", "warn")
+        last = self._record_bars(bars, now, bar_close, "ema9", "ema21")
+        if last is None:
             self.processed_until = bar_close
             return
-        last = today.iloc[-1]
-        self.last_eval = {"bar_close": bar_close.isoformat(), "close": round(float(last["close"]), 2),
-                          "ema9": round(float(last["ema9"]), 2), "ema21": round(float(last["ema21"]), 2),
-                          "evaluated_at": now.isoformat()}
 
         if self.cfg.signal_mode == "trend":
             return self._evaluate_trend(now, bar_close, last)
@@ -455,6 +358,38 @@ class Engine:
             else:
                 self._try_entry(now, leg)
         self.processed_until = bar_close
+
+    def _record_bars(self, bars: pd.DataFrame, now: datetime, bar_close: datetime, fast: str, slow: str):
+        """Publish today's closed bars and the latest evaluation for the UI. `fast`/`slow` name the EMA columns
+        (ema9/ema21 in cross and trend modes, fast/slow for strategy-driven modes). Returns the last bar of
+        today, or None (after logging) when there are no candles yet."""
+        today = bars[bars["day"] == self.day]
+        self.bars_today = [{"t": r.start.isoformat(), "c_ts": r.close_ts.isoformat(), "o": r.open, "h": r.high,
+                            "l": r.low, "c": r.close, "e9": round(getattr(r, fast), 2), "e21": round(getattr(r, slow), 2)}
+                           for r in today.itertuples(index=False)]
+        if today.empty:
+            self.log(f"No NIFTY candles for today yet (holiday?) at {bar_close:%H:%M}", "warn")
+            return None
+        last = today.iloc[-1]
+        self.last_eval = {"bar_close": bar_close.isoformat(), "close": round(float(last["close"]), 2),
+                          "ema9": round(float(last[fast]), 2), "ema21": round(float(last[slow]), 2),
+                          "evaluated_at": now.isoformat()}
+        return last
+
+    def _window_crosses(self, bars: pd.DataFrame, lo, bar_close: datetime):
+        """Crossovers of fast/slow that closed in (lo, bar_close], today, inside the entry window and before the
+        15:00 square-off. Yields (close time, row, direction, "Bullish"/"Bearish")."""
+        hi, lo = pd.Timestamp(bar_close), pd.Timestamp(lo)
+        start_t, cut_t = _hm(self.cfg.entry_start), _hm(self.cfg.cutoff)
+        for _, c in st.find_crosses(bars, "fast", "slow").iterrows():
+            ts = pd.Timestamp(c["close_ts"])
+            if not (lo < ts <= hi) or c["day"] != self.day:
+                continue
+            ts = ts.to_pydatetime()
+            if not (start_t <= ts.time() <= cut_t) or ts.time() >= st.SQUARE_OFF:
+                continue
+            d = int(c["direction"])
+            yield ts, c, d, "Bullish" if d > 0 else "Bearish"
 
     # ------------------------------------------------------------ trend mode
     def _evaluate_trend(self, now: datetime, bar_close: datetime, last) -> None:
@@ -488,30 +423,12 @@ class Engine:
             fut = self.market.futures_1m(self.day)
         bars = strategies.prepare(spot, fut, self.cfg.timeframe, key)
         bars = bars[bars["close_ts"] <= pd.Timestamp(bar_close)].reset_index(drop=True)
-        today = bars[bars["day"] == self.day]
-        self.bars_today = [{"t": r.start.isoformat(), "c_ts": r.close_ts.isoformat(), "o": r.open, "h": r.high,
-                            "l": r.low, "c": r.close, "e9": round(r.fast, 2), "e21": round(r.slow, 2)}
-                           for r in today.itertuples(index=False)]
         lo = pd.Timestamp(self.processed_until)
         self.processed_until = bar_close
-        if today.empty:
-            self.log(f"No NIFTY candles for today yet (holiday?) at {bar_close:%H:%M}", "warn")
+        if self._record_bars(bars, now, bar_close, "fast", "slow") is None:
             return
-        last = today.iloc[-1]
-        self.last_eval = {"bar_close": bar_close.isoformat(), "close": round(float(last["close"]), 2),
-                          "ema9": round(float(last["fast"]), 2), "ema21": round(float(last["slow"]), 2),
-                          "evaluated_at": now.isoformat()}
         s = strategies.STRATEGIES[key]
-        start_t, cut_t = _hm(self.cfg.entry_start), _hm(self.cfg.cutoff)
-        for _, c in st.find_crosses(bars, "fast", "slow").iterrows():
-            ts = pd.Timestamp(c["close_ts"])
-            if not (lo < ts <= pd.Timestamp(bar_close)) or c["day"] != self.day:
-                continue
-            ts = ts.to_pydatetime()
-            if not (start_t <= ts.time() <= cut_t) or ts.time() >= st.SQUARE_OFF:
-                continue
-            d = int(c["direction"])
-            word = "Bullish" if d > 0 else "Bearish"
+        for ts, c, d, word in self._window_crosses(bars, lo, bar_close):
             if s.confirm and not bool(c["bull_ok"] if d > 0 else c["bear_ok"]):
                 self.log(f"{word} {s.label} cross at {ts:%H:%M} not confirmed by {s.confirm.upper()}: no trade")
                 continue
@@ -575,31 +492,11 @@ class Engine:
         fut = self.market.futures_1m(self.day) if hasattr(self.market, "futures_1m") else None
         bars = signals.signal_bars(spot, fut, tf, key)
         bars = bars[bars["close_ts"] <= pd.Timestamp(bar_close)].reset_index(drop=True)
-        today = bars[bars["day"] == self.day]
-        self.bars_today = [{"t": r.start.isoformat(), "c_ts": r.close_ts.isoformat(), "o": r.open, "h": r.high,
-                            "l": r.low, "c": r.close, "e9": round(r.fast, 2), "e21": round(r.slow, 2)}
-                           for r in today.itertuples(index=False)]
-        if today.empty:
-            self.log(f"No NIFTY candles for today yet (holiday?) at {bar_close:%H:%M}", "warn")
+        if self._record_bars(bars, now, bar_close, "fast", "slow") is None:
             self.processed_until = bar_close
             return
-        last = today.iloc[-1]
-        self.last_eval = {"bar_close": bar_close.isoformat(), "close": round(float(last["close"]), 2),
-                          "ema9": round(float(last["fast"]), 2), "ema21": round(float(last["slow"]), 2),
-                          "evaluated_at": now.isoformat()}
         cfg_s = strategies.STRATEGIES[key]
-        lo, hi = pd.Timestamp(self.processed_until), pd.Timestamp(bar_close)
-        start_t, cut_t = _hm(self.cfg.entry_start), _hm(self.cfg.cutoff)
-        crosses = st.find_crosses(bars, "fast", "slow")
-        for _, c in crosses.iterrows():
-            ts = pd.Timestamp(c["close_ts"])
-            if not (lo < ts <= hi) or c["day"] != self.day:
-                continue
-            ts = ts.to_pydatetime()
-            if not (start_t <= ts.time() <= cut_t) or ts.time() >= st.SQUARE_OFF:
-                continue
-            d = int(c["direction"])
-            word = "Bullish" if d > 0 else "Bearish"
+        for ts, c, d, word in self._window_crosses(bars, pd.Timestamp(self.processed_until), bar_close):
             atr = float(c["atr"]) if pd.notna(c["atr"]) else float("nan")
             if not atr > 0:
                 self.log(f"{word} cross at {ts:%H:%M}: ATR not available yet, no trade", "warn")
@@ -694,50 +591,10 @@ class Engine:
 
     # ------------------------------------------------------------ paper risk management
     def _paper_stop(self, c, side: str, premium: float) -> tuple[float | None, float | None, str, str | None]:
-        """(stop premium, target premium, method text, error). Buys stop below the premium, sells above."""
-        sgn = 1 if side == "BUY" else -1
-        self._last_delta = None
-        if self.cfg.signal_mode == "scalp":
-            stop = premium * (1 - sgn * self.cfg.stop_pct / 100)
-            target = premium * (1 + sgn * self.cfg.target_pct / 100) if self.cfg.scalp_exit == "sl_target" else None
-            how = (f"scalp: stop {self.cfg.stop_pct:g}% of the premium"
-                   + (f", target {self.cfg.target_pct:g}%" if target else
-                      f" (protective), exit after {self.cfg.hold_min} min"))
-            rnd = costs._round_tick_down if side == "BUY" else costs._round_tick_up
-            stop = rnd(stop)
-            if stop <= 0:
-                return None, None, how, "The stop-loss works out at or below zero; no position size can be calculated."
-            if target:
-                target = (costs._round_tick_up if side == "BUY" else costs._round_tick_down)(target)
-            return stop, target, how, None
-        if self.cfg.stop_mode == "pct":
-            stop = premium * (1 - sgn * self.cfg.stop_pct / 100)
-            target = premium * (1 + sgn * 2 * self.cfg.stop_pct / 100)
-            how = f"{self.cfg.stop_pct:g}% of the premium (target 2× that distance)"
-        elif self.cfg.stop_mode == "points":
-            stop = premium - sgn * self.cfg.stop_points
-            target = premium + sgn * 2 * self.cfg.stop_points
-            how = f"{self.cfg.stop_points:g} premium points (target 2× that distance)"
-        else:
-            if not self.last_atr:
-                return None, None, "", "NIFTY ATR unavailable, so no stop-loss can be calculated."
-            try:
-                delta = self.market.option_delta(c)
-            except Exception as exc:
-                return None, None, "", f"Option delta unavailable ({exc}), so no stop-loss can be calculated."
-            if not delta:
-                return None, None, "", "Option delta unavailable, so no stop-loss can be calculated."
-            self._last_delta = abs(delta)
-            move = abs(delta) * self.last_atr
-            stop = premium - sgn * self.cfg.stop_atr * move
-            target = premium + sgn * signals.TARGET_ATR * move
-            how = (f"delta {abs(delta):.2f} × {self.cfg.stop_atr:g} × NIFTY ATR {self.last_atr:.2f} "
-                   f"(target {signals.TARGET_ATR:g}× ATR)")
-        rnd = costs._round_tick_down if side == "BUY" else costs._round_tick_up
-        stop = rnd(stop)
-        if stop <= 0:
-            return None, None, how, "The stop-loss works out at or below zero; no position size can be calculated."
-        return stop, round(target, 2), how, None
+        """(stop premium, target premium, method text, error). See stops.stop_levels."""
+        lv = stops.stop_levels(self.cfg, side, premium, self.last_atr, lambda: self.market.option_delta(c))
+        self._last_delta = lv.delta
+        return lv.stop, lv.target, lv.how, lv.error
 
     def _paper_risk(self, leg, c, side: str) -> dict:
         """Steps 1-10 of the paper risk rules: capital, risk %, premium, stop, risk per lot, lots, then
@@ -764,7 +621,7 @@ class Engine:
                                  available=acct["available"], max_lots=self.cfg.max_lots,
                                  min_balance=self.cfg.min_balance, target=target, cfg=self.cost_cfg,
                                  include_slippage=True)
-        r.update(base, stop_method=how, stop_mode=self.cfg.stop_mode, delta=getattr(self, "_last_delta", None),
+        r.update(base, stop_method=how, stop_mode=self.cfg.stop_mode, delta=self._last_delta,
                  atr=self.last_atr, nifty_ref=round(leg.signal_close, 2))
         if err:
             r.update(decision="NO TRADE", reason=err)
@@ -1019,7 +876,7 @@ class Engine:
         """₹ daily loss limit. Paper: the smaller of max_daily_loss and daily_risk_pct of the day's starting capital."""
         if not self.paper:
             return self.cfg.max_daily_loss
-        if getattr(self, "_limit_day", None) != self.day:
+        if self._limit_day != self.day:
             st_ = paper_account.state(self.day, self.cfg, eng=self.dbe)
             self._limit_day, self._limit_val = self.day, st_["daily_limit"] or 0.0
         return self._limit_val
@@ -1041,27 +898,6 @@ class Engine:
         self.halt_reason = reason
         self.log(reason, "error" if error else "warn")
 
-    def _paper_levels(self, p: dict) -> dict:
-        """Paper stop/target with their risk, and the NIFTY levels they correspond to (for the chart)."""
-        if p.get("stop_premium") is None:
-            return {}
-        r = p.get("risk") or {}
-        sgn = 1 if p["side"] == "BUY" else -1
-        delta, ref = r.get("delta"), r.get("nifty_ref")
-        d = 1 if p["direction"] > 0 else -1
-
-        def to_nifty(prem):
-            if not (delta and ref) or prem is None:
-                return None
-            return round(ref - d * sgn * (p["entry_price"] - prem) / delta, 2)
-        cap = r.get("capital") or 0
-        ml = r.get("max_loss")
-        return {"stop_premium": p["stop_premium"], "target_premium": p.get("target_premium"),
-                "max_loss": ml, "max_loss_pct": round(100 * ml / cap, 2) if cap and ml is not None else None,
-                "risk_amount": r.get("risk_amount"), "risk_reward": r.get("risk_reward"),
-                "nifty_stop": to_nifty(p["stop_premium"]), "nifty_target": to_nifty(p.get("target_premium")),
-                "stop_method": r.get("stop_method")}
-
     # ------------------------------------------------------------ status for UI
     def status(self) -> dict:
         with self._lock:
@@ -1077,7 +913,7 @@ class Engine:
                        "ltp": ltp, "mtm": self._pnl(p, ltp)["net"] if ltp else None,
                        "exit_failures": self.exit_failures, "score": p.get("score"),
                        "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref"),
-                       **self._paper_levels(p)}
+                       **stops.position_levels(p)}
             pend = None
             if self.pending:
                 q = self.pending

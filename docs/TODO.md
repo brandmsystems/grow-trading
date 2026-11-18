@@ -1,6 +1,6 @@
 # Pending work and known issues
 
-*Updated 12 Nov 2026, Phase 2 (strategy and backtesting).*
+*Updated 18 Nov 2026 (audit follow-up).*
 
 ## Restructure phases
 | Phase | Status |
@@ -11,7 +11,7 @@
 | 4. Backend migration (no logic changes) | Done |
 | 5. React frontend connected to Flask | **Done:** all 9 pages in React (redesign, 11 Nov). Old server-rendered pages removed 12 Nov |
 | 6. WebSocket live updates (Flask-SocketIO, auto-reconnect) | **Done in master Phase 3 (12 Nov)**; tested after market hours only |
-| 7. Full verification (tests, Groww connectivity, live data, React build) | Pending |
+| 7. Full verification (tests, Groww connectivity, live data, React build) | **Mostly done (18 Nov):** backend, frontend and browser tests pass; Groww connectivity and closed-market states verified. **Pending: a session during market hours** (see "Needs approval or a live session" below) |
 | 8. Documentation per phase | Ongoing |
 
 ## Agreed decisions
@@ -27,8 +27,19 @@
   - custom EMA periods as new strategy settings (existing defaults unchanged)
 - **5-minute scalping:** none of the 120 configurations was profitable after costs (see [SCALPING.md](SCALPING.md)). Scalp paper mode has been tested on replays only; it still needs a check during a live session.
 
+## Needs approval or a live session (18 Nov)
+| Item | What is needed |
+|---|---|
+| **Drop six orphaned tables** | Your approval. Backup `data/backups/orphan_tables_2026-11-18.dump` is taken and verified by restoring it into a scratch database (row counts matched). The migration is ready, with its rollback, in `backend/app/database/pending/0018_drop_orphan_tables.up.sql` and `.down.sql`; both were run against an empty scratch database. Nothing has been dropped. Details in [DATABASE.md](DATABASE.md) |
+| **9 unused columns on `live_trades`** | Optional, your decision: `action, analysis, confidence, exit_detail, forecast_id, lots, pattern_event_id, signal_id, smc_setup_id` exist only in your database (a fresh install does not have them); all 27 rows have NULL in all nine. They are in a trading-records table, so they were left alone |
+| **Live-market verification (market hours)** | A session on a trading day: WebSocket push at 1 s, premiums going LIVE/DELAYED on real quotes, a real signal producing one alert, reconnect and stale-data behaviour with a live feed, scalp paper mode. Closed-market checks and replay/integration tests are done (CHANGELOG, 18 Nov) |
+| **First live order** | Still never placed. Manual confirmation is tested with a counting broker only |
+
 ## Known issues
-- **Live push not yet seen during market hours:** Socket.IO push, reconnect and fallback were tested after the close (market closed, engine stopped). The 1 s ticks while open, and premium states going LIVE/DELAYED on real quotes, still need a check during a session.
+- **Live push not yet seen during market hours:** Socket.IO push, reconnect and fallback were tested after the close (18 Nov again, in a real browser against Groww with the market closed). The 1 s ticks while open, and premium states going LIVE/DELAYED on real quotes, still need a check during a session.
+- **First dashboard after a server start takes about 9 s** (cold Groww calls), about 1.7 s when its caches have expired (60 s closed, 3 s open), and 0.04 s when cached. The Live page shows "Connecting to the live feed…" meanwhile.
+- **Trading engine ticks hold the engine lock during Groww calls** (up to their 5-10 s timeouts), so `status()` and the dashboard can wait behind a slow tick. Not changed: no incident seen; fixing it means restructuring the loop.
+- **`paper.py` reads the engine through `live_manager._engine` and `eng._pnl`** (private names). Left as is; it works and is tested.
 - **Push payload size:** each `dashboard` event is about 32 KB (5-minute chart). While the market is open it changes almost every second, so about 32 KB/s per settings combination; fine on a local machine.
 - **Idle updates:** with the market closed and the engine stopped, the server ticks every 5 s, so an engine started from another tab shows up within about 5 s.
 - **EXIT as a separate call:** after an opposite crossover or 15:00 the recommendation shows HOLD with the exit reason (exit alerts are separate). A distinct EXIT label is not added yet.

@@ -108,3 +108,54 @@ def test_research_signals_scalping_reads(client):
 def test_scalping_config_requires_a_known_configuration(client):
     r = client.get("/api/scalping/config")
     assert r.status_code == 404 and r.get_json()["kind"] == "ValueError"
+
+
+# ----- request guards (this app has no login: it must only answer its own pages) -----
+
+def test_foreign_host_is_refused(client):
+    r = client.get("/api/data/lot-sizes", headers={"Host": "evil.example"})
+    assert r.status_code == 403 and r.get_json()["kind"] == "forbidden"
+
+
+def test_cross_site_post_is_refused_even_as_text_plain(client):
+    """A web page can POST text/plain to 127.0.0.1 with no CORS preflight; the Origin check stops it."""
+    r = client.post("/api/live/start", data='{"config":{"trade_mode":"live"},"confirm":"LIVE"}',
+                    content_type="text/plain", headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("origin", ["http://127.0.0.1:5000", "http://localhost:5173", "http://[::1]:5000"])
+def test_local_origins_are_allowed(client, origin):
+    assert client.post("/api/data/stop", headers={"Origin": origin}).status_code == 200
+
+
+def test_malformed_json_gets_a_json_400(client):
+    r = client.post("/api/live/confirm", data="{not json", content_type="application/json")
+    assert r.status_code == 400 and r.get_json()["ok"] is False
+    r = client.post("/api/live/confirm", data="[1, 2]", content_type="application/json")
+    assert r.status_code == 400 and "JSON object" in r.get_json()["error"]
+
+
+def test_unknown_api_route_answers_in_json(client):
+    r = client.get("/api/does-not-exist")
+    assert r.status_code == 404 and r.get_json()["ok"] is False
+
+
+@pytest.mark.parametrize("body,fragment", [
+    ({}, "valid from and to"), ({"from": "2026-13-01", "to": "2026-01-01"}, "valid from and to"),
+    ({"from": "2026-02-01", "to": "2026-01-01"}, "after end date"),
+])
+def test_download_endpoints_validate_dates_before_starting_a_job(client, monkeypatch, body, fragment):
+    from app.workers import jobs
+    monkeypatch.setattr(jobs, "submit", lambda *a, **k: pytest.fail("a job must not start"))
+    for url in ("/api/data/download", "/api/data/options/download"):
+        r = client.post(url, json=body)
+        assert r.status_code == 400 and fragment in r.get_json()["error"], url
+
+
+def test_only_one_download_runs_at_a_time(client, monkeypatch):
+    from app.workers import jobs
+    monkeypatch.setattr(jobs, "active", lambda: [{"kind": "options"}])
+    for url in ("/api/data/download", "/api/data/options/download"):
+        r = client.post(url, json={"from": "2026-01-01", "to": "2026-01-02"})
+        assert r.status_code == 409, url

@@ -164,7 +164,8 @@ export default function Backtest() {
   ] : [], [sel]);
 
   if (meta.loading && !meta.data) return <Loading />;
-  if (meta.error || !params) return <ErrorNote>{meta.error ?? "Couldn't load backtest settings."}</ErrorNote>;
+  if (meta.error) return <ErrorNote>{meta.error}</ErrorNote>;
+  if (!params) return <Loading />;      // settings arrived; the effect above is about to set the parameters
   const md = meta.data!;
 
   return (

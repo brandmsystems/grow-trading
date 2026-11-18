@@ -13,7 +13,7 @@ from app.services.market_data import providers
 from app.services.strategy import rules as st
 from app.services.strategy import strategies
 from app.workers import jobs
-from app.api.common import api_error, remember_result, get_result, real_only
+from app.api.common import api_error, remember_result, get_result, real_only, json_body
 
 bp = Blueprint("backtest", __name__)
 
@@ -49,7 +49,7 @@ def bt_meta():
 
 @bp.post("/api/bt/data")
 def bt_data():
-    params = request.get_json(force=True) or {}
+    params = json_body()
     try:
         real_only(backtest.normalise(params))
     except ValueError as exc:
@@ -60,7 +60,7 @@ def bt_data():
 
 @bp.post("/api/bt/run")
 def bt_run():
-    params = request.get_json(force=True) or {}
+    params = json_body()
     force = bool(params.pop("force", False))
     try:
         p = real_only(backtest.normalise(params))

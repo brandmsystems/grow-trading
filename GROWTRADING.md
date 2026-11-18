@@ -21,7 +21,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
 | React frontend (Phase 5 + redesign) | **All 10 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
 | WebSocket updates | **Done (master Phase 3):** Socket.IO push with REST polling fallback; tested after market hours |
-| Tests | **310 backend pass** (18 Nov, incl. 18 API smoke tests) + 14 frontend (Vitest); React production build and type check pass |
+| Tests | **333 backend**, **346 frontend** (Vitest) and **106 browser** (Playwright) tests pass (18 Nov); React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).

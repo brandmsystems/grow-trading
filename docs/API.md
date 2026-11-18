@@ -1,6 +1,12 @@
 # Backend API
 
-**Base URL:** `http://127.0.0.1:5000`.
+**Base URL:** `http://127.0.0.1:5000` (set the `PORT` environment variable to use another port).
+
+**Access rules (all routes, `api/common.reject_foreign_requests`):** there is no login, because the server only listens on 127.0.0.1. Instead:
+- the `Host` header must be `127.0.0.1`, `localhost` or `::1` (any port), otherwise **403** (stops DNS-rebinding pages);
+- a POST/PUT/DELETE that carries an `Origin` header must come from a loopback page, otherwise **403**. Browsers send `text/plain` POSTs across sites without a preflight, and the endpoints accept any content type, so without this check a web page open in your browser could post to `/api/live/start`.
+
+**Bodies:** POST bodies are JSON objects (`api/common.json_body`). Malformed JSON or a non-object answers a JSON 400. Every HTTP error under `/api` (404, 405, 400...) uses the same `{"ok": false, ...}` envelope.
 
 **Response format:** every JSON endpoint answers `{"ok": true, "data": ...}`. On failure it answers `{"ok": false, "error": "message", "kind": "ErrorType"}` with HTTP 400 (bad input), 404, 409 (already running), 500 or 502 (Groww/upstream). `kind: "keys"` means the Groww credentials are missing.
 

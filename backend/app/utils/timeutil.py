@@ -17,5 +17,8 @@ def now_naive() -> datetime:
 
 def parse_hm(s: str) -> time:
     """'09:30' -> time(9, 30)."""
-    h, m = str(s).split(":")
-    return time(int(h), int(m))
+    try:
+        h, m = str(s).split(":")
+        return time(int(h), int(m))
+    except ValueError:
+        raise ValueError(f"Time must look like 09:30, got {s!r}") from None

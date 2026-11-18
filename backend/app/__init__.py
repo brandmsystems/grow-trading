@@ -22,6 +22,10 @@ def create_app() -> Flask:
     except Exception as exc:  # the account page still works without Postgres
         log.error("Database init failed: %s", exc)
     from app.api import account, backtest, data, frontend, live, pages, paper, research
+    from app.api.common import json_error, reject_foreign_requests
+    from werkzeug.exceptions import HTTPException
+    app.before_request(reject_foreign_requests)
+    app.register_error_handler(HTTPException, json_error)
     for mod in (pages, account, backtest, data, research, live, paper, frontend):
         app.register_blueprint(mod.bp)
     from app.api import realtime

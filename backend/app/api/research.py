@@ -9,7 +9,7 @@ from app.services.backtest import scalping
 from app.services.strategy import signals
 from app.services.strategy import strategies
 from app.workers import jobs
-from app.api.common import api_error, active_job
+from app.api.common import api_error, active_job, json_body
 
 bp = Blueprint("research", __name__)
 
@@ -27,7 +27,7 @@ def research_results():
 
 @bp.post("/api/research/run")
 def research_run():
-    body = request.get_json(force=True) or {}
+    body = json_body()
     if active_job("research"):
         return jsonify({"ok": False, "error": "A comparison run is already in progress."}), 409
     try:
@@ -59,7 +59,7 @@ def signals_get():
 @bp.post("/api/signals/build")
 def signals_build():
     try:
-        key, tf = _signal_args(request.get_json(force=True) or {})
+        key, tf = _signal_args(json_body())
     except ValueError as exc:
         return api_error(exc, 400)
     if active_job("signals"):
@@ -115,7 +115,7 @@ def scalping_paper_start():
     """Start the engine on a tested configuration. Body: {key, mode: paper|replay, replay_day?, risk: {...}}.
     Paper and replay only; real-money scalping is refused."""
     from app.services.trading import manager as live_manager
-    body = request.get_json(force=True) or {}
+    body = json_body()
     try:
         cfg = scalping.engine_config(body.get("key", ""), body.get("mode", "paper"), body.get("risk") or {})
         data = live_manager.start(cfg, "", body.get("replay_day"), float(body.get("replay_speed") or 120))

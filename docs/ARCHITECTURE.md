@@ -31,10 +31,15 @@
 | Position sizing | `options/sizing.py` |
 | Brokerage and charges | `trading/charges.py` |
 | Order execution | `trading/brokers.py` |
+| Stop-loss / target rules (pure) | `trading/stops.py` |
+| Engine settings and validation | `trading/engine_config.py` |
+| Live signal state, market hours, data checks (pure) | `market_data/signal_state.py` |
+| Scalping statistics and walk-forward (pure) | `backtest/scalping_stats.py` |
 | Performance reporting | `backtest/metrics.py`, `research.py` |
 
 4. **One source of trading rules:** the backtester, the live/paper engine and the live feed all call `strategy/rules.generate_legs`. A test replays days through the engine and requires the same trades as the backtest.
-5. **Order safety:** only `trading/brokers.LiveBroker` places orders.
+5. **Local-only access:** the server binds to 127.0.0.1 and `api/common.reject_foreign_requests` refuses foreign `Host` and cross-site `Origin` values (see API.md).
+6. **Order safety:** only `trading/brokers.LiveBroker` places orders.
    - It is used only when Live mode was started with the `LIVE` confirmation and within `LIVE_MAX_LOTS`.
    - **By default every live entry waits for your confirmation** (`Engine._propose` → `POST /api/live/confirm`), and it lapses with its signal.
    - Protective exits stay automatic.

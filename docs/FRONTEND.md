@@ -140,7 +140,28 @@ Light and dark themes are both supported; dark is the default.
 
 ## Testing (11 Nov 2026)
 - **Build:** `npm run build` (TypeScript strict type check + production build) passes. Each page loads only when first opened. Libraries are split into long-lived chunks (`react-vendor` 258 kB, `charts` 158 kB, `realtime` 41 kB), so the app's own entry chunk is 100 kB (it was one 548 kB file and Vite warned about the size).
-- **Unit tests:** `npm test` runs Vitest (14 tests): `utils/format.ts` and the API client (`services/api.ts`) with `fetch` mocked. **On Windows start it from a path with an upper-case drive letter** (`C:\...`); from `c:\...` Vitest loads itself twice and every suite fails with "failed to find the current suite".
+- **Component, hook and page tests:** `npm test` runs Vitest 4 with jsdom and React Testing Library: **346 tests in 13 files** (about 12 s; 4 full runs in a row all green). Run from `frontend/`; `npm run test:watch` re-runs on change. **On Windows start it from a path with an upper-case drive letter** (`C:\...`); from `c:\...` Vitest loads itself twice and every suite fails with "failed to find the current suite".
+
+  | File (`src/__tests__/`) | Tests | What it checks |
+  |---|---|---|
+  | `format.test.ts`, `api.test.ts` | 8 + 6 | Indian number/date formatting; the API client's envelope, error and unreachable handling |
+  | `hooks/useApi-useAlerts.test.tsx` | 19 | `useApi` (loading, error, reload, stale responses ignored); `waitForJob`; alert text; `useAlerts` notifies once per new alert, never for alerts present at load, respects sound and browser permission |
+  | `hooks/live.test.tsx` | 16 | The live data layer: REST fallback, WebSocket subscribe/push, duplicate and out-of-order events dropped, stale-socket detection, drop and reconnect, offline and recovery, engine-state and connection notifications, unread badge |
+  | `components/common.test.tsx` | 22 | Card, Stat, Pill, Segmented, Button, Field, PageHeader and the loading/empty/error states |
+  | `components/layout.test.tsx` | 30 | Sidebar, MobileNav (drawer, bottom bar), Topbar (Live push vs Polling vs Backend offline, bell, sound, theme), NotificationPanel, AppLayout |
+  | `components/charts.test.tsx` | 15 | What `CandleChart`, `LineChart` and `BarsChart` draw: candles, EMAs, VWAP, volume, crossover and trade markers, price levels, RSI/MACD panels, cleanup |
+  | `components/market.test.tsx` | 37 | Spot, premium, strategy and performance cards; trading plan and patterns; recommendation and "view reason"; calibration; the option chain (expiry/width requests, refresh, polling only while open) |
+  | `components/trading.test.tsx` | 52 | Engine panel (start paper/replay/live, Live confirm phrase and lot cap, stop, square off, paper stop-loss edit), pending live order confirm/skip and countdown, order calculator, risk calculator, daily risk and `RESET` account reset, paper trades table |
+  | `pages/live-pages.test.tsx` | 28 | Overview, Live Trading (chart markers and levels, toggles, paper trading start → position → square off → stored trade), Options |
+  | `pages/research-pages.test.tsx` | 54 | Signals, Backtest (run, job progress, filters, charts, cost units), Compare, Scalping (including the paper panel) |
+  | `pages/data-pages.test.tsx` | 38 | Market Data (downloads, jobs, stop, coverage), Historical Charts (range, timeframe, paging, URL), Account |
+  | `app.test.tsx` | 21 | The whole app: every route mounts, sidebar navigation, unknown path, no missing API endpoint and no console error across all pages, responsive structure |
+
+  Shared utilities are in `src/test/`: `mockApi.ts` (a fake backend that stubs `fetch` by method and path, records every call, and answers all default routes), `fixtures.ts` (typed builders for every payload), `fakeSocket.ts` (a controllable WebSocket), `fakeCharts.ts` (records what is drawn with lightweight-charts), `render.tsx` (`renderWithProviders`, `renderApp`) and `setup.ts`. Nothing touches the network or a canvas. jsdom has no layout engine, so the responsive tests check structure (which elements are hidden at which breakpoint); real widths need a browser.
+  Bugs these tests found and fixed: the risk-% box could not be typed key by key (`0` became `1`, so `0.5` was impossible; now `PercentInput`, used by the Order calculator and Account); the Backtest page flashed "Couldn't load backtest settings." for a moment on every open; Historical Charts could cancel a click on another page's link by re-writing its own address.
+- **Browser tests (18 Nov, Playwright with the installed Edge, 106 of 106 passed in 4.6 min):** `npx playwright test` (see [TESTING.md](TESTING.md)). Every page at 1920, 1440, 1280, 1024, 768, 430, 390 and 360 px: no horizontal overflow, no console or page errors, no failed API calls, content present. Navigation by the sidebar (768+) and by the phone bottom bar and "More" drawer; the live chart is drawn at every width; "Live push" while the WebSocket is up and "Polling" when it is blocked; paper Start/Stop. This replaced the 11 Nov puppeteer check below (54 of 54), which covered 6 widths and 9 pages.
+- **Phone connection indicator (18 Nov):** the "Live push / Polling" pill is hidden below 640 px; on phones a compact "Polling" pill now appears in the header only while the WebSocket is down (a green dot shows Groww status as before).
+- **Scalping page (18 Nov):** split into `pages/Scalping.tsx` (178 lines) and `components/scalping/` (`ConfigDetail`, `PaperPanel`, `shared`); behaviour unchanged, covered by `research-pages.test.tsx`.
 - **Every page at every required width:** a headless check with puppeteer-core and the installed Edge loaded all 9 pages at 1920, 1440, 1024, 768, 390 and 360 px. **54 of 54 had no horizontal overflow and no console errors.** Screenshots of each were reviewed.
 - **Controls and notifications in a real browser:**
   - Start Paper and Stop (with its confirm dialog) work.

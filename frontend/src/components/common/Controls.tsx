@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 const base = "min-w-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900";
 export const inputCls = `w-full ${base}`;
@@ -63,5 +63,24 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
+  );
+}
+
+/**
+ * A percentage box that can be typed into key by key ("0", then "0.5"). It keeps what is being typed
+ * locally and only passes a valid value (above 0, up to `max`) to `onCommit`; leaving the box shows the saved value again.
+ */
+export function PercentInput({ value, onCommit, max = 100, step = 0.5, min = 0.1, className = inputCls, ...rest }: {
+  value: number; onCommit: (v: number) => void; max?: number; step?: number; min?: number; className?: string; "aria-label"?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input type="number" min={min} max={max} step={step} className={className} value={draft ?? value} {...rest}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        const v = Number(e.target.value);
+        if (e.target.value !== "" && Number.isFinite(v) && v > 0 && v <= max) onCommit(v);
+      }}
+      onBlur={() => setDraft(null)} />
   );
 }

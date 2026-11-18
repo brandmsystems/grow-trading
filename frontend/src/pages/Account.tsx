@@ -4,7 +4,7 @@ import { useApi } from "../hooks/useApi";
 import { useSettings } from "../context/SettingsContext";
 import { getCredentialStatus, getFunds, getProfile, relogin } from "../services/api";
 import { Card, Pill, Stat } from "../components/common/Card";
-import { Button, Field, inputCls, PageHeader, Segmented } from "../components/common/Controls";
+import { Button, Field, inputCls, PageHeader, PercentInput, Segmented } from "../components/common/Controls";
 import { ErrorNote, Loading } from "../components/common/States";
 import { inr } from "../utils/format";
 
@@ -75,8 +75,7 @@ export default function Account() {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Capital ₹"><input type="number" min={0} className={inputCls} placeholder="Groww margin" value={settings.capital ?? ""}
               onChange={(e) => update({ capital: e.target.value ? Number(e.target.value) : null })} /></Field>
-            <Field label="Risk per trade %"><input type="number" min={0.1} max={100} step={0.5} className={inputCls} value={settings.riskPct}
-              onChange={(e) => update({ riskPct: Number(e.target.value) || 1 })} /></Field>
+            <Field label="Risk per trade %"><PercentInput value={settings.riskPct} onCommit={(v) => update({ riskPct: v })} /></Field>
           </div>
           <p className="mt-2 text-xs text-slate-500">Saved in this browser only.</p>
         </Card>

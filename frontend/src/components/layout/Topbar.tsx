@@ -47,6 +47,10 @@ export function Topbar({ title, onBell }: { title: string; onBell: () => void })
             {STATE_LABEL[st] ?? st}{st !== "stopped" && mode ? ` · ${mode.toUpperCase()}` : ""}
           </Pill></span>
           <span className="sm:hidden"><Dot tone={groww} /></span>
+          {/* Phone: the desktop "Live push / Polling" pill is hidden, so say so when the WebSocket is down. */}
+          {connection === "online" && transport === "polling" && (
+            <span className="sm:hidden" title="WebSocket unavailable: the app is polling the server instead"><Pill tone="warn">Polling</Pill></span>
+          )}
           <button className="relative rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={onBell} aria-label={`Notifications${unread ? `, ${unread} new` : ""}`}>
             <Bell size={18} />
             {unread > 0 && <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unread > 9 ? "9+" : unread}</span>}

@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import time as _time
 from datetime import datetime
@@ -34,9 +35,12 @@ PING_TIMEOUT = 10
 HEARTBEAT_STALE_SEC = 15      # the client's threshold, sent to it on subscribe
 VOLATILE = {"now", "age_sec", "updated", "server_time", "computed_at"}   # change every tick without new information
 
+# Pages served by this app (PORT, default 5000) and by the Vite dev server (5173), on loopback names only.
+PORT = int(os.environ.get("PORT", 5000))
+ALLOWED_ORIGINS = [f"http://{host}:{port}" for port in sorted({PORT, 5000, 5173}) for host in ("127.0.0.1", "localhost")]
+
 socketio = SocketIO(async_mode="threading", ping_interval=PING_INTERVAL, ping_timeout=PING_TIMEOUT,
-                    cors_allowed_origins=["http://127.0.0.1:5000", "http://localhost:5000",
-                                          "http://127.0.0.1:5173", "http://localhost:5173"])
+                    cors_allowed_origins=ALLOWED_ORIGINS)
 
 
 def _strip(o):

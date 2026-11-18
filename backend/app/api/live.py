@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request
 from app.config import settings as config
 from app.services.groww import client as groww_client
 from app.services.trading import manager as live_manager
-from app.api.common import api_error, log
+from app.api.common import api_error, log, json_body
 
 bp = Blueprint("live", __name__)
 
@@ -103,7 +103,7 @@ def live_dashboard():
 
 @bp.post("/api/live/start")
 def live_start():
-    body = request.get_json(force=True) or {}
+    body = json_body()
     try:
         data = live_manager.start(body.get("config") or {}, body.get("confirm", ""),
                                   body.get("replay_day"), float(body.get("replay_speed") or 120))
@@ -119,7 +119,7 @@ def live_start():
 @bp.post("/api/live/confirm")
 def live_confirm():
     """Place the live entry order the engine is holding for confirmation. Body: {"id": ...}."""
-    pid = (request.get_json(force=True) or {}).get("id", "")
+    pid = (json_body()).get("id", "")
     try:
         return jsonify({"ok": True, "data": live_manager.confirm_order(pid)})
     except (RuntimeError, ValueError) as exc:
@@ -128,7 +128,7 @@ def live_confirm():
 
 @bp.post("/api/live/reject")
 def live_reject():
-    pid = (request.get_json(force=True) or {}).get("id", "")
+    pid = (json_body()).get("id", "")
     try:
         return jsonify({"ok": True, "data": live_manager.reject_order(pid)})
     except (RuntimeError, ValueError) as exc:

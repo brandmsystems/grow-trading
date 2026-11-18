@@ -94,6 +94,7 @@ All rates are editable in Backtest settings.
 `lots = min(floor(risk budget ÷ risk per lot), floor(available cash ÷ cost per lot))`.
 - **Risk budget:** capital × risk %.
 - **Risk per lot:** (entry − stop) × lot size, plus charges. Live and paper use the contract's current lot size from Groww's instrument list; backtests use the NSE lot size of each historical contract.
+- **Where the stop and target rules live:** `trading/stops.py` (`stop_levels`, pure functions: ATR/delta, % of premium, fixed points, and the scalp percentages; tick rounding against the trade), tested by `tests/test_stops.py`. Sizing is `options/sizing.py`. Both were moved out of `engine.py` on 18 Nov with identical results.
 - **Cost per lot:** premium × lot size, plus charges.
 
 ## Paper trading risk management (12 Nov 2026)

@@ -36,7 +36,13 @@ export default function HistoryCharts() {
   const [ema, setEma] = useState(true);
   useEffect(() => { if (last && !to) { setTo(last); setFrom(shift(last, -6)); } }, [last, to]);
   const candles = useApi(() => (from && to ? getCandles(from, to, tf) : Promise.resolve({ bars: [] })), [from, to, tf]);
-  useEffect(() => { if (from && to) setQ({ from, to, tf: String(tf) }, { replace: true }); }, [from, to, tf, setQ]);
+  // Keep the address in step with the chart. Skip it when it already matches: setQ changes identity with
+  // every URL change, so an unconditional update re-navigates (and can cancel a click on another page's link).
+  useEffect(() => {
+    if (!from || !to) return;
+    if (q.get("from") === from && q.get("to") === to && q.get("tf") === String(tf)) return;
+    setQ({ from, to, tf: String(tf) }, { replace: true });
+  }, [from, to, tf, q, setQ]);
   const bars = useMemo(() => withEma(candles.data?.bars ?? []), [candles.data]);
   const move = (dir: number) => { const n = span(from, to); setFrom(shift(from, dir * n)); setTo(shift(to, dir * n)); };
   const lastBar = bars[bars.length - 1];
