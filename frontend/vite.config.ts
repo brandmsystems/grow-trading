@@ -15,5 +15,20 @@ export default defineConfig({
       "/socket.io": { target: "http://127.0.0.1:5000", ws: true },
     },
   },
-  build: { outDir: "dist", sourcemap: false },
+  build: {
+    outDir: "dist",
+    sourcemap: false,
+    rolldownOptions: {
+      output: {
+        // Long-lived libraries get their own files so an app change does not re-download them.
+        codeSplitting: {
+          groups: [
+            { name: "charts", test: /node_modules[\/]lightweight-charts/ },
+            { name: "realtime", test: /node_modules[\/](socket\.io|engine\.io|@socket\.io)/ },
+            { name: "react-vendor", test: /node_modules[\/](react|react-dom|react-router|react-router-dom|scheduler)[\/]/ },
+          ],
+        },
+      },
+    },
+  },
 });

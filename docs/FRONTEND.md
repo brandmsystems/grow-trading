@@ -139,7 +139,8 @@ Light and dark themes are both supported; dark is the default.
 | Live strength score | Live crossover signals have no score; strength bars apply to the historical analysis |
 
 ## Testing (11 Nov 2026)
-- **Build:** `npm run build` (TypeScript strict type check + production build) passes. Each page loads only when first opened (largest page chunk 16 kB).
+- **Build:** `npm run build` (TypeScript strict type check + production build) passes. Each page loads only when first opened. Libraries are split into long-lived chunks (`react-vendor` 258 kB, `charts` 158 kB, `realtime` 41 kB), so the app's own entry chunk is 100 kB (it was one 548 kB file and Vite warned about the size).
+- **Unit tests:** `npm test` runs Vitest (14 tests): `utils/format.ts` and the API client (`services/api.ts`) with `fetch` mocked. **On Windows start it from a path with an upper-case drive letter** (`C:\...`); from `c:\...` Vitest loads itself twice and every suite fails with "failed to find the current suite".
 - **Every page at every required width:** a headless check with puppeteer-core and the installed Edge loaded all 9 pages at 1920, 1440, 1024, 768, 390 and 360 px. **54 of 54 had no horizontal overflow and no console errors.** Screenshots of each were reviewed.
 - **Controls and notifications in a real browser:**
   - Start Paper and Stop (with its confirm dialog) work.

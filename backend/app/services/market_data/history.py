@@ -16,6 +16,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from app.database import db
+from app.utils.timeutil import now_naive
 from app.services.strategy import rules as st
 
 log = logging.getLogger("data_manager")
@@ -38,8 +39,7 @@ class DownloadError(RuntimeError):
     pass
 
 
-def _now() -> datetime:
-    return datetime.now()
+_now = now_naive   # module-level so tests can patch the clock
 
 
 def _sleep(seconds: float) -> None:

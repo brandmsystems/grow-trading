@@ -54,6 +54,8 @@
 
 **Synthetic rows removed (12 Nov 2026):** 223,305 `SYNTH:` candles, 515 fetch-log rows, 316 contracts, 18 expiries and 1 cached run were exported to `data/backups/synthetic_2026-11-12_*.csv.gz` and then deleted. The 4 synthetic engine trades in `live_trades` are kept (trade history is never deleted); the app already excludes them.
 
+**Orphaned tables (not read or written by any code):** `candle_forecasts`, `prediction_log`, `strategy_signals`, `smc_setups`, `pattern_events`, `app_settings`. They come from features removed on 18 Nov (forecast, prediction trading, SMC, pattern trading). They hold history (55, 36 and 2 rows in the first three; the rest are empty), so they are kept. See TODO.
+
 ## Safety
 - **Nothing is deleted** by the app except cached backtest runs, which are cleared when new data arrives (signal analyses are kept).
 - **Backup:** `pg_dump -U postgres groww_trading > data/exports/groww_trading.sql`.

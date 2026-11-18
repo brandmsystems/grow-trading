@@ -2,6 +2,16 @@
 
 All dates are 2026, IST.
 
+## 18 Nov: audit, small cleanup, API and frontend tests
+- **Audit result:** every Python symbol and import, every exported TypeScript name, all 41 `/api` routes against the React client (every client call has a route; four routes are not called by the React app, kept on purpose as before), every table against the code, and secrets/live-order paths. The 14 Nov cleanup left little dead code: no unused Python imports or functions, no unused TypeScript imports (`noUnusedLocals` is on).
+- **Duplicates removed (no behaviour change):** four copies of `IST = ZoneInfo("Asia/Kolkata")` (db, groww client, live, providers) and four `_now()` bodies are now `utils/timeutil.IST` and `timeutil.now_naive`. Each module keeps its own `_now` name because tests patch it per module.
+- **Frontend build:** libraries are split into `react-vendor`, `charts` and `realtime` chunks. The entry chunk went from 548 kB (171 kB gzip, with a Vite size warning) to 100 kB (29 kB gzip); no warning. Pages and behaviour are unchanged.
+- **Tests added:** `backend/tests/test_api_smoke.py` (18 cases): account endpoints with Groww mocked, live controls refuse when no engine runs, live start needs the `LIVE` phrase and the lot cap before any key is read, 404s for unknown jobs/results, read-only research/signals/scalping endpoints. The fixture fails any test that reaches the real Groww client. Frontend: Vitest (`npm test`, 14 tests) for `utils/format.ts` and `services/api.ts`.
+- **Results:** backend **310 passed** (292 before; 8 min 6 s alone). Frontend 14 passed; `tsc -b` and `npm run build` pass.
+- **Database:** nothing changed. Six tables have no code references (listed in DATABASE.md and TODO.md); all are kept because they hold history.
+- **Docs fixed:** migration range `0001`-`0012`, the stale "no WebSockets" and "three `_now`" notes, test commands in README/DEPLOYMENT.
+- **Not done:** no data-bearing table was dropped, no trading rule or calculation changed, no real order was placed. Browser/responsive checks were not re-run in this pass.
+
 ## 14 Nov: performance pass (no behaviour change)
 - **Where the time went:** a one-year backtest spent about 9 of 16 s in `db.load_candles` (776,000 rows turned into Python objects three times over), plus 2,400 contract lookups (two per priced trade) and full-frame mask scans in `rules.price_at`.
 - **`db.load_candles`:** PostgreSQL returns the IST wall-clock time as integer microseconds, and numpy builds the frame in one pass. This replaces `pd.read_sql` plus a Python cast on every timestamp. The output is identical: values and dtypes checked bit for bit on spot, futures and 40 option contracts, including empty results. The database has no NULL candle values and no fractional seconds (checked over all 68 M rows).

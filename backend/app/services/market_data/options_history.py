@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import text
 
 from app.database import db
+from app.utils.timeutil import now_naive
 from app.services.market_data import history as data_manager
 from app.services.market_data import providers
 from app.services.strategy import rules as st
@@ -29,8 +30,7 @@ STRIKE_RANGE = 10                # strikes either side of ATM
 WINDOW_DAYS = 29                 # one Groww request covers up to 30 days of 1-minute candles
 
 
-def _now() -> datetime:
-    return datetime.now()
+_now = now_naive   # module-level so tests can patch the clock
 
 
 def spot_ranges(start: date, end: date) -> dict[date, tuple[float, float]]:

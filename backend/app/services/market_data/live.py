@@ -11,16 +11,15 @@ import threading
 import time as _time
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from app.config import settings as config
 from app.database import db
+from app.utils.timeutil import IST
 from app.services.market_data import providers
 
 log = logging.getLogger("live.market")
-IST = ZoneInfo("Asia/Kolkata")
 INSTRUMENTS_FILE = config.BASE_DIR / "data" / "historical" / "instruments.csv"
 
 

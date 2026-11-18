@@ -9,7 +9,7 @@ from functools import lru_cache
 
 import pandas as pd
 
-from app.utils.timeutil import parse_hm
+from app.utils.timeutil import now_naive, parse_hm
 from app.services.trading import charges as costs
 from app.database import db
 from app.services.backtest import metrics
@@ -44,8 +44,7 @@ HISTORY_DAYS = 40    # calendar days loaded before the range so indicators have 
 ENGINE_VERSION = 3   # bump to invalidate cached runs when logic changes
 
 
-def _now() -> datetime:
-    return datetime.now()
+_now = now_naive   # module-level so tests can patch the clock
 
 
 def data_stale(last: datetime | None, tolerance_min: int = 15) -> bool:

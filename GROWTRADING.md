@@ -21,7 +21,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
 | React frontend (Phase 5 + redesign) | **All 10 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
 | WebSocket updates | **Done (master Phase 3):** Socket.IO push with REST polling fallback; tested after market hours |
-| Tests | **292 pass** (13 Nov, incl. 15 scalping tests); React production build and type check pass |
+| Tests | **310 backend pass** (18 Nov, incl. 18 API smoke tests) + 14 frontend (Vitest); React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
@@ -243,7 +243,7 @@ Read-only audit before the "master development" programme. No working code was c
 7. **Live chart:** EMA 9/21 only. No VWAP, volume, RSI or MACD panels; no 1-minute live chart (the feed accepts 5/15/30).
 8. **Duplicates:**
    - `manager.snapshot()` (used by `/api/live/status`) and `feed.Feed` both compute a NIFTY quote and EMAs.
-   - `_now()` in 3 modules (kept because tests patch each one).
+   - `_now` aliases in 4 modules (kept because tests patch each one; now one shared `timeutil.now_naive`).
    - Legacy server-rendered pages still served alongside React (**removed on 12 Nov**).
 9. **Live trading:** never exercised against Groww with a real order.
 10. **Synthetic test candles** (223k rows) sit in the production database (**removed in Phase 1**, backup kept).

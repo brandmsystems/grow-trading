@@ -34,7 +34,10 @@
 - **EXIT as a separate call:** after an opposite crossover or 15:00 the recommendation shows HOLD with the exit reason (exit alerts are separate). A distinct EXIT label is not added yet.
 - **Live premiums not seen during market hours yet:** the redesign was checked after the close. The CE/PE premium panel was checked with HOLD and replay data, not with a live BUY signal.
 - **First live order not yet seen:** manual confirmation is tested on replayed days with a counting broker, but no real Groww order has been placed through it yet.
-- **`_now()` exists in three modules** (backtest engine, history, providers). Tests patch each one separately, so they were left as they are.
+- **`_now` is a module-level alias in four modules** (backtest engine, history, options history, providers) of one shared `timeutil.now_naive`. Tests patch each module's alias separately, so the aliases stay.
+- **Orphaned tables:** `candle_forecasts` (55 rows), `prediction_log` (36), `strategy_signals` (2), `smc_setups`, `pattern_events` and `app_settings` (empty) belong to features removed on 18 Nov and nothing in the code reads them. They are kept because they hold history; dropping them needs your approval, a `pg_dump` backup and a new migration.
+- **Slow test suite:** about 9 minutes, mostly three replay-vs-backtest tests (`test_engine_matches_backtest`, 40-113 s each) and the engine tests. They replay real days against the real database, so they were not shortened.
+- **No component or browser tests for the React app:** only the formatters and the API client are unit tested (Vitest); pages were checked by hand.
 - **Market status:** no holiday calendar, so it shows "open" on NSE holidays.
 - **165 option candles at 15:30** (Aug–Nov 2026) from an older fetch version; real but outside the stored 09:15–15:29 window. Unused; awaiting your decision to delete or keep.
 - **Option history refresh:** new sessions are not downloaded automatically; press *Download or resume options* on the Market Data page (only new days are fetched).

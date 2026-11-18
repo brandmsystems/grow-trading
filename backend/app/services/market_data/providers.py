@@ -12,15 +12,14 @@ import math
 import re
 import time as _time
 from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
 from app.database import db
+from app.utils.timeutil import IST, now_naive
 
 log = logging.getLogger("providers")
-IST = ZoneInfo("Asia/Kolkata")
 
 
 def _first_list(resp) -> list:
@@ -216,8 +215,7 @@ def _bs_price(spot: float, strike: float, t_years: float, vol: float, typ: str, 
     return strike * math.exp(-r * t_years) * n(-d2) - spot * n(-d1)
 
 
-def _now() -> datetime:
-    return datetime.now()
+_now = now_naive   # module-level so tests can patch the clock
 
 
 class SyntheticProvider(Provider):

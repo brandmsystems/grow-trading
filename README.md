@@ -46,7 +46,9 @@ http://127.0.0.1:5000 opens the app. Old addresses like `/live` or `/compare` re
 ## Tests
 ```powershell
 cd backend
-..\.venv\Scripts\python -m pytest
+..\.venv\Scripts\python -m pytest      # backend (about 9 min; replays real days)
+cd ..rontend
+npm test                               # Vitest: formatters and API client (start from C:\..., not c:\...)
 ```
 
 ## Documentation

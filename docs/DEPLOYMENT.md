@@ -48,7 +48,8 @@ cd backend; ..\.venv\Scripts\python app.py
 ## Tests
 ```powershell
 cd backend
-..\.venv\Scripts\python -m pytest
+..\.venv\Scripts\python -m pytest      # backend
+# frontend: cd ..\frontend; npm test
 ```
 The tests create and drop their own `groww_trading_test*` databases and never touch `groww_trading`. **Don't run two test sessions at once**, because they share those test databases.
 

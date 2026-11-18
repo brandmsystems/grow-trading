@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -13,9 +12,9 @@ from psycopg2.extras import execute_values
 from sqlalchemy import create_engine, text
 
 from app.config import settings as config
+from app.utils.timeutil import IST
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
-IST = ZoneInfo("Asia/Kolkata")
 CONNECT_ARGS = {"options": "-c timezone=Asia/Kolkata"}
 
 

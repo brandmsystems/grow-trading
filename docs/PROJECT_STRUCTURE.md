@@ -86,9 +86,9 @@ Details: [API.md](API.md).
 |---|---|---|
 | `config/settings.py` | Paths (project root), PostgreSQL settings, credentials from env or `keys.txt` | `config.py` |
 | `database/db.py` | Engine (Asia/Kolkata session), migration runner, candles/contracts/runs queries | `db.py` |
-| `database/migrations/` | `0001`–`0010` SQL migrations | `migrations/` |
+| `database/migrations/` | `0001`–`0012` SQL migrations | `migrations/` |
 | `workers/jobs.py` | Background jobs with progress; separate lane for long research runs | `jobs.py` |
-| `utils/timeutil.py` | `parse_hm("09:30")`, shared by three modules | three copies of `_hm` |
+| `utils/timeutil.py` | `IST` timezone, `now_naive()` (the clock every `_now` alias points to) and `parse_hm("09:30")` | three copies of `_hm`, four `IST` definitions, four `_now()` bodies |
 | `utils/numbers.py` | `to_float` | from `live_feed.py` |
 
 ## Tests (`backend/tests`)

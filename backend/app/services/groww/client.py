@@ -9,14 +9,13 @@ import json
 import re
 import threading
 from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import pyotp
 from growwapi import GrowwAPI
 
 from app.config import settings as config
+from app.utils.timeutil import IST
 
-IST = ZoneInfo("Asia/Kolkata")
 _lock = threading.Lock()
 _client: GrowwAPI | None = None
 _client_valid_until: datetime | None = None
