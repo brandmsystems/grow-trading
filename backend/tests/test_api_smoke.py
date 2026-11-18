@@ -24,34 +24,43 @@ def client(monkeypatch):
 
 # ----- account (Groww mocked) -----
 
-def test_account_endpoints_wrap_groww_calls(client, monkeypatch):
+def test_login_and_logout_wrap_groww_calls(client, monkeypatch):
     calls = []
     monkeypatch.setattr(account.groww_client, "login", lambda force=False: calls.append(("login", force)))
     monkeypatch.setattr(account.groww_client, "logout", lambda: calls.append(("logout",)))
-    monkeypatch.setattr(account.groww_client, "call", lambda name, **kw: {"called": name})
     assert client.post("/api/login").get_json() == {"ok": True}
     assert client.post("/api/logout").get_json() == {"ok": True}
-    assert client.get("/api/profile").get_json()["data"] == {"called": "get_user_profile"}
-    assert client.get("/api/funds").get_json()["data"] == {"called": "get_available_margin_details"}
     assert calls == [("login", True), ("logout",)]
 
 
-def test_account_endpoints_report_missing_keys_as_400(client, monkeypatch):
+def test_login_reports_missing_keys_as_400(client, monkeypatch):
     def no_keys(*a, **k):
         raise config.KeysError("keys missing")
     monkeypatch.setattr(account.groww_client, "login", no_keys)
-    monkeypatch.setattr(account.groww_client, "call", no_keys)
-    for method, url in (("post", "/api/login"), ("get", "/api/profile"), ("get", "/api/funds")):
-        r = getattr(client, method)(url)
-        assert r.status_code == 400 and r.get_json()["kind"] == "keys", url
+    r = client.post("/api/login")
+    assert r.status_code == 400 and r.get_json()["kind"] == "keys"
 
 
-def test_account_endpoints_report_broker_failures_as_502(client, monkeypatch):
+def test_login_reports_broker_failures_as_502(client, monkeypatch):
     def boom(*a, **k):
         raise ConnectionError("groww down")
-    monkeypatch.setattr(account.groww_client, "call", boom)
-    r = client.get("/api/funds")
+    monkeypatch.setattr(account.groww_client, "login", boom)
+    r = client.post("/api/login")
     assert r.status_code == 502 and r.get_json() == {"ok": False, "error": "groww down", "kind": "ConnectionError"}
+
+
+@pytest.mark.parametrize("url", ["/api/profile", "/api/funds", "/api/live/broker"])
+def test_real_account_data_is_not_served(client, url):
+    """Profile, funds/margin and the broker's positions are personal financial data: no endpoint returns them,
+    and (the fixture fails any test that reaches the Groww client) nothing is even requested."""
+    r = client.get(url)
+    assert r.status_code == 404 and r.get_json()["ok"] is False
+
+
+def test_live_trades_endpoint_never_returns_real_trades(client):
+    r = client.get("/api/live/trades?mode=live")
+    assert r.status_code == 200 and r.get_json()["data"] == []
+    assert all(t["trade_mode"] != "live" for t in client.get("/api/live/trades").get_json()["data"])
 
 
 # ----- live engine guard rails (no engine running) -----

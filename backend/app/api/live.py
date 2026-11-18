@@ -4,7 +4,6 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from app.config import settings as config
-from app.services.groww import client as groww_client
 from app.services.trading import manager as live_manager
 from app.api.common import api_error, log, json_body
 
@@ -157,14 +156,3 @@ def live_trades():
         return jsonify({"ok": True, "data": live_manager.trades(request.args.get("mode"), request.args.get("day"))})
     except Exception as exc:
         return api_error(exc, 500)
-
-
-@bp.get("/api/live/broker")
-def live_broker():
-    """Actual Groww F&O positions, for reconciling against the engine."""
-    try:
-        return jsonify({"ok": True, "data": groww_client.call("get_positions_for_user", segment="FNO", timeout=10)})
-    except config.KeysError as exc:
-        return api_error(exc, 400)
-    except Exception as exc:
-        return api_error(exc)

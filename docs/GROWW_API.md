@@ -21,7 +21,7 @@
 | Contracts of an expiry | `get_contracts(NSE, NIFTY, expiry_date)` | providers, history (futures) |
 | Quotes | `get_ltp`, `get_quote` | live, feed |
 | Option chain | `get_option_chain` | feed, options/contracts |
-| Funds | `get_available_margin_details` | account, feed (sizing) |
+| Funds | `get_available_margin_details` | **not called** since 18 Nov (the app never reads your balance) |
 | Orders | `place_order` (MIS, MARKET, DAY), `get_order_status`, `get_order_status_by_reference`, `get_order_detail` | trading/brokers (Live mode only) |
 | Positions | `get_positions_for_user(FNO)` | live (Check Groww positions) |
 

@@ -1,4 +1,4 @@
-"""Groww account: credentials status, login/logout, profile and funds."""
+"""Groww credentials status, login and logout. No account data (profile, funds, margin) is served."""
 from __future__ import annotations
 
 from flask import Blueprint, jsonify
@@ -35,25 +35,3 @@ def api_login():
 def api_logout():
     groww_client.logout()
     return jsonify({"ok": True})
-
-
-@bp.get("/api/profile")
-def api_profile():
-    try:
-        return jsonify({"ok": True, "data": groww_client.call("get_user_profile", timeout=10)})
-    except config.KeysError as exc:
-        return api_error(exc, 400)
-    except Exception as exc:
-        return api_error(exc)
-
-
-@bp.get("/api/funds")
-def api_funds():
-    try:
-        return jsonify(
-            {"ok": True, "data": groww_client.call("get_available_margin_details", timeout=10)}
-        )
-    except config.KeysError as exc:
-        return api_error(exc, 400)
-    except Exception as exc:
-        return api_error(exc)

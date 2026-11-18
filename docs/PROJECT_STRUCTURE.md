@@ -47,7 +47,7 @@ grow-trading/
 | `common.py` | Shared helpers: `api_error`, `json_body`, `date_range`, `date_arg`, `reject_foreign_requests` (Host/Origin guard), `json_error` (JSON for HTTP errors), result cache, `real_only`, `active_job` |
 | `pages.py` | Redirects `/` and old page addresses to the React app (`/app/...`) |
 | `paper.py` | Paper risk: virtual account, risk calculator, stop-loss edits and history |
-| `account.py` | `/api/status`, `/api/login`, `/api/logout`, `/api/profile`, `/api/funds` |
+| `account.py` | `/api/status`, `/api/login`, `/api/logout` (no profile or funds) |
 | `backtest.py` | `/api/bt/*`, `/api/jobs/<id>` |
 | `data.py` | `/api/data/*` |
 | `research.py` | `/api/research*`, `/api/signals*` |
@@ -87,7 +87,8 @@ Details: [API.md](API.md).
 | `backtest/research.py` | Strategy × timeframe comparison and walk-forward | `research.py` |
 | `backtest/scalping.py` | 5-minute scalping analyzer run, summary, storage and the scalp-mode engine settings for paper trading | `research.py` |
 | `backtest/scalping_stats.py` | Pure: per-configuration statistics, year/month/regime grouping, verdict, walk-forward | inside `scalping.py` |
-| `notifications/alerts.py` | Store each alert once; read recent alerts | from engine, feed and manager |
+| `notifications/alerts.py` | Store each alert once; read recent alerts (live-mode alerts lose fill details) | from engine, feed and manager |
+| `privacy.py` | Keeps real-money details out of everything sent to the browser: live status, live alerts, order ids | new |
 
 ## Other backend folders
 | Path | Responsibility | Previously |
@@ -116,5 +117,6 @@ Details: [API.md](API.md).
 | test_frontend.py | React build served at /app, client-route fallback, no files outside dist |
 | test_api_smoke.py | Account endpoints (Groww mocked), live-control guard rails, Host/Origin guard, JSON errors, download validation, not-found cases, read endpoints |
 | test_stops.py | `stops.py` rules and `EngineConfig` validation messages |
+| test_privacy.py | What live mode may show: redacted status, events and alerts, kept safety information, order ids |
 
 The files under `services/` keep the names other modules and tests import. For example, `feed.py` still exposes `size_position`, and `manager.py` still exposes `recent_alerts`.

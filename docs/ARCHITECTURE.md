@@ -39,7 +39,8 @@
 
 4. **One source of trading rules:** the backtester, the live/paper engine and the live feed all call `strategy/rules.generate_legs`. A test replays days through the engine and requires the same trades as the backtest.
 5. **Local-only access:** the server binds to 127.0.0.1 and `api/common.reject_foreign_requests` refuses foreign `Host` and cross-site `Origin` values (see API.md).
-6. **Order safety:** only `trading/brokers.LiveBroker` places orders.
+6. **Privacy:** real-money details never reach the browser. `services/privacy.py` redacts the engine status (the single `Engine.status()` choke point, so REST and WebSocket are covered), live alerts and trade rows; there are no endpoints for the Groww profile, funds or positions, and the feed never reads your margin (sizing uses the capital you enter or the paper account). The database keeps every record.
+7. **Order safety:** only `trading/brokers.LiveBroker` places orders.
    - It is used only when Live mode was started with the `LIVE` confirmation and within `LIVE_MAX_LOTS`.
    - **By default every live entry waits for your confirmation** (`Engine._propose` → `POST /api/live/confirm`), and it lapses with its signal.
    - Protective exits stay automatic.

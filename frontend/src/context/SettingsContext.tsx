@@ -6,7 +6,7 @@ export interface Settings {
   theme: "dark" | "light";
   sound: boolean;
   timeframe: number;          // chart / signal timeframe
-  capital: number | null;     // for position sizing; empty = use Groww's available margin
+  capital: number | null;     // for position sizing; empty = the paper account's available capital
   riskPct: number;            // % of capital risked per trade
   engine: EngineConfig;       // last used engine settings
   sidebarCollapsed: boolean;  // desktop sidebar shows icons only

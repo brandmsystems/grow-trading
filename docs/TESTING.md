@@ -4,9 +4,9 @@ Three layers, all runnable locally. Counts are from the runs on 18 Nov 2026.
 
 | Layer | Tool | Where | Tests | Time |
 |---|---|---|---|---|
-| Backend unit + integration | pytest | `backend/tests/` | **333** | about 5-9 min (replays real days) |
+| Backend unit + integration | pytest | `backend/tests/` | **346** | about 5-9 min (replays real days) |
 | Frontend unit + component + page | Vitest 4, jsdom, React Testing Library | `frontend/src/__tests__/` | **346** | about 12-20 s |
-| Browser (real Edge) | Playwright | `frontend/e2e/` | **106** | about 4-5 min |
+| Browser (real Edge) | Playwright | `frontend/e2e/` | **108** | about 4-5 min |
 
 Also: `npx tsc -b` (strict type check) and `npm run build` (production build) both pass.
 
@@ -29,8 +29,9 @@ Also: `npx tsc -b` (strict type check) and `npm run build` (production build) bo
 | test_scalping.py | Scalping analyzer and scalp engine mode |
 | test_live_feed.py, test_insight.py, test_realtime.py | Live feed, signal state, data checks, Socket.IO push, heartbeat, rooms |
 | test_frontend.py | React build served at /app, route fallback, no files outside `dist` |
-| test_api_smoke.py (29) | Account endpoints with Groww mocked; live-control guard rails; `LIVE` phrase and lot cap checked before any key is read; Host/Origin guard; JSON errors; download validation; not-found cases; read endpoints |
+| test_api_smoke.py (33) | Account endpoints with Groww mocked; live-control guard rails; `LIVE` phrase and lot cap checked before any key is read; Host/Origin guard; JSON errors; download validation; not-found cases; read endpoints |
 | test_stops.py (12) | `trading/stops.py` rules and `EngineConfig` validation messages |
+| test_privacy.py (8) + 2 in test_live_engine.py | What live mode may show the browser: redacted status, events and alerts, safety information kept, order ids removed, real trades never served while the database keeps them; paper/replay unchanged |
 
 Not covered by an automated test: stopping the engine while a live exit order fails (it now logs an error; checked by reading), prediction mode in the before/after snapshot (covered by `test_live_engine.py`).
 
@@ -43,6 +44,7 @@ Not covered by an automated test: stopping the engine while a live exit order fa
 - **Navigation (8):** every page reachable by the sidebar (768+) or the bottom bar and "More" drawer (phones).
 - **Live chart (8):** the chart canvas is drawn and sized sensibly at each width.
 - **Connection indicator (8):** "Live push" on desktop while the WebSocket is up; with the WebSocket blocked the app shows "Polling" (desktop pill, or the compact phone pill) with no header overflow.
+- **Privacy (2):** every page is visited at 1280 px; the test fails if any page text, tooltip, `aria-label`, hidden element, console line, API response or WebSocket frame contains account data (funds, margin, collateral, profile, order ids, labels such as "Groww margin"), if the removed endpoints (`/api/funds`, `/api/profile`, `/api/live/broker`) are ever requested, or if `/api/live/trades` returns a real-money trade.
 - **Trading controls (2):** Start paper trading, state Waiting/Running, Stop; and the live-start refusal without the `LIVE` phrase.
 - The first request after a server start takes about 9 s (cold Groww calls), so the tests wait for every "Connecting…"/"Loading…" text to disappear before checking.
 

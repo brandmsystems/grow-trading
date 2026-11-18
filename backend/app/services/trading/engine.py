@@ -56,6 +56,7 @@ from app.services.strategy import indicators as ind
 from app.services.strategy import signals
 from app.services.strategy import strategies
 from app.services.trading import paper_account
+from app.services import privacy
 from app.services.trading import stops
 from app.services.trading.engine_config import EngineConfig   # re-exported: engine.EngineConfig is the public name
 from app.services.strategy import rules as st
@@ -214,8 +215,8 @@ class Engine:
             if square_off and self.position:
                 self._exit("manual_stop")
                 if self.position:
-                    self.log(f"Engine stopped while {self.position['contract'].trading_symbol} is still open (the exit "
-                             f"order failed or is unconfirmed): check and close it in the broker app", "error")
+                    self.log("Engine stopped while a position is still open (the exit order failed or is unconfirmed): "
+                             "check and close it in the broker app", "error")
             self._stop.set()
             self.state = "stopped"
             self.log(f"Engine stopped ({reason})")
@@ -923,7 +924,7 @@ class Engine:
                         "signal_ts": q["leg"].entry_ts.isoformat(), "expires": q["expires"].isoformat(),
                         "stop_ref": (q["refs"] or {}).get("stop_ref"), "target_ref": (q["refs"] or {}).get("target_ref")}
             nxt = self._next_bar_close(self.processed_until) if self.day else None
-            return {
+            return privacy.redact_live_status({
                 "state": self.state, "halt_reason": self.halt_reason, "session_id": self.session_id,
                 "config": asdict(self.cfg), "now": self.market.now().isoformat(),
                 "day": self.day.isoformat() if self.day else None,
@@ -933,4 +934,4 @@ class Engine:
                 "nifty": {"price": self.last_spot["price"], "ts": self.last_spot["ts"].isoformat()} if self.last_spot else None,
                 "conn_error": self.conn_error,
                 "events": list(self.events)[:120], "bars": self.bars_today,
-            }
+            })

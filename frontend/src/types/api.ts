@@ -34,10 +34,10 @@ export interface Sizing {
   lots: number; lot_size: number; qty: number; limited_by: string;
   risk_budget: number; risk_per_lot: number; cost_per_lot: number;
   lots_by_risk: number; lots_by_cash: number;
-  capital: number; available: number | null;
+  capital: number;
   investment?: number; max_risk?: number; target_profit?: number; stop_loss?: number;
   charges_target?: number; charges_stop?: number; charges_detail?: Charges;
-  note?: string; margin_error?: string;
+  note?: string;
 }
 
 export interface Recommendation {
@@ -118,6 +118,9 @@ export interface Dashboard {
   halt_reason?: string | null;
   config: EngineConfig | null;
   position: Position | null;
+  /** Live (real-money) mode only: a position is open. Its details are never sent to the browser. */
+  live_position_open?: boolean;
+  live_details_hidden?: boolean;
   pending_order?: PendingOrder | null;
   trades_today: number;
   realised_today: number;

@@ -90,6 +90,11 @@ export function EnginePanel() {
             {p.stop_premium != null && <PaperStop p={p} busy={busy} onSaved={refresh} />}
           </div>
         )}
+        {data.live_position_open && (
+          <p className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            A live position is open. Its details are not shown in this app: check it in your broker app. Square off closes it.
+          </p>
+        )}
         {data.halt_reason && <p className="rounded-lg bg-red-50 p-2 text-red-700 dark:bg-red-950/50 dark:text-red-400">{data.halt_reason}</p>}
 
         <fieldset disabled={running || busy} className="space-y-3 disabled:opacity-60">
@@ -180,7 +185,7 @@ export function EnginePanel() {
             </Button>
           ) : (
             <>
-              <Button onClick={() => act(squareOff, "Square off the open position now? The engine keeps running.")} disabled={busy || !p} className="min-h-11 flex-1">
+              <Button onClick={() => act(squareOff, "Square off the open position now? The engine keeps running.")} disabled={busy || !(p || data.live_position_open)} className="min-h-11 flex-1">
                 <XCircle size={16} /> Square off
               </Button>
               <Button variant="danger" onClick={() => act(stopEngine, "Stop the engine? Any open position is squared off first.")} disabled={busy} className="min-h-11 flex-1">

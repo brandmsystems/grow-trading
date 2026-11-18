@@ -38,6 +38,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from app.database import db
+from app.services import privacy
 from app.services.market_data import history as data_manager
 from app.services.market_data import providers
 from app.services.options import lot_sizes
@@ -455,7 +456,7 @@ def paper_trades(key: str | None = None, mode: str | None = None, limit: int = 5
                  include_synthetic: bool = False) -> list[dict]:
     """Engine trades opened in scalp mode (newest first), optionally for one configuration.
     Synthetic (test-data) trades are left out unless asked for."""
-    q = "SELECT * FROM live_trades WHERE signal_mode='scalp'"
+    q = "SELECT * FROM live_trades WHERE signal_mode='scalp' AND trade_mode <> 'live'"   # never real-money rows
     if not include_synthetic:
         q += " AND trading_symbol NOT LIKE 'SYNTH:%'"
     p: dict = {"n": limit}
@@ -470,4 +471,4 @@ def paper_trades(key: str | None = None, mode: str | None = None, limit: int = 5
         for k, v in list(r.items()):
             if isinstance(v, (datetime, date)):
                 r[k] = v.isoformat()
-    return rows
+    return [privacy.public_trade(r) for r in rows]

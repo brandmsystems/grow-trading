@@ -14,7 +14,7 @@ export default defineConfig({
   reporter: [["list"], ["json", { outputFile: "e2e/results.json" }]],
   use: { baseURL: `http://127.0.0.1:${PORT}`, channel: "msedge", headless: true },
   webServer: {
-    command: "..\.venv\Scripts\python app.py",
+    command: "..\\.venv\\Scripts\\python.exe app.py",
     cwd: "../backend",
     url: `http://127.0.0.1:${PORT}/api/status`,
     env: { PORT },

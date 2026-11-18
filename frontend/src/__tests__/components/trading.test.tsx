@@ -160,6 +160,19 @@ describe("EnginePanel: a running engine", () => {
     expect(screen.getByText("Running · paper")).toBeInTheDocument();
   });
 
+  it("live mode with an open real position: details hidden, but you are told and can still square off", async () => {
+    const live = running({ config: makeConfig({ trade_mode: "live" }), position: null, live_position_open: true, live_details_hidden: true });
+    const { user, api } = await engine(live);
+    expect(screen.getByText(/A live position is open\. Its details are not shown/)).toBeInTheDocument();
+    expect(screen.queryByText("Open position")).toBeNull();
+    expect(screen.queryByText("Open P&L")).toBeNull();
+    expect(screen.queryByText(/Entry → LTP/)).toBeNull();
+    const confirm = confirmSpy(true);
+    await user.click(screen.getByRole("button", { name: /Square off/ }));          // the safety control stays usable
+    expect(confirm).toHaveBeenCalled();
+    expect(api.callsTo("POST", "/api/live/squareoff")).toHaveLength(1);
+  });
+
   it("stops only after the user confirms", async () => {
     const confirm = confirmSpy(false);
     const { user, api } = await engine(running());
@@ -307,7 +320,8 @@ describe("OrderCalculator", () => {
     expect(val("Recommended lots")).toHaveTextContent("limited by risk");
     expect(val("Lot size × lots")).toHaveTextContent("75 × 2");
     expect(val("Lot size × lots")).toHaveTextContent("150 quantity");
-    expect(val("Capital used")).toHaveTextContent("₹90,000");                          // min(capital, Groww margin)
+    expect(val("Capital used")).toHaveTextContent("₹1,00,000");                        // the capital entered or the paper account's
+    expect(document.body.textContent).not.toMatch(/Groww margin/i);
     expect(val("Max stop-loss risk")).toHaveTextContent("−₹960.00");
     expect(val("Est. target profit")).toHaveTextContent("+₹8,500.00");
     expect(screen.getByText(/BROKERAGE 40\.00/)).toBeInTheDocument();

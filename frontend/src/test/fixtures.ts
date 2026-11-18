@@ -42,7 +42,7 @@ export const makeRecommendation = (o?: DeepPartial<Recommendation>): Recommendat
   stop: 90, target: 180, nifty_stop: 24950, nifty_target: 25100,
   sizing: {
     lots: 2, lot_size: 75, qty: 150, limited_by: "risk", risk_budget: 1000, risk_per_lot: 480, cost_per_lot: 9000, lots_by_risk: 2, lots_by_cash: 5,
-    capital: 100000, available: 90000, investment: 18075, max_risk: 960, target_profit: 8500, stop_loss: 90, charges_stop: 80,
+    capital: 100000, investment: 18075, max_risk: 960, target_profit: 8500, stop_loss: 90, charges_stop: 80,
     charges_detail: { total: 80, brokerage: 40, stt: 10, exchange: 5, sebi: 1, stamp: 2, gst: 8 },
   },
 }, o);

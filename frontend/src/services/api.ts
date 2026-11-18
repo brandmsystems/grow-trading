@@ -103,6 +103,4 @@ export const getCredentialStatus = async () => {
   const r = (await request<never>("/api/status")) as unknown as { keys: boolean; message: string };
   return r;
 };
-export const getProfile = () => api<Record<string, unknown>>("/api/profile");
-export const getFunds = () => api<Record<string, unknown>>("/api/funds");
 export const relogin = () => request<never>("/api/login", { json: {} });

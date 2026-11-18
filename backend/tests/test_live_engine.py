@@ -438,3 +438,57 @@ def test_trend_mode_is_a_valid_signal_mode():
     assert le.EngineConfig(signal_mode="trend").validate().signal_mode == "trend"
     with pytest.raises(ValueError):
         le.EngineConfig(signal_mode="always").validate()
+
+
+def test_live_mode_hides_the_real_position_trades_and_pnl_but_keeps_the_records():
+    """Real-money activity is never sent to the browser (services/privacy.py), yet the database keeps every
+    record and the engine still knows its position. The proposal waiting for confirmation stays visible."""
+    from app.services.notifications import alerts
+    from app.services.trading import manager as lm
+    d = date(2025, 6, 11)
+    m = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(d, time(9, 0)))
+    b = CountingBroker(m)
+    eng = le.Engine(le.EngineConfig(trade_mode="live", exec_mode="ATM_BUY", max_daily_loss=0, max_trades_per_day=100), m, b)
+    eng.start(threaded=False)
+    assert _run_until(eng, m, d, lambda: eng.pending is not None)
+
+    pending = eng.status()["pending_order"]                       # you must see what you are asked to confirm
+    assert pending and pending["qty"] and pending["trading_symbol"]
+
+    eng.confirm_pending(pending["id"])
+    assert eng.position is not None and b.calls == 1              # the engine itself is unchanged
+
+    s = eng.status()
+    assert s["position"] is None and s["live_position_open"] is True and s["live_details_hidden"] is True
+    assert s["realised_today"] == 0.0
+    assert not any(w in e["message"] for e in s["events"] for w in ("ENTERED", "@", "net "))
+    assert any("Live order activity" in e["message"] for e in s["events"])
+
+    eng.square_off_now()
+    s = eng.status()
+    assert s["live_position_open"] is False and s["realised_today"] == 0.0     # the real P&L is not shown either
+
+    rows = live_trades()                                          # the full record is kept in the database
+    assert len(rows) == 1 and rows[0]["status"] == "CLOSED" and rows[0]["net"] is not None and rows[0]["entry_order_id"]
+    assert lm.trades("live", None) == [] and lm.trades(None, None) == []      # ...but never served
+
+    shown = alerts.recent("live", limit=50)
+    assert shown and all(not ({"entry_price", "exit_price", "net", "qty", "entry_ts", "exit_ts"} & set(a)) for a in shown)
+    assert any(a["action"] in ("SELL", "BUY BACK") for a in shown)           # the notification exists, minus the numbers
+
+
+def test_paper_and_replay_trades_and_details_are_still_shown():
+    from app.services.trading import manager as lm
+    d = date(2025, 6, 11)
+    eng, market = make({"timeframe": 15}, start_day=d)
+    run_days(eng, market, [d])
+    s = eng.status()
+    assert "live_position_open" not in s and "live_details_hidden" not in s
+    assert any("ENTERED" in e["message"] for e in s["events"])
+    assert live_trades()
+    with db.engine().begin() as c:        # the app never serves synthetic test symbols; make these look real
+        c.execute(text("UPDATE live_trades SET trading_symbol = replace(trading_symbol, 'SYNTH:', 'T:')"))
+    shown = lm.trades(None, None)
+    assert shown and all(t["trade_mode"] != "live" for t in shown) and shown[0]["entry_price"] is not None
+    assert lm.trades("paper", None) == shown
+    assert not any("entry_order_id" in t or "exit_order_id" in t for t in shown)       # order ids are never served

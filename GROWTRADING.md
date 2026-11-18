@@ -21,7 +21,7 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
 | React frontend (Phase 5 + redesign) | **All 10 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
 | WebSocket updates | **Done (master Phase 3):** Socket.IO push with REST polling fallback; tested after market hours |
-| Tests | **333 backend**, **346 frontend** (Vitest) and **106 browser** (Playwright) tests pass (18 Nov); React production build and type check pass |
+| Tests | **346 backend**, **346 frontend** (Vitest) and **108 browser** (Playwright) tests pass (18 Nov); React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
@@ -124,7 +124,7 @@ Details: [docs/FRONTEND.md](docs/FRONTEND.md).
 
 ## 5. Groww integration
 Details: [docs/GROWW_API.md](docs/GROWW_API.md).
-- **Calls used:** login (TOTP or key + secret), historical candles (spot, futures, expired options from 2020), expiries, contracts, LTP/quote, option chain, margin, orders and order status, positions.
+- **Calls used:** login (TOTP or key + secret), historical candles (spot, futures, expired options from 2020), expiries, contracts, LTP/quote, option chain, and (Live mode only) orders and order status. The account profile, funds/margin and positions are **not** called.
 - **Free plan:** returns 403 for all market data.
 - **Expired-contract lists can miss strikes,** so the standard symbol is used.
 
@@ -148,12 +148,29 @@ Details: [docs/DATABASE.md](docs/DATABASE.md).
 
 ---
 
+## Privacy
+Your real Groww account and real-money activity are **not shown anywhere in the app** (decided 18 Nov 2026).
+
+| Hidden | How |
+|---|---|
+| Groww balance, funds, margin, collateral, portfolio | Endpoints `/api/funds` and `/api/profile` removed; the Account page has no Funds or Profile card; the live feed no longer reads Groww's margin (sizing uses the capital you enter, or the paper account's available capital) |
+| Groww profile and broker positions | `/api/profile` and `/api/live/broker` removed |
+| Real trades, orders, fills, order ids | `/api/live/trades` never returns `live` rows (`mode=live` gives `[]`); order ids are removed from every served trade row; the database keeps all records |
+| Real position, open P&L, realised P&L | In Live mode `Engine.status()` sends `live_position_open` and `realised_today: 0` instead (`services/privacy.py`, one choke point for REST and WebSocket) |
+| Fill details in the event log and in notifications | Fill, P&L and daily-limit lines become "Live order activity (details are not shown)"; live alerts lose price, quantity, P&L and fill times |
+
+**Kept on purpose (live safety):** that a live position is open (a notice and a working Square off button), the proposed order waiting for your confirmation (side, contract, quantity; you cannot confirm what you cannot see), and halts and errors such as "square off manually in the Groww app". This is the one place a real-money number can still appear (the quantity of an order you are asked to confirm). Say if you want that hidden too, at the cost of confirming blind.
+
+**Unchanged:** paper trading (virtual account, paper orders and positions, paper P&L), replay, backtests, strategy statistics, indicators, NIFTY prices, CE/PE premiums and signals. The Groww calls for market data, and the LiveBroker's order calls, still happen in the backend; their results are just not sent to the browser. Server log files (`data/logs/server.log`) still contain engine messages, including live fills: they are on your disk, not in the app.
+
+**Verified by:** `tests/test_privacy.py` and the engine tests in `test_live_engine.py` (backend), `trading.test.tsx` and `data-pages.test.tsx` (the Account page shows no funds or profile and never requests them; Square off works with a hidden live position), and the Playwright `privacy` tests, which visit every page and check page text, tooltips, hidden elements, console output, every API response and every WebSocket frame for account data. Details: [docs/TESTING.md](docs/TESTING.md).
+
 ## 7. API
 All endpoints with parameters: [docs/API.md](docs/API.md).
 
 | Area | Prefix |
 |---|---|
-| Account | `/api/status`, `/api/login`, `/api/logout`, `/api/profile`, `/api/funds` |
+| Account | `/api/status`, `/api/login`, `/api/logout` |
 | Backtest | `/api/bt/*`, `/api/jobs/<id>` |
 | Data | `/api/data/*` |
 | Research | `/api/research*`, `/api/signals*`, `/api/scalping*` |

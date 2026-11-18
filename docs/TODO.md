@@ -35,6 +35,12 @@
 | **Live-market verification (market hours)** | A session on a trading day: WebSocket push at 1 s, premiums going LIVE/DELAYED on real quotes, a real signal producing one alert, reconnect and stale-data behaviour with a live feed, scalp paper mode. Closed-market checks and replay/integration tests are done (CHANGELOG, 18 Nov) |
 | **First live order** | Still never placed. Manual confirmation is tested with a counting broker only |
 
+## Privacy (18 Nov)
+- **Restart your running server.** The server on port 5000 started before this change keeps serving the old pages and endpoints until you stop it and run `python start.py` again (the new frontend build is picked up on reload).
+- **Decision for you:** the order waiting for your confirmation still shows side, contract and quantity (needed to confirm it). Hiding that too would mean confirming blind.
+- **Not hidden, by design:** server log files (`data/logs/server.log`) still record engine messages including live fills; the database keeps every trade record.
+- **Live orders still never exercised.** The privacy change was tested with a counting broker, not a real order.
+
 ## Known issues
 - **Live push not yet seen during market hours:** Socket.IO push, reconnect and fallback were tested after the close (18 Nov again, in a real browser against Groww with the market closed). The 1 s ticks while open, and premium states going LIVE/DELAYED on real quotes, still need a check during a session.
 - **First dashboard after a server start takes about 9 s** (cold Groww calls), about 1.7 s when its caches have expired (60 s closed, 3 s open), and 0.04 s when cached. The Live page shows "Connecting to the live feed…" meanwhile.

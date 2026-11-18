@@ -276,43 +276,26 @@ describe("Account & Settings page", () => {
     expect(screen.getByText("keys.txt not found")).toBeInTheDocument();
   });
 
-  it("shows funds, with the option-buying balance the calculator uses", async () => {
-    page();
-    const funds = (await screen.findByText("Funds")).closest("section")!;
-    await within(funds).findByText("Cash");
-    expect(within(funds).getByText("Cash").parentElement).toHaveTextContent("₹1,50,000.00");
-    expect(within(funds).getByText("Margin used").parentElement).toHaveTextContent("₹20,000.00");
-    expect(within(funds).getByText("F&O option buying").parentElement).toHaveTextContent("₹90,000.00");
-    expect(within(funds).getByText("Collateral available").parentElement).toHaveTextContent("₹5,000.00");
+  it("shows no Groww funds, margin, balance or profile, and never asks the backend for them", async () => {
+    const api = mockApi();
+    page(api);
+    await screen.findByText("Credentials configured");
+    for (const heading of ["Funds", "Profile"]) expect(screen.queryByText(heading)).toBeNull();
+    for (const label of ["Cash", "Margin used", "F&O option buying", "Collateral available", "Name"]) expect(screen.queryByText(label)).toBeNull();
+    expect(screen.getByText(/does not show your Groww balance, funds, profile, positions, orders or real trades/)).toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/funds")).toHaveLength(0);
+    expect(api.callsTo("GET", "/api/profile")).toHaveLength(0);
   });
 
-  it("shows the profile with readable labels and values", async () => {
-    page();
-    const card = (await screen.findByText("Profile")).closest("section")!;
-    expect(await within(card).findByText("Name")).toBeInTheDocument();
-    expect(within(card).getByText("Test User")).toBeInTheDocument();
-    expect(within(card).getByText("FNO, CASH")).toBeInTheDocument();
-    expect(within(card).getByText("Yes")).toBeInTheDocument();
-  });
-
-  it("shows errors for funds and profile separately", async () => {
-    page(mockApi().on("GET", "/api/funds", () => fail("margin API down", 502)).on("GET", "/api/profile", () => fail("profile API down", 502)));
-    expect(await screen.findByText("margin API down")).toBeInTheDocument();
-    expect(await screen.findByText("profile API down")).toBeInTheDocument();
-    expect(screen.getByText("Credentials configured")).toBeInTheDocument();
-  });
-
-  it("re-logs in to Groww and refreshes status, profile and funds", async () => {
+  it("re-logs in to Groww and refreshes the connection status only", async () => {
     const api = mockApi();
     const { user } = page(api);
     await screen.findByText("Credentials configured");
     await user.click(screen.getByRole("button", { name: /Re-login to Groww/ }));
     await waitFor(() => expect(api.callsTo("POST", "/api/login")).toHaveLength(1));
-    await waitFor(() => {
-      expect(api.callsTo("GET", "/api/status")).toHaveLength(2);
-      expect(api.callsTo("GET", "/api/profile")).toHaveLength(2);
-      expect(api.callsTo("GET", "/api/funds")).toHaveLength(2);
-    });
+    await waitFor(() => expect(api.callsTo("GET", "/api/status")).toHaveLength(2));
+    expect(api.callsTo("GET", "/api/funds")).toHaveLength(0);
+    expect(api.callsTo("GET", "/api/profile")).toHaveLength(0);
   });
 
   it("still refreshes (and shows the new state) when the re-login fails", async () => {

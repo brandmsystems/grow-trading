@@ -186,9 +186,7 @@ class FakeApi:
                                        "greeks": {"delta": 0.5 if t == "CE" else -0.5, "iv": 15.0}}
                                    for t in ("CE", "PE")}
             return {"underlying_ltp": self.spot, "strikes": strikes}
-        if fn == "get_available_margin_details":
-            return {"fno_margin_details": {"option_buy_balance_available": 60000.0}}
-        raise AssertionError(fn)
+        raise AssertionError(fn)   # anything else, notably the account margin, must never be requested
 
 
 @pytest.fixture
@@ -216,7 +214,7 @@ def test_dashboard_recommends_verified_contract(no_alert_store):
     now = leg.entry_ts + timedelta(seconds=30)
     api = FakeApi()
     f, _ = make_feed(now, api)
-    d = f.dashboard(tf=5, capital=None, risk_pct=2)
+    d = f.dashboard(tf=5, capital=60000, risk_pct=2)               # the capital you enter; no account balance is read
     assert d["quote"]["state"] == "live" and d["warnings"] == []
     s = d["signal"]
     assert s["action"] == "BUY CE"
@@ -229,7 +227,7 @@ def test_dashboard_recommends_verified_contract(no_alert_store):
     assert r["entry"] == 212.8                                    # best offer
     assert r["stop"] < r["entry"] < r["target"]
     z = r["sizing"]
-    assert z["available"] == 60000 and z["capital"] == 60000 and z["qty"] == z["lots"] * 65
+    assert z["available"] is None and z["capital"] == 60000 and z["qty"] == z["lots"] * 65
     assert z["max_risk"] <= z["risk_budget"]
     assert no_alert_store and no_alert_store[-1][4]["action"] == "BUY CE"
     # chart: completed bars only, EMAs on every bar, forming bar after them
@@ -342,22 +340,15 @@ def test_signal_alert_is_stored_once():
         conn.close()
 
 
-@pytest.mark.parametrize("balance", [0.0, -1250.5])
-def test_zero_or_negative_margin_does_not_break_dashboard(no_alert_store, balance):
-    """Groww can report a zero or negative option-buy balance (e.g. after buying with the whole
-    balance). With no capital entered, the dashboard must still build and explain why no size is given."""
-    class BrokeApi(FakeApi):
-        def __call__(self, fn, **kw):
-            if fn == "get_available_margin_details":
-                self.calls.append((fn, kw))
-                return {"fno_margin_details": {"option_buy_balance_available": balance}}
-            return super().__call__(fn, **kw)
-
+def test_dashboard_never_reads_the_real_account_balance(no_alert_store):
+    """Sizing uses the capital you enter, or the paper account's. Groww's margin is never requested: FakeApi
+    raises on any call it does not know, and the call log is checked as well."""
     now = first_buy_time().entry_ts + timedelta(seconds=30)
-    f, _ = make_feed(now, BrokeApi())
+    api = FakeApi()
+    f, _ = make_feed(now, api)
     r = f.dashboard(tf=5, capital=None, risk_pct=2)["signal"]["rec"]
-    assert r["verified"] and "sizing" not in r
-    assert "option-buy balance" in r["sizing_error"]
-    # an entered capital still sizes the trade (limited by the cash actually available)
+    assert r["verified"] and "sizing" not in r and r["sizing_error"] == "Enter your capital to size the trade."
     r2 = f.dashboard(tf=5, capital=100000, risk_pct=2)["signal"]["rec"]
-    assert "sizing" in r2 and r2["sizing"]["capital"] == 100000
+    assert "sizing" in r2 and r2["sizing"]["capital"] == 100000 and r2["sizing"]["available"] is None
+    assert not any("margin" in name or "profile" in name or "position" in name for name, _ in api.calls)
+

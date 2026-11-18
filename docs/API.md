@@ -2,6 +2,8 @@
 
 **Base URL:** `http://127.0.0.1:5000` (set the `PORT` environment variable to use another port).
 
+**Privacy (18 Nov):** the API never returns your real Groww account data: no profile, funds or margin (`/api/profile`, `/api/funds` were removed), no broker positions (`/api/live/broker` was removed), no real-money trades, order ids or P&L. In Live mode the engine status carries `live_position_open: true` instead of the position and `realised_today: 0`, the event log shows "Live order activity (details are not shown)" for fills, and live alerts lose price, quantity, P&L and fill times. Only the proposal waiting for your confirmation (side, contract, quantity) and halts/errors stay visible, because live safety depends on them. See [GROWTRADING.md](../GROWTRADING.md#privacy).
+
 **Access rules (all routes, `api/common.reject_foreign_requests`):** there is no login, because the server only listens on 127.0.0.1. Instead:
 - the `Host` header must be `127.0.0.1`, `localhost` or `::1` (any port), otherwise **403** (stops DNS-rebinding pages);
 - a POST/PUT/DELETE that carries an `Origin` header must come from a loopback page, otherwise **403**. Browsers send `text/plain` POSTs across sites without a preflight, and the endpoints accept any content type, so without this check a web page open in your browser could post to `/api/live/start`.
@@ -18,8 +20,6 @@
 | GET | `/api/status` | Whether credentials are configured |
 | POST | `/api/login` | Force a fresh Groww login |
 | POST | `/api/logout` | Drop the cached token |
-| GET | `/api/profile` | Groww user profile |
-| GET | `/api/funds` | Groww margin and funds |
 
 ## Backtest: `api/backtest.py`
 | Method | Path | Purpose |
@@ -68,8 +68,7 @@ Details: [SCALPING.md](SCALPING.md).
 | POST | `/api/live/reject` | Body `{"id"}`: skip it; no order is placed |
 | POST | `/api/live/stop` | Square off and stop |
 | POST | `/api/live/squareoff` | Square off; the engine keeps running |
-| GET | `/api/live/trades?mode=&day=` | Engine trades |
-| GET | `/api/live/broker` | Groww's own F&O positions (for comparison) |
+| GET | `/api/live/trades?mode=&day=` | Paper and replay trades, without order ids. `mode=live` returns `[]` and real-money trades are never included |
 
 **Engine config fields:**
 - `trade_mode` (paper, live, replay), `exec_mode` (ITM5_BUY, ATM_BUY, ATM_SELL)

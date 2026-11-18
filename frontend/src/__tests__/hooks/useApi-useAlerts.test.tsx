@@ -129,6 +129,20 @@ function stubNotifications(permission: "granted" | "denied") {
   return { beeps, shown };
 }
 
+describe("live-mode alerts without their fill details (privacy)", () => {
+  it("reads cleanly when price, quantity and P&L are not sent", () => {
+    const entry = makeAlert(1, { mode: "live", action: "BUY CE", premium: undefined, entry_price: undefined, status: "awaiting your confirmation" });
+    const exit = makeAlert(2, { mode: "live", action: "SELL", reason: "target", exit_price: undefined, net: undefined });
+    for (const a of [entry, exit]) {
+      const text = describeAlert(a);
+      expect(text).not.toMatch(/undefined|NaN|null|₹/);
+      expect(text.length).toBeGreaterThan(0);
+    }
+    expect(describeAlert(entry)).toContain("awaiting your confirmation");
+    expect(describeAlert(exit)).toContain("target hit");
+  });
+});
+
 describe("useAlerts", () => {
   const props = (alerts: Alert[] | undefined, sound = true) => ({ alerts, sound });
 

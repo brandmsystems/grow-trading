@@ -106,3 +106,62 @@ test.describe("trading controls (paper mode)", () => {
     expect(r.status()).toBe(400);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// Privacy: no personal Groww account data anywhere (balance, funds, margin, profile, positions, orders, real trades).
+// ---------------------------------------------------------------------------------------------------------
+const FORBIDDEN_FIELDS = [
+  "option_buy_balance", "clear_cash", "collateral_available", "net_margin_used", "fno_margin_details",
+  "entry_order_id", "exit_order_id", "groww_order_id", "order_reference", "user_profile",
+];
+const FORBIDDEN_LABELS = [
+  /^Funds$/, /^Profile$/, /Margin used/i, /Collateral available/i, /F&O option buying/i, /Groww margin/i,
+  /Available margin/i, /Portfolio value/i, /Holdings/i, /Order history/i,
+];
+const REMOVED_ENDPOINTS = ["/api/funds", "/api/profile", "/api/live/broker"];
+
+test.describe("privacy: no personal account data", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("no page shows it, no response carries it, no request asks for it", async ({ page }) => {
+    const requested: string[] = [];
+    const leaked: string[] = [];
+    const scan = (where: string, body: string) => {
+      for (const f of FORBIDDEN_FIELDS) if (body.includes(f)) leaked.push(`${where}: ${f}`);
+    };
+    page.on("request", (r) => { if (r.url().includes("/api/")) requested.push(new URL(r.url()).pathname); });
+    page.on("response", async (r) => {
+      if (r.url().includes("/api/") && (r.headers()["content-type"] ?? "").includes("json")) scan(new URL(r.url()).pathname, await r.text().catch(() => ""));
+    });
+    page.on("websocket", (ws) => ws.on("framereceived", (e) => scan("websocket", String(e.payload))));
+    const consoleLines: string[] = [];
+    page.on("console", (m) => consoleLines.push(m.text()));
+
+    for (const [route, name] of ROUTES) {
+      await page.goto(`/app${route}`);
+      await expect(page.getByText(/^(Connecting to .*|Loading…)$/)).toHaveCount(0, { timeout: 45_000 });
+      await page.waitForTimeout(1500);
+      const text = await page.locator("body").innerText();
+      for (const re of FORBIDDEN_LABELS) {
+        for (const line of text.split("\n")) expect(line.trim(), `${name} shows "${line.trim()}"`).not.toMatch(re);
+      }
+      // hidden sections and tooltips: titles, aria labels and any element with display:none
+      const attrs = await page.evaluate(() => Array.from(document.querySelectorAll("[title],[aria-label]")).map((e) => (e.getAttribute("title") ?? "") + " " + (e.getAttribute("aria-label") ?? "")).join("\n"));
+      const hiddenText = await page.evaluate(() => Array.from(document.querySelectorAll("*")).filter((e) => getComputedStyle(e).display === "none" && e.children.length === 0).map((e) => e.textContent ?? "").join("\n"));
+      for (const re of FORBIDDEN_LABELS) {
+        expect(attrs, `${name}: tooltip or label`).not.toMatch(re);
+        expect(hiddenText, `${name}: hidden element`).not.toMatch(re);
+      }
+    }
+    for (const bad of REMOVED_ENDPOINTS) expect(requested, `requested ${bad}`).not.toContain(bad);
+    expect(leaked, "account fields in responses").toEqual([]);
+    expect(consoleLines.join("\n")).not.toMatch(/balance|margin|funds|order id/i);
+  });
+
+  test("the removed account endpoints answer 404 and the trades endpoint never returns real trades", async ({ request }) => {
+    for (const url of REMOVED_ENDPOINTS) expect((await request.get(url)).status(), url).toBe(404);
+    expect((await (await request.get("/api/live/trades?mode=live")).json()).data).toEqual([]);
+    const all = (await (await request.get("/api/live/trades")).json()).data as { trade_mode: string }[];
+    expect(all.every((x) => x.trade_mode !== "live")).toBe(true);
+  });
+});

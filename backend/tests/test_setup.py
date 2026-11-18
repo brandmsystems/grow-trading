@@ -36,7 +36,7 @@ def test_routes_without_keys(monkeypatch, tmp_path):
     r = c.get("/")
     assert r.status_code == 302 and r.headers["Location"].endswith("/app/")
     assert c.get("/api/status").json["keys"] is False
-    r = c.get("/api/profile")
+    r = c.post("/api/login")
     assert r.status_code == 400 and r.json["kind"] == "keys"
 
 

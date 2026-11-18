@@ -16,7 +16,7 @@ export function OrderCalculator({ data }: { data: Dashboard }) {
     <Card accent="risk" title="Order Calculator" icon={<Calculator size={16} className="text-orange-600" />}>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Available capital ₹">
-          <input type="number" min={0} step={10000} placeholder="Use Groww margin" className={inputCls}
+          <input type="number" min={0} step={10000} placeholder="Paper account capital" className={inputCls}
             value={settings.capital ?? ""} onChange={(e) => update({ capital: e.target.value ? Number(e.target.value) : null })} />
         </Field>
         <Field label="Risk per trade %">
@@ -31,8 +31,8 @@ export function OrderCalculator({ data }: { data: Dashboard }) {
       ) : (
         <>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Stat label="Capital used" value={inr(sz.available != null ? Math.min(sz.capital, sz.available) : sz.capital, false, 0)}
-              sub={sz.available != null ? `Groww margin ${inr(sz.available, false, 0)}` : "your entry"} tip="The smaller of your capital and Groww's available option-buying margin." />
+            <Stat label="Capital used" value={inr(sz.capital, false, 0)}
+              sub={settings.capital ? "your entry" : "paper account"} tip="The capital you entered, or the paper account's available capital when the box is empty. Your real Groww balance is never read." />
             <Stat label="Recommended lots" value={sz.lots} className="text-blue-600 dark:text-blue-400" sub={`limited by ${sz.limited_by}`}
               tip={`By risk: ${sz.lots_by_risk} lot(s). By cash: ${sz.lots_by_cash} lot(s). The smaller wins.`} />
             <Stat label="Lot size × lots" value={`${sz.lot_size} × ${sz.lots}`} sub={`${sz.qty} quantity`} />
@@ -52,7 +52,7 @@ export function OrderCalculator({ data }: { data: Dashboard }) {
           )}
         </>
       )}
-      <div className="mt-3"><Limitation>Figures come from the backend's sizing and charges model. Groww's real margin can differ.</Limitation></div>
+      <div className="mt-3"><Limitation>Figures come from the backend's sizing and charges model, using virtual (paper) capital.</Limitation></div>
     </Card>
   );
 }

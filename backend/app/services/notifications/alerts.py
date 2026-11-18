@@ -12,6 +12,7 @@ from datetime import date, datetime
 from sqlalchemy import text
 
 from app.database import db
+from app.services.privacy import redact_live_alert
 
 log = logging.getLogger("notifications")
 
@@ -36,5 +37,5 @@ def recent(mode: str | tuple, limit: int = 12) -> list[dict]:
         rows = c.execute(text("SELECT id, ts, day, action, trade_mode, payload FROM live_alerts "
                               "WHERE trade_mode = ANY(:m) ORDER BY id DESC LIMIT :n"),
                          {"m": modes, "n": limit}).mappings().all()
-    return [{"id": r["id"], "ts": r["ts"].isoformat(), "day": r["day"].isoformat(), "action": r["action"],
-             "mode": r["trade_mode"], **r["payload"]} for r in rows]
+    return [redact_live_alert({"id": r["id"], "ts": r["ts"].isoformat(), "day": r["day"].isoformat(),
+                               "action": r["action"], "mode": r["trade_mode"], **r["payload"]}) for r in rows]

@@ -52,8 +52,6 @@ export function defaultRoutes(): Route[] {
     r("POST", "/api/data/options/download", () => ok(undefined, { job: "job-1" })),
     r("POST", "/api/data/stop", () => ok(undefined)),
     r("GET", "/api/status", () => ok(undefined, { keys: true, message: "keys.txt found" })),
-    r("GET", "/api/profile", () => ({ name: "Test User", segments: ["FNO", "CASH"], active: true })),
-    r("GET", "/api/funds", () => ({ clear_cash: 150000, net_margin_used: 20000, collateral_available: 5000, fno_margin_details: { option_buy_balance_available: 90000 } })),
     r("POST", "/api/login", () => ok(undefined)),
     r("GET", "/api/data/overview", () => makeDataOverview()),
     r("GET", "/api/data/options", () => makeOptionsCoverage()),

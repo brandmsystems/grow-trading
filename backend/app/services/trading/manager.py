@@ -13,6 +13,7 @@ import pandas as pd
 from app.services.notifications import alerts
 from app.config import settings as config
 from app.database import db
+from app.services import privacy
 from app.services.trading import engine as le
 from app.services.market_data.live import GrowwMarket, ReplayMarket
 from app.services.trading.brokers import LiveBroker, PaperBroker
@@ -216,7 +217,10 @@ def snapshot(tf: int = 15, strategy: str = "ema_9_21") -> dict:
 
 
 def trades(mode: str | None, day: str | None, limit: int = 200) -> list[dict]:
-    q = "SELECT * FROM live_trades WHERE trading_symbol NOT LIKE 'SYNTH:%'"
+    """Paper and replay trades. Real-money (live) trades are not shown anywhere in the app (privacy.py)."""
+    if mode == "live":
+        return []
+    q = "SELECT * FROM live_trades WHERE trading_symbol NOT LIKE 'SYNTH:%' AND trade_mode <> 'live'"
     p: dict = {}
     if mode:
         q += " AND trade_mode=:m"; p["m"] = mode
@@ -229,4 +233,4 @@ def trades(mode: str | None, day: str | None, limit: int = 200) -> list[dict]:
         for k, v in list(r.items()):
             if isinstance(v, (datetime, date)):
                 r[k] = v.isoformat()
-    return rows
+    return [privacy.public_trade(r) for r in rows]

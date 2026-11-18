@@ -53,7 +53,6 @@ CHAIN_QUOTE_WIDTH = 5          # strikes each side of ATM that also get a per-co
 CHAIN_QUOTES_TTL = 60          # those quotes: refreshed at most once a minute while open
 CLOSED_CHAIN_QUOTES_TTL = 600
 OPT_QUOTE_TTL = 3
-MARGIN_TTL = 30
 LIVE_MAX_AGE = 15        # a quote older than this is "delayed"
 STALE_SIGNAL_SEC = 180   # same as the engine: later entries differ from the backtest
 SIGNAL_MODE = "signal"   # live_alerts.trade_mode for dashboard signals
@@ -204,15 +203,16 @@ class Feed:
         m = self._get(f"model|{tf}|{entry_start}|{cutoff}", 600, model)
         return {**(d.value or {"regime": None, "prev": None, "avg_range": None}), "scorer": m.value}
 
-    def margin(self) -> tuple[float | None, str | None]:
-        def fetch():
-            m = self.api("get_available_margin_details", timeout=10)
-            v = _f(((m or {}).get("fno_margin_details") or {}).get("option_buy_balance_available"))
-            if v is None:
-                raise RuntimeError("Groww returned no option-buy balance")
-            return v
-        e = self._get("margin", MARGIN_TTL, fetch)
-        return e.value, e.error
+    def default_capital(self, day: date) -> float | None:
+        """Capital used for sizing when none is entered: the PAPER account's available virtual capital.
+        Your real Groww balance is never read."""
+        if not self.use_db:
+            return None
+        try:
+            from app.services.trading import paper_account
+            return float(paper_account.state(day)["available"])
+        except Exception:
+            return None
 
     def _chain(self, expiry: date) -> _Entry:
         return self._get(f"chain|{expiry}", CHAIN_TTL, lambda: self.api(
@@ -456,19 +456,14 @@ class Feed:
         target = costs._round_tick_up(entry + delta * TARGET_ATR * atr)
         rec.update({"stop": stop, "target": target, "atr": round(atr, 2),
                     "nifty_stop": round(spot - d * STOP_ATR * atr, 2), "nifty_target": round(spot + d * TARGET_ATR * atr, 2)})
-        avail, merr = self.margin()
-        cap = capital if capital and capital > 0 else avail
+        cap = capital if capital and capital > 0 else self.default_capital(day)
         if cap is None:
-            rec["sizing_error"] = f"Available margin unknown ({merr}). Enter your capital to size the trade."
+            rec["sizing_error"] = "Enter your capital to size the trade."
             return rec
         if cap <= 0:
-            # Groww reports zero or a negative option-buy balance (e.g. after buying with the whole balance).
-            rec["sizing_error"] = (f"Groww option-buy balance is ₹{cap:,.2f}, so no size can be given. "
-                                   "Enter your capital to size the trade.")
+            rec["sizing_error"] = "The paper account has no capital available, so no size can be given. Enter a capital to size the trade."
             return rec
-        rec["sizing"] = size_position(entry, stop, target, c.lot_size, cap, risk_pct, avail)
-        if merr:
-            rec["sizing"]["margin_error"] = merr
+        rec["sizing"] = size_position(entry, stop, target, c.lot_size, cap, risk_pct, None)
         return rec
 
     # -------------------------------------------------- everything the page needs
