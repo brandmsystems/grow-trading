@@ -1,0 +1,189 @@
+import { useEffect, useMemo, useState } from "react";
+import { Bot, Play, Square, ShieldCheck } from "lucide-react";
+import { usePoll } from "../hooks/usePoll";
+import { useApi } from "../hooks/useApi";
+import {
+  getBiasAnalysis, getBiasConfig, getBiasPredictions, getBiasStatus, getBiasSummary, getBiasTrades, startBias, stopEngine, updateBiasSettings,
+} from "../services/api";
+import type { BiasGroup, BiasSettings } from "../types/api";
+import { hms, inr, pct, pnlClass, todayIST } from "../utils/format";
+import { Card, Pill, Stat } from "../components/common/Card";
+import { Button, Field, inputCls, PageHeader } from "../components/common/Controls";
+import { ErrorNote, Limitation, Loading, Warning } from "../components/common/States";
+import { BiasPanel } from "../components/auto/BiasPanel";
+import { IndicatorTable } from "../components/auto/IndicatorTable";
+import { PredictionTable } from "../components/auto/PredictionTable";
+import { AccuracyPanel } from "../components/auto/AccuracyPanel";
+import { TradeTable } from "../components/auto/TradeTable";
+import { PositionCard } from "../components/auto/PositionCard";
+import { AutoSettings } from "../components/auto/AutoSettings";
+
+const STORE = "gt.auto.settings";
+const STATE = { stopped: ["Stopped", "neutral"], waiting: ["Waiting for market", "info"], running: ["Running", "good"], halted: ["Halted", "warn"], error: ["ERROR", "bad"] } as const;
+
+function saved(): Partial<BiasSettings> {
+  try { return JSON.parse(localStorage.getItem(STORE) ?? "{}") as Partial<BiasSettings>; } catch { return {}; }
+}
+
+function GroupTable({ title, rows }: { title: string; rows: Record<string, BiasGroup> }) {
+  const e = Object.entries(rows);
+  if (!e.length) return null;
+  return (
+    <div>
+      <div className="mb-1 text-xs font-semibold text-slate-600 dark:text-slate-300">{title}</div>
+      <table className="w-full text-xs">
+        <tbody>
+          {e.map(([k, g]) => (
+            <tr key={k} className="border-t border-slate-100 dark:border-slate-800">
+              <td className="py-1">{k}</td><td className="num text-right">{g.trades}</td>
+              <td className="num text-right">{g.win_rate != null ? pct(g.win_rate, 0) : "—"}</td>
+              <td className={`num text-right font-medium ${pnlClass(g.net)}`}>{inr(g.net, true, 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Automated multi-timeframe paper trading: 5m entries confirmed by the 15m trend. Paper and replay only. */
+export default function AutoTrading() {
+  const cfg = useApi(getBiasConfig, []);
+  const status = usePoll(getBiasStatus, 3000);
+  const st = status.data;
+  const running = !!st?.running;
+  const mode = st?.trade_mode ?? "paper";
+  const day = st?.day ?? todayIST();
+  const session = mode === "replay" ? st?.session_id ?? null : null;
+
+  const idle = usePoll(() => (running ? Promise.resolve(null) : getBiasAnalysis()), 30000, [running]);
+  const trades = usePoll(() => getBiasTrades(day, mode, session), 8000, [day, mode, session]);
+  const summary = usePoll(() => getBiasSummary(day, mode, session), 8000, [day, mode, session]);
+  const preds = usePoll(() => getBiasPredictions(day, mode, 80, session), 8000, [day, mode, session]);
+
+  const [s, setS] = useState<BiasSettings | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [replayDay, setReplayDay] = useState("");
+
+  const base = cfg.data;
+  useEffect(() => {
+    if (base && !s) setS({ ...base.defaults, ...saved(), ...(base.settings ?? {}) });
+  }, [base, s]);
+  const set = (p: Partial<BiasSettings>) => setS((x) => (x ? { ...x, ...p } : x));
+
+  const latest = running ? st?.bias?.latest ?? null : idle.data?.analysis ?? null;
+  const counters = useMemo(() => {
+    const b = st?.bias;
+    const max = b?.max_trades ?? s?.max_trades_per_day ?? 20;
+    const used = b?.trades_today ?? summary.data?.trades ?? 0;
+    return { used, max, left: b?.remaining_trades ?? Math.max(0, max - used) };
+  }, [st, s, summary.data]);
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true); setErr(null);
+    try { await fn(); await Promise.all([status.reload(), trades.reload(), summary.reload(), preds.reload()]); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  }
+  async function apply() {
+    if (!s) return;
+    try { localStorage.setItem(STORE, JSON.stringify(s)); } catch { /* private window */ }
+    if (!running) { setMsg({ ok: true, text: "Saved. These settings are used when you start the engine." }); return; }
+    const live = (st?.config ?? {}) as unknown as Record<string, unknown>;
+    const diff = Object.fromEntries(Object.entries(s).filter(([k, v]) => JSON.stringify(live[k]) !== JSON.stringify(v)));
+    if (!Object.keys(diff).length) { setMsg({ ok: true, text: "Nothing changed." }); return; }
+    setBusy(true);
+    try { const r = await updateBiasSettings(diff as Partial<BiasSettings>); setMsg({ ok: true, text: r.changed.length ? `Applied: ${r.changed.join("; ")}` : "No change." }); await status.reload(); }
+    catch (e) { setMsg({ ok: false, text: (e as Error).message }); } finally { setBusy(false); }
+  }
+
+  const [stLabel, stTone] = STATE[st?.state ?? "stopped"];
+  const sm = summary.data;
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Automated Paper Trading"
+        subtitle="Every closed 5-minute candle is analysed, the 15-minute trend confirms the direction, and qualified trades are taken in a virtual account."
+        actions={<Pill tone={stTone}>{stLabel}{running ? ` · ${mode}` : ""}</Pill>} />
+
+      <Card accent="strat" bodyClass="p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <ShieldCheck size={18} className="shrink-0 text-green-600" />
+          <p className="min-w-0 flex-1 text-sm">Paper trading only: this page cannot place a real order. The agreement % below measures how many indicators point the same way; it is not a probability of winning, and the accuracy panel shows how often the next candle actually went that way.</p>
+        </div>
+        <p className="mt-2 text-xs text-slate-600 dark:text-slate-400" data-testid="validation-note">
+          <b>Validated on stored real candles (19 Nov):</b> the next candle went the predicted way 50.9% of the time over 65,270 calls (2022-2026), a coin flip. Replayed on real option premiums with all costs it made +₹2,789 net over 28 sessions (Oct-Nov 2026) and lost ₹36,004 over 65 sessions (Jul-Sep 2026). No edge was found: treat it as a way to watch the analysis, not as something that makes money. Details: docs/AUTO_TRADING.md.</p>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          {!running ? (
+            <>
+              <Button variant="success" disabled={busy || !s} onClick={() => act(() => startBias(s as BiasSettings, "paper"))}><Play size={14} />Start paper trading</Button>
+              <Field label="Replay a finished day"><input type="date" className={`${inputCls} w-40`} max={todayIST()} value={replayDay} onChange={(e) => setReplayDay(e.target.value)} aria-label="Replay day" /></Field>
+              <Button disabled={busy || !s || !replayDay} onClick={() => act(() => startBias(s as BiasSettings, "replay", replayDay))}><Bot size={14} />Replay day</Button>
+            </>
+          ) : (
+            <Button variant="danger" disabled={busy} onClick={() => act(() => stopEngine())}><Square size={14} />Stop engine</Button>
+          )}
+          {st?.nifty && <span className="text-xs text-slate-500">NIFTY {st.nifty.price.toLocaleString("en-IN")} · {hms(st.nifty.ts)}</span>}
+        </div>
+        {st?.halt_reason && <div className="mt-3"><Warning>{st.halt_reason}</Warning></div>}
+        {st?.conn_error && <div className="mt-3"><ErrorNote offline>{st.conn_error}</ErrorNote></div>}
+        {err && <div className="mt-3"><ErrorNote>{err}</ErrorNote></div>}
+        {status.error && <div className="mt-3"><ErrorNote offline>{status.error}</ErrorNote></div>}
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-2">
+          {!running && idle.loading && !latest && <Card><Loading text="Reading candles…" /></Card>}
+          {!running && idle.error && <ErrorNote>{idle.error}</ErrorNote>}
+          {(running || latest) && <BiasPanel a={latest} asOf={idle.data?.as_of_day} live={running ? true : idle.data?.live} />}
+        </div>
+        <div className="space-y-4">
+          <Card title="Today" bodyClass="px-4 pb-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Stat label="Trades today" value={`${counters.used} of ${counters.max}`} sub={`${counters.left} remaining · never forced`} />
+              <Stat label="Net P&L" value={sm ? inr(sm.net, true) : "—"} className={pnlClass(sm?.net)} sub={sm ? `gross ${inr(sm.gross, true, 0)}` : undefined} />
+              <Stat label="Wins / losses" value={sm ? `${sm.wins} / ${sm.losses}` : "—"} />
+              <Stat label="Win rate" value={sm?.win_rate != null ? pct(sm.win_rate, 0) : "—"} sub={sm && sm.open ? `${sm.open} open` : undefined} />
+            </div>
+          </Card>
+          <PositionCard p={st?.position ?? null} editable={running && mode === "paper"} onChanged={() => { void status.reload(); void trades.reload(); void summary.reload(); }} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {latest && <IndicatorTable rows={latest.indicators} tf={[latest.tf_primary ?? 5, latest.tf_confirm ?? 15]} />}
+        <PredictionTable rows={preds.data ?? []} day={day} />
+      </div>
+
+      <TradeTable rows={trades.data ?? []} day={day} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <AccuracyPanel mode={mode} tf={s?.timeframe ?? 5} confirm={s?.bias_confirm_tf ?? 15} />
+        <Card title="Performance breakdown">
+          {!sm || sm.trades === 0 ? <p className="text-sm text-slate-500">Closed trades appear here, split by instrument, exit reason, confidence and the indicators that supported them.</p> : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <GroupTable title="By instrument · trades, win rate, net" rows={sm.by_instrument} />
+              <GroupTable title="By exit reason" rows={sm.by_exit} />
+              <GroupTable title="By confidence at entry" rows={sm.by_confidence} />
+              <GroupTable title="By supporting strategy" rows={sm.by_indicator} />
+            </div>
+          )}
+          {sm && <div className="mt-3"><Limitation>{sm.note}</Limitation></div>}
+        </Card>
+      </div>
+
+      {s && base && (
+        <AutoSettings s={s} set={set} indicators={base.indicators} running={running} onApply={apply} busy={busy} msg={msg} />
+      )}
+
+      {running && st?.events && (
+        <Card title="Engine log">
+          <ul className="scroll-thin max-h-56 space-y-1 overflow-auto text-xs">
+            {st.events.slice(0, 40).map((e) => (
+              <li key={e.ts + e.message} className={e.level === "error" ? "text-red-600" : e.level === "warn" ? "text-orange-600" : ""}>
+                <span className="num text-slate-400">{hms(e.ts)}</span> {e.message}</li>))}
+          </ul>
+        </Card>
+      )}
+    </div>
+  );
+}

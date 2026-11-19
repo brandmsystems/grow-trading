@@ -2,6 +2,15 @@
 
 All dates are 2026, IST.
 
+## 19 Nov: automated multi-timeframe paper trading
+- **Requirement:** analyse every closed 5-minute candle, confirm direction on 15-minute candles, combine all existing strategies with scores and conflicts, predict the next candle, log and score every prediction, and manage qualified paper trades through the day. Paper only, existing code and data preserved, no claim of profit without validation.
+- **Built:** `strategy/bias.py` (12 indicator votes, bias, confidence, prediction; causal), engine mode `signal_mode="bias"` (analysis, prediction log and settlement, entries with contract checks, trailing stop, target, time exit, opposite-signal exit with no same-candle reversal, one entry per signal episode, live settings changes), `trading/bias_report.py`, `api/bias.py`, the Automated Paper Trading page, migration `0019_bias_engine` (new table `candle_bias`; four `live_trades` columns added if missing). Reused: the paper risk calculation, stops, charges, daily limit, replay market, privacy filter.
+- **Safety:** `trade_mode=live` is refused by the config validation and by the API; the privacy tests and Playwright privacy scan include the new routes and page.
+- **Database:** a verified `pg_dump` (1.0 GB, `data/backups/pre_bias_engine_2026-11-19.dump`, git-ignored) was taken before the migration touched your database; the existing rows were checked unchanged afterwards (27 trades).
+- **Validation (real stored candles, defaults fixed beforehand, nothing fitted):** next-candle hit rate 50.9% (±0.4) over 65,270 calls, 3 Jan 2022 to 18 Nov 2026, 50.7-51.0% in every year; indicators alone 49.1-51.0%. Replay with real premiums: 1 Oct-12 Nov 43 trades, 48.8% wins, gross +₹13,185, costs ₹10,396, net +₹2,789, drawdown ₹26,620; 1 Jul-30 Sep: 95 trades, 34.7% wins, gross −₹16,302, costs ₹19,702, **net −₹36,004**, drawdown ₹52,052 (both windows together: net −₹33,215). The filter first produced about 49 candidate candles a day, so the one-entry-per-signal rule was added before the replays. **No claim of profitability.**
+- **Tests:** backend 398 (52 new), frontend 373 (27 new), Playwright 116 (8 new page tests; navigation and privacy scans cover `/auto`): 114 passed in the last clean full run, and 2 Live-page tests (chart and "Polling" indicator at 430 px) timed out on a slow Groww dashboard; the 16 Live chart/indicator tests pass when run alone (twice). An earlier full run overlapping a heavy replay failed 5 of those same two tests.
+- **Also fixed:** the Overview test in `live-pages.test.tsx` failed from 19 Nov because its fixture day (18 Nov) was compared with the real date; it now uses today.
+
 ## 18 Nov (night): personal financial data hidden
 - **Requirement:** no real Groww balance, funds, margin, profile, positions, orders, real trades or real P&L anywhere in the UI or in what the API sends to the browser. Paper trading, strategy analysis, backtests, prices, premiums and signals stay.
 - **What the audit found exposed:** the Account page's Funds card (cash, margin used, option-buy balance, collateral) and Profile card; `GET /api/funds`, `/api/profile` and `/api/live/broker` (the broker's real positions); the dashboard's order calculator showing "Groww margin ₹…" (the feed read your option-buy balance every 30 s and sent it in every dashboard payload, REST and WebSocket); in Live mode the engine status carried the real position, open P&L and realised P&L, the event log carried fills and net P&L, alerts carried entry/exit prices, quantities and net, trade rows carried Groww order ids, and `/api/live/trades?mode=live` returned the real trades. No browser `console.*` calls existed.
@@ -256,3 +265,6 @@ All dates are 2026, IST.
 ## 10–11 Nov: first build
 - **Core app:** Flask app, Groww TOTP login, 9/21 EMA backtester and trade viewer.
 - **Live engine:** live/paper/replay with safety rails; synthetic demo data (now tests-only).
+
+## 19 Nov 2026: five-year entry-method research
+- Added `services/strategy/entries.py` (22 causal entry methods), `tests/test_entries.py`, `scripts/research_entries.py`, [ENTRY_RESEARCH.md](ENTRY_RESEARCH.md). Result: 0 of 92 method/exit pairs profitable after costs (234,576 real-premium trades); nothing promoted, engine unchanged.

@@ -20,6 +20,7 @@
 | `trend` (13 Nov) | At any bar close in the window when flat, in the direction EMA 9 vs EMA 21 points | When the trend flips (opposite crossover) | **No** |
 | `prediction` | Crossovers scoring at least `min_score` | NIFTY stop 1×ATR / target 2×ATR | Through the Signals analysis |
 | `scalp` (13 Nov, paper/replay only) | Confirmed crossovers of the chosen strategy on completed 5-minute bars | After `hold_min` (5) minutes, or earlier at the premium stop / target (`sl_target`) | Yes: the 5-minute scalping analyzer ([SCALPING.md](SCALPING.md)). No configuration was profitable after costs |
+| `bias` (19 Nov, paper/replay only) | On a closed analysis candle (5 min), when the confirmation timeframe (15 min) and the analysis candle agree, confidence is high enough and volatility is not too low; one entry per signal episode | Stop, target, trailing stop, opposite-signal exit, optional time exit, 15:00 | **Replayed on real premiums, no edge found** ([AUTO_TRADING.md](AUTO_TRADING.md)) |
 
 In `trend` mode, a position stopped out is re-entered at the next bar close if the trend still agrees, up to the daily trade limit.
 

@@ -21,6 +21,7 @@
 | 0010_plans_and_stops | `trading_plans` (each plan change with its reason), `paper_stop_changes` (initial and edited paper stops) |
 | 0011_scalping | `scalp_runs` (settings, date range and summary JSON of each 5-minute scalping run), `scalp_trades` (trade list per run and configuration) |
 | 0012_scalp_paper | `live_trades.strategy`, `live_trades.scalp_config` (set for scalp-mode engine trades) |
+| 0019_bias_engine | `candle_bias` (one row per analysed candle: bias, confidence, scores, prediction, votes, analysis, and once settled the next close, actual move and outcome); `live_trades.action`, `confidence`, `analysis`, `exit_detail` added if missing (this database already had them) |
 
 ## Tables
 | Table | Key | Holds |
@@ -40,6 +41,7 @@
 | `paper_stop_changes` | id | Paper stop-loss history per trade: time, old/new stop, old/new maximum loss, source (entry or user) |
 | `paper_accounts` | id | Virtual paper accounts: starting capital, start and close time. The active one has `closed_at` NULL; balance = capital + closed paper net P&L booked to it |
 | `live_events` | id | Engine event log |
+| `candle_bias` | id, unique (`trade_mode`, `scope`, `bar_close`) | Automated paper trading: the analysis and next-candle prediction of every closed candle, settled with the actual result. `scope` is the replay session id (0 for paper) so replays never overwrite each other |
 | `live_alerts` | id, unique `alert_key` | Notifications, stored once per signal |
 | `schema_migrations` | version | Applied migrations |
 
@@ -66,7 +68,7 @@ Checked against backend, frontend, tests, docs, every migration file, SQL string
 | `pattern_events` | 0 | 32 kB | none | Candle-pattern paper trading, removed 18 Nov |
 | `app_settings` | 0 | 16 kB | none | Never read by the app |
 
-**Why a fresh install differs from this database:** `schema_migrations` lists 17 versions, but only `0001`-`0012` exist as files. `0013_advanced_prediction`, `0014_candle_forecasts`, `0015_pattern_events`, `0016_smc_setups` and `0017_trend_vwap_ema` were applied here and their files were deleted with the features (they were never committed). A fresh database built from the repo has none of these six tables, so the drop migration uses `DROP TABLE IF EXISTS`. The same migrations also added nine columns to `live_trades` that only this database has: `action, analysis, confidence, exit_detail, forecast_id, lots, pattern_event_id, signal_id, smc_setup_id` (all NULL in all 27 rows; nothing reads them). Trading records are never altered, so they stay.
+**Why a fresh install differs from this database:** `schema_migrations` lists 17 versions, but only `0001`-`0012` exist as files. `0013_advanced_prediction`, `0014_candle_forecasts`, `0015_pattern_events`, `0016_smc_setups` and `0017_trend_vwap_ema` were applied here and their files were deleted with the features (they were never committed). A fresh database built from the repo has none of these six tables, so the drop migration uses `DROP TABLE IF EXISTS`. The same migrations also added nine columns to `live_trades` that only this database has: `action, analysis, confidence, exit_detail, forecast_id, lots, pattern_event_id, signal_id, smc_setup_id` (all NULL in all 27 rows; since 19 Nov the automated engine writes `action`, `confidence`, `analysis` and `exit_detail` for its own trades, and migration `0019` adds those four to fresh databases; the other five are still unused). Trading records are never altered, so they stay.
 
 **Backup (taken before any removal):** `data/backups/orphan_tables_2026-11-18.dump` (custom format, 80 kB): the six tables plus `live_trades`. Verified by restoring it into a scratch database and comparing row counts with production (all equal: 55, 0, 0, 36, 0, 2 and 27 for `live_trades`); the scratch database was then dropped. Restoring only the tables back later: `pg_restore --data-only -d groww_trading -t <table> <dump>`.
 

@@ -41,7 +41,7 @@ import logging
 import threading
 import traceback
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, replace as dc_replace
 from datetime import date, datetime, time, timedelta
 
 import pandas as pd
@@ -52,6 +52,7 @@ from app.services.notifications import alerts
 from app.services.trading import charges as costs
 from app.database import db
 from app.services.options import sizing
+from app.services.strategy import bias as biasmod
 from app.services.strategy import indicators as ind
 from app.services.strategy import signals
 from app.services.strategy import strategies
@@ -67,6 +68,7 @@ log = logging.getLogger("live.engine")
 
 MARKET_OPEN, MARKET_CLOSE = time(9, 15), time(15, 30)
 STALE_PRICE_SEC = 15      # an option price older than this never triggers a paper stop-loss
+SELL_MAX_DELTA = 0.6      # bias mode: a written option must not be deeper in the money than this (|delta|)
 
 
 _hm = parse_hm   # kept as a module name: other modules and tests call it here
@@ -107,6 +109,10 @@ class Engine:
         self._last_delta: float | None = None     # |delta| behind the latest ATR stop (stored with the risk calculation)
         self._limit_day: date | None = None       # the day _limit_val was computed for
         self._limit_val = 0.0
+        self.bias_state: dict | None = None       # bias mode: the latest closed-candle analysis (for the dashboard)
+        self.bias_history: deque = deque(maxlen=80)
+        self._cooldown_until: datetime | None = None
+        self._last_entry_signal: datetime | None = None   # signal time of the latest entry today (one entry per signal episode)
 
     # ------------------------------------------------------------ logging / persistence
     def log(self, msg: str, level: str = "info"):
@@ -129,6 +135,7 @@ class Engine:
                      {"signal_ts": pd.Timestamp(signal_ts).isoformat(), **data}, self.session_id, self.dbe)
 
     def _hold(self, leg, why: str, **extra) -> None:
+        extra = {k: v for k, v in extra.items() if k not in ("analysis", "exec_mode", "action", "confidence")}
         self._alert("HOLD", leg.entry_ts, direction="Bullish" if leg.direction > 0 else "Bearish",
                     nifty=round(leg.signal_close, 2), reason=why, **extra)
 
@@ -155,6 +162,8 @@ class Engine:
         self.realised_today = sum(r["net"] or 0 for r in rows if r["status"] == "CLOSED")
         fills = [t for r in rows for t in (r["entry_ts"], r["exit_ts"]) if t is not None]
         self.last_fill_today = max(fills) if fills else None
+        sigs = [r["signal_ts"] for r in rows if r["signal_ts"] is not None]
+        self._last_entry_signal = max(sigs) if sigs else None
         open_rows = [r for r in rows if r["status"] == "OPEN"]
         self.position = None
         if open_rows:
@@ -274,6 +283,8 @@ class Engine:
             if self.position and self.exit_failures:
                 self._exit(self.position.get("pending_reason", "retry"))   # retry a failed exit
             self._risk_check(now)
+            if self.position and self.cfg.signal_mode == "bias":
+                self._bias_exits(now)
             self._premium_stop()
 
             nxt = self._next_bar_close(self.processed_until)
@@ -313,7 +324,8 @@ class Engine:
         day = self.day
         for c in self._bar_closes(day):
             if after is None or c > after:
-                return c if c.time() <= st.SQUARE_OFF else None   # nothing actionable after 15:00
+                # nothing actionable after 15:00; bias mode still analyses and predicts the remaining candles
+                return c if (c.time() <= st.SQUARE_OFF or self.cfg.signal_mode == "bias") else None
         return None
 
     # ------------------------------------------------------------ signal evaluation
@@ -325,6 +337,8 @@ class Engine:
             return  # candle not published yet, try again next tick
         if not have_last:
             self.log(f"1m candle {last_needed:%H:%M} missing; evaluating {bar_close:%H:%M} bar without it", "warn")
+        if self.cfg.signal_mode == "bias":
+            return self._evaluate_bias(now, bar_close, spot)
         if self.cfg.signal_mode == "prediction":
             return self._evaluate_prediction(now, bar_close, spot)
         if self.cfg.signal_mode == "scalp":
@@ -562,7 +576,7 @@ class Engine:
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} skipped: daily trade limit reached", "warn")
             self._hold(leg, "daily trade limit reached", **(refs or {}))
             return
-        strike, typ, side = st.option_for(self.cfg.exec_mode, leg.direction, leg.signal_close)
+        strike, typ, side = st.option_for((refs or {}).get("exec_mode") or self.cfg.exec_mode, leg.direction, leg.signal_close)
         expiry = st.pick_expiry(self.day, self.market.expiries(self.day), self.cfg.roll_on_expiry_day)
         if not expiry:
             self.log("No usable expiry found; entry skipped", "error")
@@ -571,6 +585,12 @@ class Engine:
         if not c:
             self.log(f"Contract NIFTY {expiry} {int(strike)} {typ} not found; entry skipped", "error")
             return
+        if self.cfg.signal_mode == "bias":
+            why = self._bias_contract_check(c, side, refs)
+            if why:
+                self.log(f"{dirn} signal at {leg.entry_ts:%H:%M}: NO TRADE. {why}", "warn")
+                self._hold(leg, f"contract check: {why}")
+                return
         if self.paper:
             risk = self._paper_risk(leg, c, side)
             if risk["decision"] != "TRADE":
@@ -618,7 +638,8 @@ class Engine:
                  "capital": acct["available"], "risk_pct": self.cfg.risk_pct, "entry": premium, "stop": stop,
                  "lot_size": c.lot_size, "lots": 0, "qty": 0}
         else:
-            r = sizing.risk_size(side, premium, stop, c.lot_size, acct["available"], self.cfg.risk_pct,
+            rp = self.cfg.sell_risk_pct if (side == "SELL" and self.cfg.signal_mode == "bias") else self.cfg.risk_pct
+            r = sizing.risk_size(side, premium, stop, c.lot_size, acct["available"], rp,
                                  available=acct["available"], max_lots=self.cfg.max_lots,
                                  min_balance=self.cfg.min_balance, target=target, cfg=self.cost_cfg,
                                  include_slippage=True)
@@ -677,6 +698,322 @@ class Engine:
             self._exit("stop_loss")
             if self.position is p:      # exit failed: the retry path handles it, never a second stop exit at once
                 p["exiting"] = False
+
+    # ------------------------------------------------------------ bias mode (paper / replay only)
+    def _scope(self) -> int:
+        return (self.session_id or 0) if self.cfg.trade_mode == "replay" else 0
+
+    def _store_prediction(self, r: pd.Series, expl: dict, backfilled: bool = False) -> None:
+        """Record the analysis of one closed 5m candle and its prediction for the next candle."""
+        votes = {"5m": {k: biasmod._v(r.get(f"v5_{k}")) for k in biasmod.INDICATORS},
+                 "15m": {k: biasmod._v(r.get(f"v15_{k}")) for k in biasmod.INDICATORS}}
+        try:
+            with self.dbe.begin() as c:
+                c.execute(text(
+                    "INSERT INTO candle_bias (trade_mode, scope, day, bar_close, nifty_close, bias, confidence, score_5m, "
+                    "score_15m, combined, signal, predicted, votes, analysis) VALUES (:m,:sc,:d,:t,:px,:b,:cf,:s5,:s15,:cb,:sg,"
+                    ":pr,CAST(:v AS JSONB),CAST(:a AS JSONB)) ON CONFLICT (trade_mode, scope, bar_close) DO NOTHING"),
+                    {"m": self.cfg.trade_mode, "sc": self._scope(), "d": self.day,
+                     "t": pd.Timestamp(r["close_ts"]).to_pydatetime(),
+                     "px": expl["close"], "b": expl["bias"], "cf": expl["confidence"], "s5": expl["score_5m"],
+                     "s15": expl["score_15m"], "cb": expl["combined"], "sg": expl["signal"], "pr": expl["prediction"],
+                     "v": json.dumps(votes),
+                     "a": json.dumps({**expl, **({"backfilled": True} if backfilled else {})}, default=str)})
+        except Exception as exc:
+            log.warning("prediction not stored: %s", exc)
+
+    def _settle_prediction(self, prev: pd.Series, nxt: pd.Series, p: "biasmod.BiasParams") -> str | None:
+        """The candle after `prev` has closed: record what actually happened and whether the prediction was right."""
+        actual = biasmod.classify(float(nxt["close"]) - float(prev["close"]), float(prev["atr"]), p.flat_atr)
+        outcome = biasmod.classify_outcome(prev["predicted"], actual)
+        try:
+            with self.dbe.begin() as c:
+                c.execute(text("UPDATE candle_bias SET next_close=:n, actual=:a, outcome=:o, settled_at=now() "
+                               "WHERE trade_mode=:m AND scope=:sc AND bar_close=:t AND outcome IS NULL"),
+                          {"n": float(nxt["close"]), "a": actual, "o": outcome, "m": self.cfg.trade_mode,
+                           "sc": self._scope(), "t": pd.Timestamp(prev["close_ts"]).to_pydatetime()})
+        except Exception as exc:
+            log.warning("prediction outcome not stored: %s", exc)
+        return outcome
+
+    def _evaluate_bias(self, now: datetime, bar_close: datetime, spot: pd.DataFrame) -> None:
+        """Analyse the 5m candle that just closed (confirmed by the 15m trend), log the prediction for the next
+        candle, settle the previous prediction, then manage the position and look for an entry. Closed candles only."""
+        cfg = self.cfg
+        try:
+            fut = self.market.futures_1m(self.day) if hasattr(self.market, "futures_1m") else None
+        except Exception as exc:
+            fut = None
+            self.log(f"Futures data unavailable ({exc}): VWAP and volume cannot vote this candle", "warn")
+        try:
+            p = biasmod.BiasParams.from_cfg(cfg)
+            frame = biasmod.analyse(spot, fut, p)
+            if not frame.empty:
+                frame = frame[frame["close_ts"] <= pd.Timestamp(bar_close)].reset_index(drop=True)
+            today = frame[frame["day"] == self.day] if not frame.empty else frame
+        except Exception as exc:
+            self.processed_until = bar_close
+            self.log(f"Bias analysis failed at {bar_close:%H:%M}: {exc}", "error")
+            log.error(traceback.format_exc())
+            return
+        self.processed_until = bar_close
+        if today.empty:
+            self.log(f"No NIFTY candles for today yet (holiday?) at {bar_close:%H:%M}", "warn")
+            return
+        r = today.iloc[-1]
+        self.bars_today = [{"t": x.start.isoformat(), "c_ts": x.close_ts.isoformat(), "o": x.open, "h": x.high, "l": x.low,
+                            "c": x.close, "e9": round(x.ema9, 2), "e21": round(x.ema21, 2)}
+                           for x in today.itertuples(index=False)]
+        if pd.Timestamp(r["close_ts"]) != pd.Timestamp(bar_close):
+            self.log(f"{cfg.timeframe}m candle closing {bar_close:%H:%M} is missing: no decision on this candle", "warn")
+            return
+        expl = biasmod.explain(r, p)
+        self.last_atr = float(r["atr"]) if pd.notna(r["atr"]) and r["atr"] > 0 else None
+        self.last_eval = {"bar_close": bar_close.isoformat(), "close": expl["close"], "ema9": round(float(r["ema9"]), 2),
+                          "ema21": round(float(r["ema21"]), 2), "evaluated_at": now.isoformat()}
+        self.bias_state = expl
+        if not self.bias_history:        # first analysis of this run: record the earlier candles of today too
+            for i in range(len(today) - 1):
+                row = today.iloc[i]
+                self._store_prediction(row, biasmod.explain(row, p), backfilled=True)
+                if i:
+                    self._settle_prediction(today.iloc[i - 1], row, p)
+            if len(today) >= 2:
+                self._settle_prediction(today.iloc[-2], r, p)
+        else:
+            outcome = self._settle_prediction(today.iloc[-2], r, p) if len(today) >= 2 else None
+            if outcome:
+                self.bias_history[0]["outcome"] = outcome
+        self._store_prediction(r, expl)
+        self.bias_history.appendleft({"bar_close": expl["bar_close"], "close": expl["close"], "bias": expl["bias"],
+                                      "confidence": expl["confidence"], "signal": expl["signal"],
+                                      "predicted": expl["prediction"], "score_5m": expl["score_5m"],
+                                      "score_15m": expl["score_15m"], "outcome": None})
+        self.log(f"{bar_close:%H:%M} {expl['summary']}")
+
+        d = int(r["direction"])
+        if self.position and cfg.bias_exit_opposite and d != 0 and d != self.position["direction"]:
+            self.log(f"{bar_close:%H:%M} the analysis now points the other way ({expl['signal']}): exiting; "
+                     f"no reversal trade, the next candle gets a fresh analysis")
+            self._exit("opposite_signal")
+            self._cooldown_until = bar_close + timedelta(minutes=5 * cfg.bias_cooldown_bars)
+            return
+        if d == 0:
+            if expl["hold_reasons"]:
+                self.log(f"{bar_close:%H:%M} HOLD: " + "; ".join(expl["hold_reasons"]))
+            return
+        t = bar_close.time()
+        if self.position:
+            self.log(f"{bar_close:%H:%M} {expl['signal']} candidate ignored: position already open (holding)")
+            return
+        if not (_hm(cfg.entry_start) <= t <= _hm(cfg.cutoff)) or t >= st.SQUARE_OFF:
+            self.log(f"{bar_close:%H:%M} {expl['signal']} candidate outside the entry window "
+                     f"{cfg.entry_start}-{cfg.cutoff}: no trade")
+            return
+        if self._cooldown_until and bar_close < self._cooldown_until:
+            self.log(f"{bar_close:%H:%M} {expl['signal']} candidate skipped: cooling down until "
+                     f"{self._cooldown_until:%H:%M} after the last exit")
+            return
+        # one entry per signal episode: the run of consecutive candles that all point the same way. After an exit
+        # (stop, target, time) the same unchanged signal does not re-enter; it has to lapse and form again.
+        run = today["direction"].to_numpy()
+        i = len(run) - 1
+        while i > 0 and run[i - 1] == d:
+            i -= 1
+        episode_start = pd.Timestamp(today.iloc[i]["close_ts"]).to_pydatetime()
+        if self._last_entry_signal is not None and pd.Timestamp(self._last_entry_signal) >= pd.Timestamp(episode_start):
+            self.log(f"{bar_close:%H:%M} {expl['signal']} candidate skipped: this signal (running since {episode_start:%H:%M}) "
+                     f"was already traded; waiting for a new one")
+            return
+        pick = self._bias_pick(d)
+        if pick is None:
+            self.log(f"{bar_close:%H:%M} {expl['signal']} candidate: {'CE' if d > 0 else 'PE'} trades are not "
+                     f"enabled in your settings", "warn")
+            return
+        mode, side, typ = pick
+        expl = {**expl, "instrument": f"{side} {typ}"}
+        leg = st.Leg(day=self.day, direction=d, entry_ts=bar_close, signal_close=float(r["close"]),
+                     signal_bar_start=pd.Timestamp(r["start"]).to_pydatetime(), ordinal=self.trades_today + 1)
+        n_before = self.trades_today
+        self._try_entry(now, leg, refs={"exec_mode": mode, "action": f"{side} {typ}", "confidence": expl["confidence"],
+                                        "analysis": expl})
+        if self.trades_today > n_before:
+            self._last_entry_signal = bar_close
+
+    def _bias_pick(self, d: int) -> tuple[str, str, str] | None:
+        """(execution mode, BUY/SELL, CE/PE) for a direction, from the instruments you enabled. Buying is
+        preferred; writing (selling the opposite option) is used only when buying that side is switched off."""
+        allow = set(self.cfg.bias_allow)
+        for side, typ in ((("BUY", "CE"), ("SELL", "PE")) if d > 0 else (("BUY", "PE"), ("SELL", "CE"))):
+            if f"{side}_{typ}" in allow:
+                buy_mode = self.cfg.exec_mode if self.cfg.exec_mode in ("ITM5_BUY", "ATM_BUY") else "ATM_BUY"
+                return ("ATM_SELL" if side == "SELL" else buy_mode), side, typ
+        return None
+
+    def _bias_contract_check(self, c, side: str, refs: dict | None) -> str | None:
+        """Premium, open interest, spread and delta checks. A value Groww or the stored data does not give is
+        recorded as 'not available' and not checked. Returns the reason to refuse, or None."""
+        cfg, checks = self.cfg, []
+
+        def add(name, ok, text_):
+            checks.append({"check": name, "ok": ok, "text": text_})
+        try:
+            prem = float(self.market.option_ltp(c))
+        except Exception as exc:
+            return f"the option premium is unavailable ({exc})"
+        ok = prem >= cfg.min_premium
+        add("premium", ok, f"premium {prem:.2f} {'≥' if ok else '<'} the minimum {cfg.min_premium:g}")
+        add("expiry", True, f"expiry {c.expiry:%d %b %Y} ({(c.expiry - self.day).days} day(s) away), lot size {c.lot_size}")
+        try:
+            q = self.market.option_quote(c) if hasattr(self.market, "option_quote") else {}
+        except Exception:
+            q = {}
+        oi, bid, ask, delta = q.get("oi"), q.get("bid"), q.get("ask"), q.get("delta")
+        if cfg.min_oi > 0:
+            if oi is None:
+                add("open_interest", None, "open interest not available: not checked")
+            else:
+                add("open_interest", oi >= cfg.min_oi,
+                    f"open interest {oi:,.0f} {'≥' if oi >= cfg.min_oi else '<'} the minimum {cfg.min_oi:,.0f}")
+        elif oi is not None:
+            add("open_interest", True, f"open interest {oi:,.0f}")
+        if cfg.max_spread_pct > 0:
+            if bid and ask and bid > 0 and ask >= bid:
+                sp = (ask - bid) / ((ask + bid) / 2) * 100
+                add("spread", sp <= cfg.max_spread_pct,
+                    f"bid {bid:.2f} / ask {ask:.2f}: spread {sp:.1f}% {'≤' if sp <= cfg.max_spread_pct else '>'} {cfg.max_spread_pct:g}%")
+            else:
+                add("spread", None, "bid/ask not available: spread not checked")
+        if delta is None:
+            add("delta", None, "delta not available: not checked")
+        elif side == "BUY" and cfg.min_delta > 0:
+            ok = abs(delta) >= cfg.min_delta
+            add("delta", ok, f"|delta| {abs(delta):.2f} {'≥' if ok else '<'} the minimum {cfg.min_delta:g} for a bought option")
+        elif side == "SELL":
+            ok = abs(delta) <= SELL_MAX_DELTA
+            add("delta", ok, f"|delta| {abs(delta):.2f} {'≤' if ok else '>'} {SELL_MAX_DELTA:g} for a written option")
+        if refs is not None and isinstance(refs.get("analysis"), dict):
+            refs["analysis"] = {**refs["analysis"], "contract_checks": checks, "entry_premium_seen": round(prem, 2)}
+        failed = [x["text"] for x in checks if x["ok"] is False]
+        return "; ".join(failed) if failed else None
+
+    def _bias_levels_from_fill(self, p: dict) -> None:
+        """Replay has no paper risk calculation: set stop and target from the fill (percentage stop when no delta)."""
+        cfg, c = self.cfg, p["contract"]
+        lv = stops.stop_levels(cfg, p["side"], float(p["entry_price"]), self.last_atr, lambda: self.market.option_delta(c))
+        if lv.error:
+            lv = stops.stop_levels(dc_replace(cfg, stop_mode="pct"), p["side"], float(p["entry_price"]), self.last_atr,
+                                   lambda: None)
+        p.update(stop_premium=lv.stop, target_premium=lv.target, levels_set=True)
+        self._update_trade(p["id"], {"stop_premium": lv.stop, "target_premium": lv.target})
+        self.log(f"Levels from the fill {p['entry_price']:.2f}: stop {lv.stop}, target {lv.target} ({lv.how})")
+
+    def _bias_exits(self, now: datetime) -> None:
+        """Time exit, trailing stop, target and (replay) stop. The paper stop-loss itself is _premium_stop."""
+        p, cfg = self.position, self.cfg
+        if not p or p.get("exiting") or self.state == "error":
+            return
+        buy = p["side"] == "BUY"
+        entered = pd.Timestamp(p["entry_ts"]).to_pydatetime().replace(tzinfo=None)
+        if cfg.bias_max_hold_min and (now - entered).total_seconds() >= cfg.bias_max_hold_min * 60:
+            self.log(f"Held {cfg.bias_max_hold_min} min: time exit")
+            self._exit("time_exit")
+            return
+        sym = p["contract"].trading_symbol
+        ltp, at = self.last_ltp.get(sym), self.last_ltp_at.get(sym)
+        if ltp is None or at is None or (self.market.now() - at).total_seconds() > STALE_PRICE_SEC:
+            return
+        if not self.paper and p.get("stop_premium") is None and not p.get("levels_set"):
+            self._bias_levels_from_fill(p)
+        entry = float(p["entry_price"])
+        best = p["best"] = (max if buy else min)(p.get("best", entry), ltp)
+        move_pct = (best - entry) / entry * 100 * (1 if buy else -1)
+        if cfg.trail_pct > 0 and p.get("stop_premium") is not None and move_pct >= cfg.trail_activate_pct:
+            raw = best * (1 - cfg.trail_pct / 100) if buy else best * (1 + cfg.trail_pct / 100)
+            new = costs._round_tick_down(raw) if buy else costs._round_tick_up(raw)
+            old = p["stop_premium"]
+            if ((new > old) if buy else (new < old)) and ((new < ltp) if buy else (new > ltp)):
+                p["stop_premium"] = new
+                self._update_trade(p["id"], {"stop_premium": new})
+                loss = lambda s: sizing._loss_at(p["side"], entry, s, p["qty"], self.cost_cfg, True)["loss"]
+                self._record_stop(p["id"], old, new, loss(old), loss(new), "trail",
+                                  f"trailing {cfg.trail_pct:g}% from the best premium {best:.2f}")
+                self.log(f"Trailing stop-loss {old:.2f} → {new:.2f} (best premium {best:.2f})")
+        stop = p.get("stop_premium")
+        if not self.paper and stop is not None and ((ltp <= stop) if buy else (ltp >= stop)):
+            self.log(f"Premium {ltp:.2f} reached the stop-loss {stop:.2f}: exiting", "warn")
+            self._exit("stop_loss")
+            return
+        tgt = p.get("target_premium")
+        if tgt is not None and ((ltp >= tgt) if buy else (ltp <= tgt)):
+            self.log(f"Premium {ltp:.2f} reached the target {tgt:.2f}: exiting")
+            self._exit("target")
+
+    def _exit_detail(self, p: dict, reason: str, price: float) -> dict:
+        if self.cfg.signal_mode != "bias":
+            return {}
+        b = self.bias_state or {}
+        return {"exit_detail": json.dumps({
+            "reason": reason, "exit_premium": round(float(price), 2), "best_premium": p.get("best"),
+            "stop_at_exit": p.get("stop_premium"), "target": p.get("target_premium"),
+            "bias_at_exit": {k: b.get(k) for k in ("bar_close", "bias", "confidence", "signal", "trend_5m", "trend_15m")},
+        }, default=str)}
+
+    # ------------------------------------------------------------ settings and targets changed while running
+    LIVE_TUNABLE = frozenset({
+        "bias_indicators", "bias_confirm_tf", "bias_min_confidence", "bias_trend_thr", "bias_confirm_thr", "bias_min_atr_pct", "bias_allow",
+        "bias_exit_opposite", "bias_max_hold_min", "bias_cooldown_bars", "target_rr", "trail_pct", "trail_activate_pct",
+        "sell_risk_pct", "min_premium", "min_oi", "max_spread_pct", "min_delta", "risk_pct", "daily_risk_pct",
+        "max_daily_loss", "max_trades_per_day", "max_lots", "min_balance", "stop_mode", "stop_atr", "stop_pct",
+        "stop_points", "entry_start", "cutoff", "exec_mode", "lots"})
+
+    def update_settings(self, changes: dict) -> dict:
+        """Apply new bias-mode settings to the running engine (no restart). The whole new configuration is validated
+        first; a bad value changes nothing. The next candle's analysis and the next entry use the new values."""
+        with self._lock:
+            if self.cfg.signal_mode != "bias":
+                raise ValueError("Settings can be changed while running for the automated bias engine only.")
+            bad = sorted(set(changes) - self.LIVE_TUNABLE)
+            if bad:
+                raise ValueError(f"These settings cannot be changed while running: {', '.join(bad)}")
+            new = dc_replace(self.cfg, **changes).validate()
+            old, self.cfg = self.cfg, new
+            self._limit_day = None
+            diff = [f"{k}: {getattr(old, k)} → {getattr(new, k)}" for k in changes if getattr(old, k) != getattr(new, k)]
+            self.log("Settings changed: " + ("; ".join(diff) if diff else "no change"))
+            try:
+                with self.dbe.begin() as c:
+                    c.execute(text("UPDATE live_sessions SET config=CAST(:c AS JSONB) WHERE id=:i"),
+                              {"c": json.dumps(asdict(new)), "i": self.session_id})
+            except Exception:
+                pass
+            return {"changed": diff}
+
+    def set_paper_target(self, new_target: float) -> dict:
+        """Change the open paper position's target premium (it must be on the profit side of the current premium)."""
+        with self._lock:
+            p = self.position
+            if not self.paper or not p:
+                raise ValueError("No open paper position.")
+            sym = p["contract"].trading_symbol
+            try:
+                ltp = float(self.market.option_ltp(p["contract"]))
+                self.last_ltp[sym], self.last_ltp_at[sym] = ltp, self.market.now()
+            except Exception as exc:
+                raise ValueError(f"Current premium unavailable ({exc}); the target was not changed.")
+            new_target = (costs._round_tick_up(float(new_target)) if p["side"] == "BUY"
+                          else costs._round_tick_down(float(new_target)))
+            if new_target <= 0:
+                raise ValueError("The target must be above zero.")
+            if p["side"] == "BUY" and new_target <= ltp:
+                raise ValueError(f"The target {new_target:.2f} must be above the current premium {ltp:.2f}.")
+            if p["side"] == "SELL" and new_target >= ltp:
+                raise ValueError(f"The target {new_target:.2f} must be below the current premium {ltp:.2f}.")
+            old = p.get("target_premium")
+            p["target_premium"] = new_target
+            self._update_trade(p["id"], {"target_premium": new_target})
+            self.log(f"Target changed {'none' if old is None else f'{old:.2f}'} → {new_target:.2f}")
+            return {"trade_id": p["id"], "old_target": old, "new_target": new_target, "ltp": ltp}
 
     # ------------------------------------------------------------ editing the paper stop-loss
     def _record_stop(self, tid, old, new, old_loss, new_loss, source, note=None):
@@ -840,7 +1177,8 @@ class Engine:
         self._update_trade(p["id"], {"exit_ts": fill["ts"], "exit_price": fill["price"],
                                      "exit_order_id": fill["order_id"], "exit_reason": reason,
                                      "gross": pnl["gross"], "slippage": pnl["slippage"],
-                                     "charges": json.dumps(pnl["charges"]), "net": pnl["net"], "status": "CLOSED"})
+                                     "charges": json.dumps(pnl["charges"]), "net": pnl["net"], "status": "CLOSED",
+                                     **self._exit_detail(p, reason, fill["price"])})
         self.realised_today += pnl["net"]
         self._alert("SELL" if p["side"] == "BUY" else "BUY BACK", p.get("signal_ts") or p["entry_ts"],
                     symbol=p["contract"].trading_symbol, opt_type=p["contract"].opt_type, strike=p["contract"].strike,
@@ -934,4 +1272,9 @@ class Engine:
                 "nifty": {"price": self.last_spot["price"], "ts": self.last_spot["ts"].isoformat()} if self.last_spot else None,
                 "conn_error": self.conn_error,
                 "events": list(self.events)[:120], "bars": self.bars_today,
+                **({"bias": {"latest": self.bias_state, "history": list(self.bias_history)[:60],
+                             "trades_today": self.trades_today, "max_trades": self.cfg.max_trades_per_day,
+                             "remaining_trades": max(0, self.cfg.max_trades_per_day - self.trades_today),
+                             "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None}}
+                   if self.cfg.signal_mode == "bias" else {}),
             })

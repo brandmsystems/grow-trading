@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.services.strategy import bias
 from app.services.strategy import rules as st
 from app.services.strategy import strategies
 from app.services.trading import charges as costs
@@ -46,6 +47,25 @@ class EngineConfig:
     stop_atr: float = 1.0              #   | points: premium - stop_points (fixed premium distance)
     stop_pct: float = 30.0
     stop_points: float = 20.0
+    # Bias mode (signal_mode="bias", paper and replay only): multi-timeframe analysis of every closed 5m candle.
+    bias_indicators: list = field(default_factory=lambda: list(bias.INDICATORS))   # enabled indicators
+    bias_confirm_tf: int = 15          # confirmation timeframe in minutes (15, 30 or 60); `timeframe` is the analysis candle (5 or 15)
+    bias_min_confidence: float = 55.0  # % indicator agreement needed for an entry
+    bias_trend_thr: float = 0.25       # |15m score| needed for a trend
+    bias_confirm_thr: float = 0.20     # |5m score| needed to confirm
+    bias_min_atr_pct: float = 0.04     # entries need 5m ATR >= this % of price
+    bias_allow: list = field(default_factory=lambda: ["BUY_CE", "BUY_PE"])   # BUY_CE BUY_PE SELL_CE SELL_PE
+    bias_exit_opposite: bool = True    # exit when the analysis turns into an opposite entry candidate
+    bias_max_hold_min: int = 0         # time exit after N minutes (0 = off)
+    bias_cooldown_bars: int = 2        # no new entry within N 5m bars after an exit (a fresh analysis, not a reversal)
+    target_rr: float = 2.0             # bias mode: target distance = target_rr x stop distance
+    trail_pct: float = 0.0             # trailing stop: premium distance from the best price, % (0 = off)
+    trail_activate_pct: float = 10.0   # the trail starts once the premium has moved this % in your favour
+    sell_risk_pct: float = 0.5         # risk per trade, % of capital, when writing (selling) options
+    min_premium: float = 5.0           # entries need a premium of at least this (₹)
+    min_oi: float = 0.0                # entries need open interest of at least this when known (0 = not checked)
+    max_spread_pct: float = 5.0        # entries need a bid-ask spread of at most this % of the premium when known (0 = off)
+    min_delta: float = 0.25            # bought options need |delta| of at least this when Groww gives one (0 = off)
 
     def validate(self) -> "EngineConfig":
         """Coerce numeric fields and raise ValueError for any setting outside its allowed range.
@@ -67,8 +87,10 @@ class EngineConfig:
         self.max_trades_per_day = int(self.max_trades_per_day)
         if self.order_confirmation not in ("manual", "auto"):
             raise ValueError("order_confirmation must be manual or auto")
-        if self.signal_mode not in ("cross", "prediction", "trend", "scalp"):
-            raise ValueError("signal_mode must be cross, prediction, trend or scalp")
+        if self.signal_mode not in ("cross", "prediction", "trend", "scalp", "bias"):
+            raise ValueError("signal_mode must be cross, prediction, trend, scalp or bias")
+        if self.signal_mode == "bias":
+            self._validate_bias()
         if self.signal_mode == "scalp":
             if self.trade_mode == "live":
                 raise ValueError("Scalping runs in paper mode only; real-money scalping is not enabled.")
@@ -106,3 +128,33 @@ class EngineConfig:
         if self.stop_atr <= 0 or not 0 < self.stop_pct < 100 or self.stop_points <= 0:
             raise ValueError("stop ATR multiple and stop points must be positive, stop % between 0 and 100")
         return self
+
+    def _validate_bias(self) -> None:
+        """Bias mode is paper/replay only: it decides on each closed analysis candle (5 minutes by default), confirmed by a longer timeframe (15)."""
+        if self.trade_mode == "live":
+            raise ValueError("Automated bias trading is paper only; it can never place a real order.")
+        self.timeframe, self.bias_confirm_tf = int(self.timeframe), int(self.bias_confirm_tf)
+        if self.timeframe not in (5, 15):
+            raise ValueError("The analysis interval must be 5 or 15 minutes.")
+        if self.bias_confirm_tf not in (15, 30, 60) or self.bias_confirm_tf <= self.timeframe or self.bias_confirm_tf % self.timeframe:
+            raise ValueError("The confirmation timeframe must be 15, 30 or 60 minutes and longer than the analysis interval.")
+        self.bias_indicators = [k for k in (self.bias_indicators or []) if k in bias.INDICATORS]
+        if not self.bias_indicators:
+            raise ValueError("enable at least one indicator")
+        self.bias_allow = [str(k).upper() for k in (self.bias_allow or [])]
+        if not self.bias_allow or any(k not in ("BUY_CE", "BUY_PE", "SELL_CE", "SELL_PE") for k in self.bias_allow):
+            raise ValueError("choose at least one of BUY_CE, BUY_PE, SELL_CE, SELL_PE")
+        for name, lo, hi in (("bias_min_confidence", 0, 100), ("bias_trend_thr", 0, 1), ("bias_confirm_thr", 0, 1),
+                             ("bias_min_atr_pct", 0, 5), ("target_rr", 0.1, 20), ("trail_pct", 0, 99),
+                             ("trail_activate_pct", 0, 1000), ("sell_risk_pct", 0, 100), ("min_premium", 0, 1e6),
+                             ("min_oi", 0, 1e12), ("max_spread_pct", 0, 100), ("min_delta", 0, 1)):
+            v = float(getattr(self, name))
+            if not lo <= v <= hi or (name == "sell_risk_pct" and v <= 0):
+                raise ValueError(f"{name.replace('_', ' ')} must be between {lo:g} and {hi:g}")
+            setattr(self, name, v)
+        self.bias_exit_opposite = bool(self.bias_exit_opposite)
+        self.bias_max_hold_min, self.bias_cooldown_bars = int(self.bias_max_hold_min), int(self.bias_cooldown_bars)
+        if not 0 <= self.bias_max_hold_min <= 375 or not 0 <= self.bias_cooldown_bars <= 20:
+            raise ValueError("maximum holding time must be 0 to 375 minutes and the cooldown 0 to 20 candles")
+        if self.max_trades_per_day < 1:
+            raise ValueError("maximum trades per day must be at least 1")

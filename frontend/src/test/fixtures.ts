@@ -1,5 +1,6 @@
 /** Typed, realistic builders for API payloads. Every builder takes a partial override (deep-merged). */
 import type {
+  BiasAccuracy, BiasAnalysis, BiasConfig, BiasPrediction, BiasStatus, BiasSummary, BiasTrade, BiasTradeDetail,
   Alert, Bar, BtMeta, BtResult, BtTrade, Dashboard, DataOverview, EngineConfig, Feed, HistSignal, Job, LiveTrade, LotSize, OptionChain,
   OptionsCoverage, PaperAccount, Position, Quote, Recommendation, Research, ResearchCell, RiskCalc, ScalpConfig, ScalpRun, SignalAnalysis,
   TradingPlan,
@@ -252,3 +253,86 @@ export const makeScalpRun = (o?: Partial<ScalpRun>): ScalpRun => ({
 });
 
 export const makeJob = (o?: Partial<Job>): Job => ({ id: "job-1", kind: "x", state: "done", progress: 1, message: "done", result: null, error: null, ...o });
+// ------------------------------------------------------------------ automated bias engine
+const INDICATORS = [["ema_9_21", "EMA 9/21", 1], ["ema_5_20", "EMA 5/20", 0.5], ["ema_8_21", "EMA 8/21", 0.5], ["ema_20_50", "EMA 20/50", 1],
+  ["ema_200", "200 EMA", 1], ["vwap", "VWAP", 1], ["rsi", "RSI", 0.75], ["rsi_divergence", "RSI divergence", 0.5], ["macd", "MACD", 1],
+  ["bollinger", "Bollinger Bands", 0.75], ["volume", "Volume expansion", 0.5], ["sr", "Support / resistance", 1]] as const;
+
+export const makeBiasAnalysis = (o?: DeepPartial<BiasAnalysis>): BiasAnalysis => merge<BiasAnalysis>({
+  bar_close: at("10:25"), close: 25012.5, bias: "BULLISH", confidence: 78, combined: 0.42, trend_5m: "Bullish", trend_15m: "Bullish",
+  score_5m: 0.38, score_15m: 0.45, conflict: false, signal: "BUY CE", direction: 1, prediction: "UP", atr: 21.5, atr_pct: 0.086, rsi_5m: 61.2, rsi_15m: 58.4, tf_primary: 5, tf_confirm: 15, values: { ema9: 25005, ema21: 24990, ema200: 24800 },
+  indicators: INDICATORS.map(([key, label, weight], i) => ({
+    key, label, weight, v5: i === 7 ? null : 0.6 - i * 0.08, v15: 0.5 - i * 0.07,
+    status5: i === 7 ? "unavailable" : i > 9 ? "bearish" : "bullish", status15: i > 10 ? "neutral" : "bullish",
+  })),
+  supports: ["EMA 9/21 5m (+0.60)", "VWAP 15m (+0.40)"], against: ["Volume expansion 5m (-0.20)"], hold_reasons: [],
+  summary: "BULLISH: 15m bullish (0.45), 5m bullish (0.38); BUY CE candidate (bullish); indicator agreement 78%",
+  note: "Confidence is the agreement between indicators, not a probability of winning.",
+}, o);
+
+export const makeBiasConfig = (o?: DeepPartial<BiasConfig>): BiasConfig => merge<BiasConfig>({
+  running: false, settings: null, note: "Weights and thresholds are fixed starting values, not fitted to any result.",
+  indicators: INDICATORS.map(([key, label, weight]) => ({ key, label, weight })),
+  defaults: {
+    timeframe: 5, bias_confirm_tf: 15, bias_indicators: INDICATORS.map(([k]) => k), bias_min_confidence: 55, bias_trend_thr: 0.25, bias_confirm_thr: 0.2, bias_min_atr_pct: 0.04,
+    bias_allow: ["BUY_CE", "BUY_PE"], bias_exit_opposite: true, bias_max_hold_min: 0, bias_cooldown_bars: 2, target_rr: 2, trail_pct: 0,
+    trail_activate_pct: 10, sell_risk_pct: 0.5, min_premium: 5, min_oi: 0, max_spread_pct: 5, min_delta: 0.25, risk_pct: 1, daily_risk_pct: 3,
+    max_daily_loss: 5000, max_trades_per_day: 20, max_lots: 10, min_balance: 0, stop_mode: "atr", stop_atr: 1, stop_pct: 30, stop_points: 20,
+    entry_start: "09:30", cutoff: "14:30", exec_mode: "ATM_BUY", lots: 1,
+  },
+}, o);
+
+export const makeBiasStatus = (o?: DeepPartial<BiasStatus>): BiasStatus => merge<BiasStatus>({
+  running: true, state: "running", halt_reason: null, trade_mode: "paper", day: DAY, now: at("10:26"), position: null, realised_today: 0,
+  events: [{ ts: at("10:25"), level: "info", message: "10:25 BULLISH: signal" }], next_eval: at("10:30"), nifty: { price: 25012.5, ts: at("10:26") },
+  conn_error: null, session_id: 7, config: { bias_min_confidence: 55, trail_pct: 0, max_trades_per_day: 20 },
+  bias: {
+    latest: makeBiasAnalysis(), trades_today: 3, max_trades: 20, remaining_trades: 17, cooldown_until: null,
+    history: [{ bar_close: at("10:25"), close: 25012.5, bias: "BULLISH", confidence: 78, signal: "BUY CE", predicted: "UP", score_5m: 0.38, score_15m: 0.45, outcome: null }],
+  },
+}, o);
+
+export const makeBiasPrediction = (o?: DeepPartial<BiasPrediction>): BiasPrediction => merge<BiasPrediction>({
+  day: DAY, bar_close: at("10:20"), nifty_close: 25000, bias: "BULLISH", confidence: 70, score_5m: 0.3, score_15m: 0.4, signal: "BUY CE",
+  predicted: "UP", next_close: 25010, actual: "UP", outcome: "CORRECT",
+}, o);
+
+export const makeBiasTrade = (o?: DeepPartial<BiasTrade>): BiasTrade => merge<BiasTrade>({
+  id: 31, trade_mode: "paper", day: DAY, exec_mode: "ATM_BUY", direction: "Bullish", side: "BUY", trading_symbol: "NIFTY26N2425000CE", strike: 25000,
+  opt_type: "CE", expiry: "2026-11-24", qty: 75, signal_ts: at("10:00"), entry_ts: at("10:00"), entry_price: 120.5, exit_ts: at("10:35"), exit_price: 131,
+  exit_reason: "target", gross: 787.5, net: 702.1, status: "CLOSED", slippage: 12, charges: { total: 73.4 }, stop_premium: 100, target_premium: 131,
+  action: "BUY CE", confidence: 78, supporting: ["EMA 9/21 5m (+0.60)"],
+}, o);
+
+export const makeBiasTradeDetail = (o?: DeepPartial<BiasTradeDetail>): BiasTradeDetail => merge<BiasTradeDetail>({
+  trade: {
+    ...makeBiasTrade(), risk: makeRisk(),
+    analysis: makeBiasAnalysis({
+      instrument: "BUY CE", contract_checks: [
+        { check: "premium", ok: true, text: "premium 120.50 ≥ the minimum 5" }, { check: "spread", ok: null, text: "bid/ask not available: spread not checked" },
+        { check: "delta", ok: false, text: "|delta| 0.20 < the minimum 0.25 for a bought option" }],
+    }),
+    exit_detail: { reason: "target", exit_premium: 131, best_premium: 132.5, stop_at_exit: 108, target: 131, bias_at_exit: { bias: "BULLISH", trend_15m: "Bullish", trend_5m: "Neutral" } },
+  },
+  stop_changes: [
+    { ts: at("10:00"), old_stop: null, new_stop: 100, old_max_loss: null, new_max_loss: 1600, source: "entry", note: "ATR" },
+    { ts: at("10:20"), old_stop: 100, new_stop: 108, old_max_loss: 1600, new_max_loss: 900, source: "trail", note: "trailing 10% from the best premium 120.00" }],
+}, o);
+
+export const makeBiasSummary = (o?: DeepPartial<BiasSummary>): BiasSummary => merge<BiasSummary>({
+  trades: 4, wins: 3, losses: 1, win_rate: 75, net: 1250.5, gross: 1600, open: 1, mode: "paper", note: "An indicator is credited with every trade it supported.",
+  by_instrument: { "BUY CE": { trades: 3, wins: 2, losses: 1, win_rate: 66.7, net: 900, gross: 1100 } },
+  by_exit: { target: { trades: 2, wins: 2, losses: 0, win_rate: 100, net: 1400, gross: 1500 } },
+  by_confidence: { "70-85%": { trades: 4, wins: 3, losses: 1, win_rate: 75, net: 1250.5, gross: 1600 } },
+  by_indicator: { "EMA 9/21 5m": { trades: 4, wins: 3, losses: 1, win_rate: 75, net: 1250.5, gross: 1600 } },
+}, o);
+
+export const makeBiasAccuracy = (): BiasAccuracy => ({
+  candles: 1480, timeframes: [5, 15],
+  rows: [
+    { key: "combined", label: "Combined bias", timeframe: "5m+15m", correct: 520, incorrect: 480, neutral: 480, n: 1000, accuracy: 52 },
+    ...INDICATORS.flatMap(([key, label]) => (["5m", "15m"] as const).map((tf) => ({
+      key, label, timeframe: tf, correct: 510, incorrect: 490, neutral: 100, n: 1000, accuracy: tf === "5m" ? 51 : 54.5,
+    }))),
+  ],
+});

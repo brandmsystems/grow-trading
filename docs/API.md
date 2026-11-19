@@ -49,6 +49,18 @@
 | POST | `/api/research/run` | Compute missing configurations (job, research lane) |
 | GET | `/api/signals?strategy=&tf=` | Stored signal analysis (or `null`). Version 3 adds `model.auc_ci`, `model.calibration_wf` (walk-forward Brier vs average, per year), `model.calibrator`, `model.verdict`, a 95% `ci` on each band and reliability group, and `calibrated` on each signal. Older (v2) analyses are not served; rebuild them |
 | POST | `/api/signals/build` | Body `{"strategy", "tf"}`: build the analysis (job) |
+| GET | `/api/bias/config` | Automated paper trading: form defaults, the 12 indicators (label, weight) and the running engine's settings |
+| GET | `/api/bias/status` | Engine state, latest analysis (bias, confidence, trends, prediction, every indicator's votes), recent history, position, daily counters, events |
+| GET | `/api/bias/analysis` | The bias now (or at the last close) from stored and live candles, with or without the engine running (cached 15 s) |
+| POST | `/api/bias/start` | Body `{"trade_mode": "paper"\|"replay", "config"?, "replay_day"?, "replay_speed"?}`. Anything else is a 400; the engine refuses live mode, so no real order is possible |
+| POST | `/api/bias/settings` | Change the running engine's settings without a restart. The whole configuration is validated first; a bad value changes nothing. `timeframe` cannot change while running |
+| POST | `/api/paper/position/target` | Body `{"target"}`: change the open paper position's target premium (must stay on the profit side of the current premium) |
+| GET | `/api/bias/predictions?day=&mode=&limit=&session=` | Stored candle analyses with the prediction and, once known, the actual next-candle result, newest first |
+| GET | `/api/bias/accuracy?mode=&from=&to=` | Next-candle hit rate of the combined bias and of each indicator on the analysis and confirmation timeframes, from stored predictions; `timeframes` gives the real minutes |
+| GET | `/api/bias/history-accuracy?from=&to=&tf=&confirm=` | The same table recomputed over stored candles (default last 60 days, at most 800); no market calls |
+| GET | `/api/bias/trades?day=&mode=&session=` | Automated trades (paper/replay only, order ids removed) with confidence and supporting indicators |
+| GET | `/api/bias/summary?day=&mode=` | Wins, losses, win rate, net P&L; by instrument, exit reason, confidence band and supporting indicator |
+| GET | `/api/bias/trade/<id>` | One trade's complete reasoning: analysis at entry, contract checks, risk calculation, stop changes, exit detail |
 | GET | `/api/scalping` | Latest 5-minute scalping run: every configuration (summary fields), ranking, best, consistency list, walk-forward, existing-strategy comparison; `job` if a run is active. `data` is `null` before the first run |
 | GET | `/api/scalping/config?key=` | One configuration in full (monthly, yearly, regimes, CE/PE, equity, risk sizing) plus `trade_list` |
 | POST | `/api/scalping/run` | Re-run the whole analysis (job `scalping`, research lane) |

@@ -9,6 +9,7 @@ import { buyCeDashboard } from "../test/fixtures";
 const PAGES: { path: string; label: string; marker: RegExp | string; role?: "heading" }[] = [
   { path: "/", label: "Overview", marker: "Recent notifications" },
   { path: "/live", label: "Live Trading", marker: "Trading Controls" },
+  { path: "/auto", label: "Automated Paper Trading", marker: "Predictions vs actual" },
   { path: "/signals", label: "Trading Signals", marker: "Latest live signal" },
   { path: "/options", label: "Options Analysis", marker: "Selected contract" },
   { path: "/backtest", label: "Backtesting", marker: "Settings" },

@@ -161,6 +161,11 @@ class Feed:
             self._derived = {"key": key, "bars": b, "today": spot[spot["ts"].dt.date == day]}
         return self._derived["bars"], self._derived["today"], e.error
 
+    def candles(self, day: date) -> tuple[pd.DataFrame | None, pd.DataFrame | None, str | None]:
+        """(NIFTY 1m candles, near-month futures 1m candles, error) from the same cache bars() uses."""
+        e = self._get(f"spot|{day}", SPOT_TTL, lambda: self.market.spot_1m(day))
+        return e.value, (self.futures(day) if e.value is not None else None), e.error
+
     def futures(self, day: date) -> pd.DataFrame | None:
         """Near-month futures 1m candles (VWAP and volume source). None if unavailable."""
         if not hasattr(self.market, "futures_1m"):

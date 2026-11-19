@@ -67,6 +67,9 @@ def stop_levels(cfg: EngineConfig, side: str, premium: float, atr: float | None,
         target = premium + sgn * signals.TARGET_ATR * move
         how = (f"delta {delta_used:.2f} × {cfg.stop_atr:g} × NIFTY ATR {atr:.2f} "
                f"(target {signals.TARGET_ATR:g}× ATR)")
+    if cfg.signal_mode == "bias":
+        target = premium + sgn * cfg.target_rr * abs(premium - stop)
+        how += f"; target {cfg.target_rr:g}× the stop distance"
     stop = round_stop(stop)
     if stop <= 0:
         return StopLevels(None, None, how, zero_error, delta_used)

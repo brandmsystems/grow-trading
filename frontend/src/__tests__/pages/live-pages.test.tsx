@@ -10,6 +10,7 @@ import {
   at, buyCeDashboard, makeAlert, makeBars, makeConfig, makeDashboard, makePlan, makePosition, makeRecommendation, makeTrade,
 } from "../../test/fixtures";
 import type { Dashboard, LiveTrade } from "../../types/api";
+import { todayIST } from "../../utils/format";
 
 const serve = (d: Dashboard) => mockApi().on("GET", "/api/live/dashboard", () => d);
 const mainCandles = () => seriesOf(liveCharts()[0], "candlestick")[0];
@@ -23,7 +24,7 @@ describe("Overview page", () => {
   });
 
   it("shows spot, premiums, strategy, performance, recommendation and recent notifications from one feed", async () => {
-    renderWithProviders(<Overview />, { api: serve(buyCeDashboard({ state: "running", config: makeConfig(), realised_today: 500 })) });
+    renderWithProviders(<Overview />, { api: serve(buyCeDashboard({ state: "running", config: makeConfig(), realised_today: 500, day: todayIST() })) });
     expect(await screen.findByText("NIFTY 50 Spot")).toBeInTheDocument();
     expect(screen.getByText("NIFTY Options Premium")).toBeInTheDocument();
     expect(screen.getByText("9/21 EMA Strategy")).toBeInTheDocument();

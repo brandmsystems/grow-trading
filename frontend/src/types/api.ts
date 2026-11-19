@@ -102,7 +102,7 @@ export interface EngineConfig {
   exec_mode: "ITM5_BUY" | "ATM_BUY" | "ATM_SELL";
   timeframe: number; entry_start: string; cutoff: string; lots: number; roll_on_expiry_day: boolean;
   max_daily_loss: number; max_trades_per_day: number;
-  signal_mode: "cross" | "trend" | "prediction" | "scalp"; strategy: string; min_score: number;
+  signal_mode: "cross" | "trend" | "prediction" | "scalp" | "bias"; strategy: string; min_score: number;
   scalp_config?: string; scalp_exit?: "time" | "sl_target"; hold_min?: number; target_pct?: number;
   order_confirmation: "manual" | "auto";
   // paper trading risk management (ignored by live and replay)
@@ -404,3 +404,71 @@ export interface ScalpRun {
   settings: Record<string, unknown>;
 }
 export interface ScalpPaperTrade extends LiveTrade { strategy: string | null; scalp_config: string | null; signal_mode: string }
+
+// ------------------------------------------------------------------ automated multi-timeframe paper trading (bias engine)
+export type BiasLabel = "STRONG BULLISH" | "BULLISH" | "NEUTRAL" | "BEARISH" | "STRONG BEARISH";
+export type VoteStatus = "bullish" | "bearish" | "neutral" | "unavailable";
+export type Outcome = "CORRECT" | "INCORRECT" | "NEUTRAL";
+export type CandleDir = "UP" | "DOWN" | "NEUTRAL";
+
+export interface BiasIndicatorRow {
+  key: string; label: string; weight: number; v5: number | null; v15: number | null; status5: VoteStatus; status15: VoteStatus;
+}
+export interface ContractCheck { check: string; ok: boolean | null; text: string }
+export interface BiasAnalysis {
+  bar_close: string; close: number; bias: BiasLabel; confidence: number; combined: number | null;
+  trend_5m: "Bullish" | "Bearish" | "Neutral"; trend_15m: "Bullish" | "Bearish" | "Neutral";
+  score_5m: number | null; score_15m: number | null; conflict: boolean;
+  signal: "BUY CE" | "BUY PE" | "HOLD"; direction: number; prediction: CandleDir;
+  atr: number | null; atr_pct: number | null; rsi_5m: number | null; rsi_15m: number | null;
+  /** The analysis and confirmation timeframes in minutes; the "5m"/"15m" field names are the analysis and confirmation slots. */
+  tf_primary: number; tf_confirm: number; values: Record<string, number | null>;
+  indicators: BiasIndicatorRow[]; supports: string[]; against: string[]; hold_reasons: string[]; summary: string; note: string;
+  instrument?: string; contract_checks?: ContractCheck[]; entry_premium_seen?: number;
+}
+export interface BiasHistoryItem {
+  bar_close: string; close: number; bias: BiasLabel; confidence: number; signal: string; predicted: CandleDir;
+  score_5m: number | null; score_15m: number | null; outcome: Outcome | null;
+}
+export interface BiasSettings {
+  timeframe: number; bias_confirm_tf: number; bias_indicators: string[]; bias_min_confidence: number; bias_trend_thr: number; bias_confirm_thr: number; bias_min_atr_pct: number;
+  bias_allow: string[]; bias_exit_opposite: boolean; bias_max_hold_min: number; bias_cooldown_bars: number;
+  target_rr: number; trail_pct: number; trail_activate_pct: number; sell_risk_pct: number;
+  min_premium: number; min_oi: number; max_spread_pct: number; min_delta: number;
+  risk_pct: number; daily_risk_pct: number; max_daily_loss: number; max_trades_per_day: number; max_lots: number; min_balance: number;
+  stop_mode: "atr" | "pct" | "points"; stop_atr: number; stop_pct: number; stop_points: number;
+  entry_start: string; cutoff: string; exec_mode: "ITM5_BUY" | "ATM_BUY" | "ATM_SELL"; lots: number;
+}
+export interface BiasConfig {
+  defaults: BiasSettings; running: boolean; settings: BiasSettings | null;
+  indicators: { key: string; label: string; weight: number }[]; note: string;
+}
+export interface EngineEvent { ts: string; level: string; message: string }
+export interface BiasStatus {
+  running: boolean; state?: EngineState; halt_reason?: string | null; trade_mode?: "paper" | "replay"; day?: string | null; now?: string;
+  position?: Position | null; realised_today?: number; events?: EngineEvent[]; next_eval?: string | null;
+  nifty?: { price: number; ts: string } | null; conn_error?: string | null; session_id?: number | null; config?: Record<string, unknown>;
+  bias?: { latest: BiasAnalysis | null; history: BiasHistoryItem[]; trades_today: number; max_trades: number; remaining_trades: number; cooldown_until: string | null } | null;
+}
+export interface BiasAnalysisResponse {
+  as_of_day: string; live: boolean; analysis: BiasAnalysis; futures: boolean; error: string | null;
+  recent: { bar_close: string; close: number; bias: BiasLabel; confidence: number; predicted: CandleDir }[];
+}
+export interface BiasPrediction {
+  day: string; bar_close: string; nifty_close: number; bias: BiasLabel; confidence: number; score_5m: number | null; score_15m: number | null;
+  signal: string; predicted: CandleDir; next_close: number | null; actual: "UP" | "DOWN" | "FLAT" | null; outcome: Outcome | null;
+}
+export interface BiasAccuracyRow { key: string; label: string; timeframe: string; correct: number; incorrect: number; neutral: number; n: number; accuracy: number | null }
+export interface BiasAccuracy { candles: number; rows: BiasAccuracyRow[]; timeframes?: [number, number]; from?: string; to?: string; note?: string }
+export interface BiasTrade extends LiveTrade {
+  action: string | null; confidence: number | null; supporting: string[];
+  exit_detail?: { reason: string; exit_premium: number; best_premium: number | null; stop_at_exit: number | null; target: number | null;
+    bias_at_exit: Partial<BiasAnalysis> } | null;
+}
+export interface BiasGroup { trades: number; wins: number; losses: number; win_rate: number | null; net: number; gross: number }
+export interface BiasSummary extends BiasGroup {
+  open: number; mode: string; note: string;
+  by_instrument: Record<string, BiasGroup>; by_exit: Record<string, BiasGroup>;
+  by_confidence: Record<string, BiasGroup>; by_indicator: Record<string, BiasGroup>;
+}
+export interface BiasTradeDetail { trade: BiasTrade & { analysis: BiasAnalysis | null }; stop_changes: StopChange[] }

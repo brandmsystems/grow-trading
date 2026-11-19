@@ -20,13 +20,14 @@ $env:PORT=5001; ..\.venv\Scripts\python app.py    # a second server on another p
 - **No real-money orders while developing or testing.** Only `trading/brokers.LiveBroker` places orders; it needs the `LIVE` phrase, the `LIVE_MAX_LOTS` cap and (by default) a manual confirmation per entry. Tests mock Groww; `tests/test_api_smoke.py` fails any test that reaches the real client.
 - **Never delete or rewrite market data, option candles, paper/live trades or other history.** Schema changes need a verified `pg_dump` and a migration. Pending, unapplied migrations live in `backend/app/database/pending/` (the runner only reads `migrations/`).
 - **Do not change trading rules or calculations without being asked.** One source of rules: `strategy/rules.generate_legs` is used by the backtester, the engine and the live feed. Compare before/after with a replay when refactoring.
+- **Automated bias engine (`signal_mode="bias"`, `docs/AUTO_TRADING.md`) is paper/replay only:** `EngineConfig._validate_bias` refuses `trade_mode=live` and `/api/bias/start` accepts only paper or replay. Do not add a path from it to `LiveBroker`. Its analysis (`strategy/bias.py`) must stay causal (a row never depends on later candles; `tests/test_bias.py` checks) and its thresholds are fixed starting values, never tuned to backtest results. Never describe its confidence as a win probability.
 - **Privacy:** the UI and API must never show real-money data: Groww balance/funds/margin/profile, positions, order ids, real trades or P&L. Keep new live-mode data behind `services/privacy.py`; do not add endpoints that return the Groww account. Paper trading, signals, prices and backtests stay visible. (`tests/test_privacy.py`, the `privacy` block in `frontend/e2e/app.spec.ts`.)
 - The API has no login (local only). `api/common.reject_foreign_requests` refuses foreign `Host` and cross-site `Origin`. New POST routes read bodies with `json_body()`, not `request.get_json(force=True)`.
 - Keep `_now` as a module-level name in modules that have it (tests patch it per module); it aliases `utils/timeutil.now_naive`.
 
 ## Layout
 - `backend/app/api/` thin Flask blueprints; `services/` all logic (no Flask imports); `database/migrations/` SQL; `workers/jobs.py` background jobs.
-- `backend/app/services/trading/`: `engine.py` (loop, entries, exits), `engine_config.py`, `stops.py` (pure stop/target rules), `brokers.py`, `charges.py`, `paper_account.py`, `manager.py`.
+- `backend/app/services/trading/`: `engine.py` (loop, entries, exits), `engine_config.py`, `stops.py` (pure stop/target rules), `bias_report.py` (automated-trading reports), `brokers.py`, `charges.py`, `paper_account.py`, `manager.py`.
 - `frontend/src/`: `pages/`, `components/`, `context/` (Settings, Live), `hooks/`, `services/api.ts` (the only place that calls `fetch`), `utils/format.ts`, `test/` (shared test utilities).
 - Full file map: [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md). Database: [docs/DATABASE.md](docs/DATABASE.md). Testing: [docs/TESTING.md](docs/TESTING.md).
 

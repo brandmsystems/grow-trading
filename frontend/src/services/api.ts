@@ -1,6 +1,7 @@
 // Typed client for the Flask API. Every page goes through these functions (no direct fetch elsewhere).
 import type {
-  ApiErr, BtChart, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
+  ApiErr, BiasAccuracy, BiasAnalysisResponse, BiasConfig, BiasPrediction, BiasSettings, BiasStatus, BiasSummary, BiasTrade,
+  BiasTradeDetail, BtChart, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
   LiveTrade, LotSize, OptionChain, OptionsCoverage, PaperAccount, Research, RiskCalc, ScalpConfig, ScalpPaperTrade, ScalpRun,
   ScalpTrade, SignalAnalysis, StopChange,
 } from "../types/api";
@@ -61,6 +62,24 @@ export const stopEngine = () => api<Dashboard>("/api/live/stop", { json: {} });
 export const squareOff = () => api<Dashboard>("/api/live/squareoff", { json: {} });
 export const confirmOrder = (id: string) => api<Dashboard>("/api/live/confirm", { json: { id } });
 export const rejectOrder = (id: string) => api<Dashboard>("/api/live/reject", { json: { id } });
+
+// ------------------------------------------------------------------ automated multi-timeframe paper trading
+export const getBiasConfig = () => api<BiasConfig>("/api/bias/config");
+export const getBiasStatus = () => api<BiasStatus>("/api/bias/status");
+export const getBiasAnalysis = () => api<BiasAnalysisResponse>("/api/bias/analysis");
+/** Paper (live clock) or replay (a finished day). There is no live mode for this engine. */
+export const startBias = (config: Partial<BiasSettings>, trade_mode: "paper" | "replay" = "paper", replay_day?: string, replay_speed = 120) =>
+  api<unknown>("/api/bias/start", { json: { config, trade_mode, replay_day, replay_speed } });
+export const updateBiasSettings = (changes: Partial<BiasSettings>) => api<{ changed: string[] }>("/api/bias/settings", { json: changes });
+export const setPaperTarget = (target: number) => api<{ old_target: number | null; new_target: number }>("/api/paper/position/target", { json: { target } });
+export const getBiasPredictions = (day: string, mode: string, limit = 80, session?: number | null) =>
+  api<BiasPrediction[]>(`/api/bias/predictions?${qs({ day, mode, limit, session })}`);
+export const getBiasAccuracy = (mode: string) => api<BiasAccuracy>(`/api/bias/accuracy?${qs({ mode })}`);
+export const getBiasHistoryAccuracy = (from?: string, to?: string, tf?: number, confirm?: number) =>
+  api<BiasAccuracy>(`/api/bias/history-accuracy?${qs({ from, to, tf, confirm })}`);
+export const getBiasTrades = (day: string, mode: string, session?: number | null) => api<BiasTrade[]>(`/api/bias/trades?${qs({ day, mode, session })}`);
+export const getBiasSummary = (day: string, mode: string, session?: number | null) => api<BiasSummary>(`/api/bias/summary?${qs({ day, mode, session })}`);
+export const getBiasTrade = (id: number) => api<BiasTradeDetail>(`/api/bias/trade/${id}`);
 
 // ------------------------------------------------------------------ jobs
 export const getJob = (id: string) => api<Job>(`/api/jobs/${encodeURIComponent(id)}`);

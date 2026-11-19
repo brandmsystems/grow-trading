@@ -37,6 +37,7 @@
 | Scalping statistics and walk-forward (pure) | `backtest/scalping_stats.py` |
 | Performance reporting | `backtest/metrics.py`, `research.py` |
 
+4a. **Automated bias mode:** `strategy/bias.py` analyses the whole series in one pass (the engine uses the last row, the prediction log and the validation scripts use the same code); it is causal and paper/replay only. It is a separate signal mode of the same engine, so paper risk sizing, stops, charges, the daily loss limit and the 15:00 square-off are reused, not duplicated. See [AUTO_TRADING.md](AUTO_TRADING.md).
 4. **One source of trading rules:** the backtester, the live/paper engine and the live feed all call `strategy/rules.generate_legs`. A test replays days through the engine and requires the same trades as the backtest.
 5. **Local-only access:** the server binds to 127.0.0.1 and `api/common.reject_foreign_requests` refuses foreign `Host` and cross-site `Origin` values (see API.md).
 6. **Privacy:** real-money details never reach the browser. `services/privacy.py` redacts the engine status (the single `Engine.status()` choke point, so REST and WebSocket are covered), live alerts and trade rows; there are no endpoints for the Groww profile, funds or positions, and the feed never reads your margin (sizing uses the capital you enter or the paper account). The database keeps every record.

@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const WIDTHS: [number, number][] = [[1920, 1080], [1440, 900], [1280, 800], [1024, 768], [768, 1024], [430, 932], [390, 844], [360, 800]];
 const ROUTES: [string, string][] = [
-  ["/", "Overview"], ["/live", "Live Trading"], ["/signals", "Trading Signals"], ["/options", "Options Analysis"],
+  ["/", "Overview"], ["/live", "Live Trading"], ["/auto", "Automated Paper Trading"], ["/signals", "Trading Signals"], ["/options", "Options Analysis"],
   ["/backtest", "Backtesting"], ["/compare", "Strategy Comparison"], ["/scalping", "5-Minute Scalping"],
   ["/data", "Market Data"], ["/history", "Historical Charts"], ["/account", "Account & Settings"],
 ];

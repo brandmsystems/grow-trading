@@ -5,7 +5,7 @@
 import { vi } from "vitest";
 import {
   makeBars, makeBtResult, makeScalpConfig, makeAccount, makeBtMeta, makeDashboard, makeDataOverview, makeJob, makeLotSizes, makeOptionChain, makeOptionsCoverage, makeResearch, makeRisk,
-  makeScalpRun, makeSignalAnalysis,
+  makeScalpRun, makeSignalAnalysis, makeBiasAccuracy, makeBiasAnalysis, makeBiasConfig, makeBiasSummary, makeBiasTradeDetail,
 } from "./fixtures";
 
 export interface ApiRequest { method: string; path: string; query: URLSearchParams; body: Record<string, unknown> | undefined }
@@ -61,6 +61,18 @@ export function defaultRoutes(): Route[] {
     r("GET", "/api/signals", () => ok(makeSignalAnalysis())),
     r("GET", "/api/scalping/paper/trades", () => []),
     r("GET", "/api/scalping", () => ok(makeScalpRun())),
+    r("GET", "/api/bias/config", () => makeBiasConfig()),
+    r("GET", "/api/bias/status", () => ({ running: false })),
+    r("GET", "/api/bias/analysis", () => ({ as_of_day: "2026-11-18", live: true, analysis: makeBiasAnalysis(), futures: true, error: null, recent: [] })),
+    r("GET", "/api/bias/predictions", () => []),
+    r("GET", "/api/bias/trades", () => []),
+    r("GET", "/api/bias/summary", () => makeBiasSummary({ trades: 0, wins: 0, losses: 0, win_rate: null, net: 0, gross: 0, open: 0 })),
+    r("GET", "/api/bias/accuracy", () => makeBiasAccuracy()),
+    r("GET", "/api/bias/history-accuracy", () => makeBiasAccuracy()),
+    r("GET", /^\/api\/bias\/trade\//, () => makeBiasTradeDetail()),
+    r("POST", "/api/bias/start", () => ({})),
+    r("POST", "/api/bias/settings", () => ({ changed: [] })),
+    r("POST", "/api/paper/position/target", () => ({ old_target: 140, new_target: 150 })),
     r("GET", /^\/api\/jobs\//, () => makeJob()),
   ];
 }

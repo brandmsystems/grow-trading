@@ -175,6 +175,29 @@ class GrowwMarket:
         row = chain_row(cached[1], c.strike, c.opt_type)
         return to_float(((row or {}).get("greeks") or {}).get("delta"))
 
+    def option_quote(self, c: Contract) -> dict:
+        """What Groww reports about the contract right now: open interest, volume, delta, and the best bid and
+        ask when the quote has them. A field Groww does not send is None (the engine only checks what is known)."""
+        from app.services.options.contracts import chain_row
+        from app.utils.numbers import to_float
+        out = {"oi": None, "volume": None, "delta": None, "iv": None, "bid": None, "ask": None}
+        try:
+            self.option_delta(c)          # refreshes the 30 s chain cache
+            row = chain_row(self._chain_cache[c.expiry][1], c.strike, c.opt_type) or {}
+            g = row.get("greeks") or {}
+            out.update(oi=to_float(row.get("open_interest")), volume=to_float(row.get("volume")),
+                       delta=to_float(g.get("delta")), iv=to_float(g.get("iv")))
+        except Exception as exc:
+            log.warning("option chain quote failed: %s", exc)
+        try:
+            q = self._gc.call("get_quote", trading_symbol=c.trading_symbol, exchange="NSE", segment="FNO", timeout=5) or {}
+            out["bid"], out["ask"] = to_float(q.get("bid_price")), to_float(q.get("offer_price"))
+            if out["oi"] is None:
+                out["oi"] = to_float(q.get("open_interest"))
+        except Exception as exc:
+            log.warning("option quote failed: %s", exc)
+        return out
+
     def contract(self, day: date, expiry: date, strike: float, opt_type: str) -> Contract | None:
         df = self._instruments(day)
         m = df[(df["expiry"] == expiry) & (df["strike_price"].astype(float) == float(strike))
@@ -249,6 +272,21 @@ class ReplayMarket:
             self._opt[key] = db.load_candles(sym, datetime.combine(day, time(0)),
                                              datetime.combine(day + timedelta(days=1), time(0)))
         return self._minute_open(self._opt[key])
+
+    def option_quote(self, c: Contract) -> dict:
+        """Replay: open interest and volume of the stored option candle for the current minute. There are no
+        stored bids, asks or Greeks, so those are None and are not checked."""
+        out = {"oi": None, "volume": None, "delta": None, "iv": None, "bid": None, "ask": None}
+        try:
+            self.option_ltp(c)
+            df = self._opt[f"{c.groww_symbol}|{self.clock.date()}"]
+            row = df[df["ts"] <= pd.Timestamp(self.clock).floor("min")].tail(1)
+            if not row.empty:
+                oi, vol = float(row["oi"].iloc[0]), float(row["volume"].iloc[0])
+                out["oi"], out["volume"] = (oi or None), (vol or None)
+        except Exception:
+            pass
+        return out
 
     def expiries(self, day: date) -> list[date]:
         return self.prov.ensure_expiries(day, day + timedelta(days=14))

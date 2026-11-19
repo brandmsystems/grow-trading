@@ -2,7 +2,7 @@
 
 The complete record of Grow Trading: what it does, how it's built, what has been verified, and what's pending. Detailed topics live in [docs/](docs/); this file summarises them and links to each.
 
-*Last updated: 14 Nov 2026, codebase cleanup and performance pass (no behaviour change; backtests 1.4–1.7× faster; see [docs/CHANGELOG.md](docs/CHANGELOG.md)).*
+*Last updated: 19 Nov 2026, automated multi-timeframe paper trading added (see [docs/AUTO_TRADING.md](docs/AUTO_TRADING.md) and [docs/CHANGELOG.md](docs/CHANGELOG.md)).*
 
 ---
 
@@ -16,12 +16,13 @@ The complete record of Grow Trading: what it does, how it's built, what has been
 | Signal engine | **Done:** scores tested only on years the model hadn't seen |
 | Paper / replay engine (crossover and prediction modes) | **Done and tested.** Paper now sizes every trade from a risk budget (virtual account, risk %, premium stop-loss, daily limit) and stores the calculation with the trade |
 | 5-minute scalping analyzer | **Done:** 120 configurations (6 EMA strategies × ATM/ITM 5 × 10 exit rules) over five years with real premiums and all costs, plus walk-forward. **None was profitable after costs.** Paper/replay scalp mode for any tested configuration ([docs/SCALPING.md](docs/SCALPING.md)) |
+| Automated multi-timeframe paper trading | **Built 19 Nov** (`signal_mode="bias"`, page `/app/auto`, [docs/AUTO_TRADING.md](docs/AUTO_TRADING.md)): 12 indicators vote on every closed 5-minute candle, the 15-minute trend confirms, every prediction is stored and scored against the next candle, qualified paper trades are managed (stop, target, trailing, opposite-signal and time exits, 15:00). **Paper and replay only. Validation found no tradable edge** (next-candle hit rate 50.9% over 65,270 calls) |
 | Live (real-money) engine | Built with safety rails. **Every entry order waits for your confirmation by default**; tested on replays, no real order placed yet |
 | Alerts | Stored once per signal (`live_alerts`), shown on the Live page |
 | Backend restructure (Phases 1–4) | **Done:** `backend/app`, blueprints, services split |
-| React frontend (Phase 5 + redesign) | **All 10 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
+| React frontend (Phase 5 + redesign) | **All 11 pages in React** at `/app`: sidebar layout, colour system, notifications, phone/tablet/desktop. The old server-rendered pages were removed on 12 Nov; this is the only interface. |
 | WebSocket updates | **Done (master Phase 3):** Socket.IO push with REST polling fallback; tested after market hours |
-| Tests | **346 backend**, **346 frontend** (Vitest) and **108 browser** (Playwright) tests pass (18 Nov); React production build and type check pass |
+| Tests | **398 backend** and **373 frontend** (Vitest) tests pass; **116 browser** (Playwright) tests: 114 passed in the last full run, 2 timing-sensitive Live-page tests failed under a slow Groww dashboard and pass alone (19 Nov, [docs/TESTING.md](docs/TESTING.md)); React production build and type check pass |
 | Git | `main` has the baseline; all later work is on branch `level-1-data`, committed per phase |
 
 **Main research finding:** after real option prices, all costs and NSE lot sizes per contract, 82 of 84 strategy × mode results lost money over five years. The two positive ones, EMA 20/50 on 30m (+₹1,674 sell, +₹571 buy), are break-even. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
@@ -100,7 +101,7 @@ docs/             documentation
 - **Prediction mode** in the engine trades only signals scoring at or above your minimum. Live scores were verified to match offline scores exactly.
 
 ### React app (`/app`)
-- **Pages:** Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, 5-Minute Scalping, Market Data, Historical Charts, Account & Settings.
+- **Pages:** Overview, Live Trading, Automated Paper Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, 5-Minute Scalping, Market Data, Historical Charts, Account & Settings.
 - **Layout:** collapsible sidebar on desktop, icon rail on tablets, bottom bar and drawer on phones. The header shows Groww connection, market status, engine state and a notification bell.
 - **Colours:** green for gains, BUY and CE; red for losses and PE; blue for spot; purple for strategy; orange for risk.
 - **Live Trading:** spot vs option premium shown separately; chart with EMA 9/21, crossovers, trade markers and stop/target lines; recommendation; order calculator; controls with live-order confirmation.
@@ -175,6 +176,7 @@ All endpoints with parameters: [docs/API.md](docs/API.md).
 | Data | `/api/data/*` |
 | Research | `/api/research*`, `/api/signals*`, `/api/scalping*` |
 | Live | `/api/live/*` |
+| Automated paper trading | `/api/bias/*`, `/api/paper/position/target` |
 
 ---
 
@@ -339,6 +341,11 @@ The five requested items are done:
 
 The strategy's signals are unchanged; explanations, plan and patterns are context. Details: [docs/STRATEGY.md](docs/STRATEGY.md#live-dashboard-insight-12-nov-2026), [docs/FRONTEND.md](docs/FRONTEND.md). Tests: 244 pass.
 
+### Automated multi-timeframe paper trading (19 Nov 2026)
+- **What was built:** an engine mode (`signal_mode="bias"`) that analyses every closed 5-minute candle with 12 indicators (EMA 9/21, 5/20, 8/21, 20/50, 200 EMA, VWAP, RSI and its divergences, MACD, Bollinger, volume expansion, previous-day and range support/resistance), confirms the direction on the 15-minute candles, predicts the next candle, and manages paper trades. Every candle's analysis and prediction is stored (`candle_bias`) and scored against the actual next candle: CORRECT, INCORRECT or NEUTRAL, per strategy and timeframe.
+- **Rules that keep it honest:** paper and replay only (live is refused); closed candles only, tested for look-ahead and repainting; the 20-trades-a-day limit is a cap, never a target; one position at a time; one entry per signal episode; no reversal on the candle that exits a trade; contract checks skip data Groww does not provide instead of guessing it; settings apply to the running engine without a restart.
+- **Result:** next-candle hit rate 50.9% over 65,270 calls (2022-2026), about the same every year; replayed on real option premiums the engine made +₹2,789 net in 1 Oct-12 Nov (43 trades) and lost ₹36,004 net in 1 Jul-30 Sep (95 trades, negative before costs). No claim of profitability is made. Details and numbers: [docs/AUTO_TRADING.md](docs/AUTO_TRADING.md).
+
 ### 5-minute options scalping (13 Nov 2026)
 - **What was built:** a separate analyzer (`services/backtest/scalping.py`) that tests 120 configurations over the stored five years with real option premiums, NSE lot sizes and all costs. It has in-sample/out-of-sample selection, a year-by-year walk-forward and a five-check consistency verdict. Existing strategies and results are unchanged.
 - **Verdict:** **no configuration was consistently profitable after costs.**
@@ -363,6 +370,8 @@ Full list: [docs/TODO.md](docs/TODO.md).
 
 **Known issues:**
 - **No holiday calendar.**
+- **Automated paper trading has not run in a live market session.** Replay and tests cover the engine; open-interest, spread and Greeks checks, the live premium stop and the 5-minute cadence with Groww connected are untested in market hours. It has no demonstrated edge (see [docs/AUTO_TRADING.md](docs/AUTO_TRADING.md#validation-19-nov-2026-real-stored-candles-nothing-fitted)).
+- **One engine at a time:** the 09:00 `scripts/start_paper.ps1` starts a crossover-mode paper engine; stop it before starting the automated engine (the second start is refused).
 - **Prediction rule:** its option P&L hasn't been backtested.
 
 **Not a guarantee:** the app supports decisions. Past results don't predict future returns, and no strategy tested here was clearly profitable after costs.

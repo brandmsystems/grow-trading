@@ -1,5 +1,5 @@
 import {
-  Activity, BarChart3, CandlestickChart, Database, FlaskConical, LayoutDashboard, Layers, Settings, Timer, Zap,
+  Activity, BarChart3, Bot, CandlestickChart, Database, FlaskConical, LayoutDashboard, Layers, Settings, Timer, Zap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -9,6 +9,7 @@ export interface NavItem { to: string; label: string; short: string; icon: Lucid
 export const NAV: NavItem[] = [
   { to: "/", label: "Overview", short: "Overview", icon: LayoutDashboard, mobile: true },
   { to: "/live", label: "Live Trading", short: "Live", icon: Activity, mobile: true },
+  { to: "/auto", label: "Automated Paper Trading", short: "Auto", icon: Bot },
   { to: "/signals", label: "Trading Signals", short: "Signals", icon: Zap, mobile: true },
   { to: "/options", label: "Options Analysis", short: "Options", icon: Layers },
   { to: "/backtest", label: "Backtesting", short: "Backtest", icon: FlaskConical, mobile: true },

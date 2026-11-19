@@ -20,7 +20,7 @@ A NIFTY options trading system built on the Groww Trade API. It covers:
 
 - The Python backend has been restructured into `backend/app` (Phases 1–4).
 
-- **The React app is at http://127.0.0.1:5000/app**: 10 pages with a sidebar layout that works on desktop, tablet and phone (Overview, Live Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, 5-Minute Scalping, Market Data, Historical Charts, Account & Settings). This is the only interface; the old server-rendered pages were removed on 12 Nov. Live updates are pushed over Socket.IO, with REST polling as the fallback.
+- **The React app is at http://127.0.0.1:5000/app**: 11 pages with a sidebar layout that works on desktop, tablet and phone (Overview, Live Trading, Automated Paper Trading, Trading Signals, Options Analysis, Backtesting, Strategy Comparison, 5-Minute Scalping, Market Data, Historical Charts, Account & Settings). This is the only interface; the old server-rendered pages were removed on 12 Nov. Live updates are pushed over Socket.IO, with REST polling as the fallback.
 
 - All 140 tests pass.
 
@@ -91,10 +91,10 @@ http://127.0.0.1:5000 opens the app. Old addresses like `/live` or `/compare` re
 ## Tests
 ```powershell
 cd backend
-..\.venv\Scripts\python -m pytest      # backend: 346 tests (about 5-9 min; replays real days)
+..\.venv\Scripts\python -m pytest      # backend: 398 tests (about 5-9 min; replays real days)
 cd ..\frontend
-npm test                               # Vitest + React Testing Library: 346 tests (start from C:\..., not c:\...)
-npm run build; npx playwright test     # browser tests: 108 (needs the built app; uses Edge; paper mode only)
+npm test                               # Vitest + React Testing Library: 373 tests (start from C:\..., not c:\...)
+npm run build; npx playwright test     # browser tests: 116 (2 Live-page timing tests are flaky when Groww is slow; see docs/TESTING.md; needs the built app; uses Edge; paper mode only)
 ```
 Details, counts and rules: [docs/TESTING.md](docs/TESTING.md).
 
@@ -124,6 +124,7 @@ Details, counts and rules: [docs/TESTING.md](docs/TESTING.md).
 
 | [docs/BACKTESTING.md](docs/BACKTESTING.md) | Historical data, backtests, comparison results |
 
+| [docs/AUTO_TRADING.md](docs/AUTO_TRADING.md) | Automated multi-timeframe paper trading: indicators, bias, prediction log, trade rules, validation |
 | [docs/SCALPING.md](docs/SCALPING.md) | 5-minute options scalping analyzer, results and paper trading |
 
 | [docs/FRONTEND.md](docs/FRONTEND.md) | React pages, layout, colour system, components, API used per page |

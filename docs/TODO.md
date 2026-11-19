@@ -1,6 +1,6 @@
 # Pending work and known issues
 
-*Updated 18 Nov 2026 (audit follow-up).*
+*Updated 19 Nov 2026 (automated paper trading).*
 
 ## Restructure phases
 | Phase | Status |
@@ -9,7 +9,7 @@
 | 2. Dependencies and duplicates | Done |
 | 3. New folder structure | Done |
 | 4. Backend migration (no logic changes) | Done |
-| 5. React frontend connected to Flask | **Done:** all 9 pages in React (redesign, 11 Nov). Old server-rendered pages removed 12 Nov |
+| 5. React frontend connected to Flask | **Done:** every page in React (9 at the 11 Nov redesign, 11 now). Old server-rendered pages removed 12 Nov |
 | 6. WebSocket live updates (Flask-SocketIO, auto-reconnect) | **Done in master Phase 3 (12 Nov)**; tested after market hours only |
 | 7. Full verification (tests, Groww connectivity, live data, React build) | **Mostly done (18 Nov):** backend, frontend and browser tests pass; Groww connectivity and closed-market states verified. **Pending: a session during market hours** (see "Needs approval or a live session" below) |
 | 8. Documentation per phase | Ongoing |
@@ -34,6 +34,12 @@
 | **9 unused columns on `live_trades`** | Optional, your decision: `action, analysis, confidence, exit_detail, forecast_id, lots, pattern_event_id, signal_id, smc_setup_id` exist only in your database (a fresh install does not have them); all 27 rows have NULL in all nine. They are in a trading-records table, so they were left alone |
 | **Live-market verification (market hours)** | A session on a trading day: WebSocket push at 1 s, premiums going LIVE/DELAYED on real quotes, a real signal producing one alert, reconnect and stale-data behaviour with a live feed, scalp paper mode. Closed-market checks and replay/integration tests are done (CHANGELOG, 18 Nov) |
 | **First live order** | Still never placed. Manual confirmation is tested with a counting broker only |
+
+## Automated paper trading (19 Nov)
+- **Run it for a market session** and watch: the 5-minute cadence with Groww connected, the open-interest, spread and Greeks checks (Groww's bid/ask fields are read if present; nothing guarantees they are), the live premium stop, and the prediction log filling up. Until then it is verified by tests and replays only.
+- **No edge found.** Next-candle hit rate 50.9% over five years; replayed on real premiums it made +₹2,789 net in Oct-Nov and lost ₹36,004 net in Jul-Sep (93 sessions, 138 trades, net −₹33,215). Do not size anything on this. If you want to look for an edge, the proposals above (a stricter entry filter, backtested first) are the place; the thresholds here are deliberately untuned.
+- **One engine at a time:** `scripts/start_paper.ps1` starts the crossover paper engine at 09:00; stop it before starting the automated one.
+- **Decision for you:** four of the nine unused `live_trades` columns are now used (`action`, `confidence`, `analysis`, `exit_detail`); dropping the other five (see the orphan-table report in DATABASE.md) is still your call.
 
 ## Privacy (18 Nov)
 - **Restart your running server.** The server on port 5000 started before this change keeps serving the old pages and endpoints until you stop it and run `python start.py` again (the new frontend build is picked up on reload).

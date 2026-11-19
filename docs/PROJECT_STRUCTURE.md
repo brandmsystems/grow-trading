@@ -1,6 +1,6 @@
 # Project structure
 
-What every folder and file in Grow Trading is responsible for. Updated 18 Nov 2026 (audit, engine/feed/scalping splits, frontend and browser tests).
+What every folder and file in Grow Trading is responsible for. Updated 19 Nov 2026 (automated paper trading; before that: audit, engine/feed/scalping splits, frontend and browser tests).
 
 ```
 grow-trading/
@@ -19,19 +19,20 @@ grow-trading/
 │   ├── pytest.ini
 │   └── requirements.txt
 ├── frontend/                 React 19 + TypeScript + Vite + Tailwind app (served at /app)
-│   ├── src/pages/            Overview, LiveTrading, Signals, Options, Backtest, Compare, Scalping, MarketData, HistoryCharts, Account
-│   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, charts/, common/
+│   ├── src/pages/            Overview, LiveTrading, AutoTrading, Signals, Options, Backtest, Compare, Scalping, MarketData, HistoryCharts, Account
+│   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, auto/ (automated paper trading), charts/, common/
 │   ├── src/context/          SettingsContext (preferences), LiveContext (one shared live poll, alerts, trades)
-│   ├── src/hooks/            useDashboard, useAlerts, useApi (+ waitForJob)
+│   ├── src/hooks/            useDashboard, useAlerts, useApi (+ waitForJob), usePoll
 │   ├── src/services/api.ts   typed client for every API call
 │   ├── src/types/, src/utils/
-│   ├── src/__tests__/        Vitest + React Testing Library: 346 tests (hooks, components, pages, whole app)
+│   ├── src/__tests__/        Vitest + React Testing Library: 373 tests (hooks, components, pages, whole app)
 │   ├── src/test/             Shared test utilities: mock API, fixtures, fake WebSocket and charts, render helpers
 │   ├── e2e/                  Playwright browser tests (all pages × 8 widths, navigation, indicators, paper controls)
 │   ├── index.html, vite.config.ts (build, chunk split), vitest.config.ts, playwright.config.ts, tsconfig.json, package.json
 │   └── dist/                 production build (git-ignored)
 ├── data/                     Runtime data (git-ignored): historical/, exports/, logs/ (server.log), backups/
 ├── docs/                     This documentation
+├── scripts/                  start_paper.ps1 (09:00 paper auto-start), validate_bias_accuracy.py and validate_bias_trades.py (validation of the automated engine; read-only on your data)
 ├── GROWTRADING.md            Master project documentation
 ├── README.md                 Overview and quick start
 ├── CLAUDE.md                 Commands, rules and layout for Claude Code sessions
@@ -52,6 +53,7 @@ grow-trading/
 | `data.py` | `/api/data/*` |
 | `research.py` | `/api/research*`, `/api/signals*` |
 | `live.py` | `/api/live/*` (incl. `confirm`, `reject`) |
+| `bias.py` | `/api/bias/*` (automated paper trading: config, status, analysis, start, settings, predictions, accuracy, trades, summary, trade reasoning) and `POST /api/paper/position/target` |
 | `frontend.py` | `/app`, `/app/<path>`: the built React app |
 
 Details: [API.md](API.md).
@@ -78,7 +80,9 @@ Details: [API.md](API.md).
 | `strategy/signals.py` | Signal engine: features, outcomes, walk-forward model, scorer | `signals.py` |
 | `trading/charges.py` | Slippage and Indian options charges | `costs.py` |
 | `trading/brokers.py` | Order execution: PaperBroker, LiveBroker, OrderError, OrderUnknown | from `live_market.py` |
-| `trading/engine.py` | Live / paper / replay engine: crossover, trend, prediction and scalp modes, risk rails (re-exports `EngineConfig`) | `live_engine.py` |
+| `strategy/bias.py` | Pure: 12 indicator votes on two timeframes, bias, confidence, next-candle prediction, entry candidate, accuracy (causal; no I/O) | new 19 Nov |
+| `trading/bias_report.py` | Stored predictions, accuracy, trade list and summary, one trade's reasoning (paper/replay rows only) | new 19 Nov |
+| `trading/engine.py` | Live / paper / replay engine: crossover, trend, prediction, scalp and bias modes, risk rails (re-exports `EngineConfig`) | `live_engine.py` |
 | `trading/engine_config.py` | `EngineConfig` and its validation | inside `engine.py` |
 | `trading/stops.py` | Pure stop-loss/target rules (`stop_levels`) and the NIFTY levels of an open position (`position_levels`) | inside `engine.py` |
 | `trading/manager.py` | One engine instance, start/stop safety checks, dashboard status | `live_manager.py` |
@@ -117,6 +121,9 @@ Details: [API.md](API.md).
 | test_frontend.py | React build served at /app, client-route fallback, no files outside dist |
 | test_api_smoke.py | Account endpoints (Groww mocked), live-control guard rails, Host/Origin guard, JSON errors, download validation, not-found cases, read endpoints |
 | test_stops.py | `stops.py` rules and `EngineConfig` validation messages |
+| test_bias.py | Bias analysis: look-ahead and repainting, timeframe synchronisation, every indicator alone, timeframe pairs, labels, confidence, accuracy |
+| test_bias_engine.py | Bias engine in replay: every candle stored and settled, daily cap, one entry per signal, instruments, writing, exits, trailing, settings, contract checks |
+| test_bias_api.py | `/api/bias/*`: paper/replay only, settings, reports |
 | test_privacy.py | What live mode may show: redacted status, events and alerts, kept safety information, order ids |
 
 The files under `services/` keep the names other modules and tests import. For example, `feed.py` still exposes `size_position`, and `manager.py` still exposes `recent_alerts`.
