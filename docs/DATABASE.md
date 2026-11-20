@@ -22,6 +22,7 @@
 | 0011_scalping | `scalp_runs` (settings, date range and summary JSON of each 5-minute scalping run), `scalp_trades` (trade list per run and configuration) |
 | 0012_scalp_paper | `live_trades.strategy`, `live_trades.scalp_config` (set for scalp-mode engine trades) |
 | 0019_bias_engine | `candle_bias` (one row per analysed candle: bias, confidence, scores, prediction, votes, analysis, and once settled the next close, actual move and outcome); `live_trades.action`, `confidence`, `analysis`, `exit_detail` added if missing (this database already had them) |
+| 0020_premarket | `premarket_reports` (one row per day: score, bias, report JSON, snapshots, and after the close what NIFTY did and the outcome) and `premarket_inputs` (FII/DII figures and events entered by hand). New tables only |
 
 ## Tables
 | Table | Key | Holds |

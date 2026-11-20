@@ -22,8 +22,10 @@ _FORM = ("timeframe", "bias_confirm_tf", "bias_indicators", "bias_min_confidence
          "bias_exit_opposite", "bias_max_hold_min", "bias_cooldown_bars", "target_rr", "trail_pct", "trail_activate_pct",
          "sell_risk_pct", "min_premium", "min_oi", "max_spread_pct", "min_delta", "risk_pct", "daily_risk_pct",
          "max_daily_loss", "max_trades_per_day", "max_lots", "min_balance", "stop_mode", "stop_atr", "stop_pct",
-         "stop_points", "entry_start", "cutoff", "exec_mode", "lots")
+         "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net")
 DEFAULT_MAX_TRADES = 20      # the brief's default; the engine's own default (6) belongs to the older modes
+DEFAULT_MIN_CONFIDENCE = 70.0    # continuous automation: entry needs a bias confidence of at least this %
+DEFAULT_PROFIT_TARGET = 1500.0   # continuous automation: exit one trade at this net profit (₹, after charges)
 
 _cache: dict = {"key": None, "at": 0.0, "value": None}
 _cache_lock = threading.Lock()
@@ -36,6 +38,7 @@ def _engine():
 
 def defaults() -> dict:
     d = asdict(le.EngineConfig(signal_mode="bias", trade_mode="paper", timeframe=5, max_trades_per_day=DEFAULT_MAX_TRADES))
+    d.update(bias_min_confidence=DEFAULT_MIN_CONFIDENCE, profit_target_net=DEFAULT_PROFIT_TARGET)
     return {k: d[k] for k in _FORM}
 
 
@@ -142,6 +145,26 @@ def bias_settings():
         return api_error(exc, 400)
     except Exception as exc:
         return api_error(exc, 500)
+
+
+@bp.post("/api/bias/pause")
+def bias_pause():
+    """Stop taking new entries; the open position (if any) is still managed. Nothing is closed."""
+    eng = _engine()
+    if not eng:
+        return jsonify({"ok": False, "error": "The automated engine isn't running."}), 409
+    eng.pause()
+    return jsonify({"ok": True, "data": {"paused": eng.paused}})
+
+
+@bp.post("/api/bias/resume")
+def bias_resume():
+    """Allow new entries again from the next closed candle."""
+    eng = _engine()
+    if not eng:
+        return jsonify({"ok": False, "error": "The automated engine isn't running."}), 409
+    eng.resume()
+    return jsonify({"ok": True, "data": {"paused": eng.paused}})
 
 
 @bp.post("/api/paper/position/target")

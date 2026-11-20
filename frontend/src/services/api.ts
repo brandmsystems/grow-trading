@@ -3,7 +3,7 @@ import type {
   ApiErr, BiasAccuracy, BiasAnalysisResponse, BiasConfig, BiasPrediction, BiasSettings, BiasStatus, BiasSummary, BiasTrade,
   BiasTradeDetail, BtChart, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
   LiveTrade, LotSize, OptionChain, OptionsCoverage, PaperAccount, Research, RiskCalc, ScalpConfig, ScalpPaperTrade, ScalpRun,
-  ScalpTrade, SignalAnalysis, StopChange,
+  ScalpTrade, SignalAnalysis, StopChange, PmHistory, PmInput, PmNewsFeed, PmReport, PmReportResponse,
 } from "../types/api";
 
 export class ApiError extends Error {
@@ -64,6 +64,8 @@ export const confirmOrder = (id: string) => api<Dashboard>("/api/live/confirm", 
 export const rejectOrder = (id: string) => api<Dashboard>("/api/live/reject", { json: { id } });
 
 // ------------------------------------------------------------------ automated multi-timeframe paper trading
+export const pauseBias = () => api<{ paused: boolean }>("/api/bias/pause", { json: {} });
+export const resumeBias = () => api<{ paused: boolean }>("/api/bias/resume", { json: {} });
 export const getBiasConfig = () => api<BiasConfig>("/api/bias/config");
 export const getBiasStatus = () => api<BiasStatus>("/api/bias/status");
 export const getBiasAnalysis = () => api<BiasAnalysisResponse>("/api/bias/analysis");
@@ -123,3 +125,10 @@ export const getCredentialStatus = async () => {
   return r;
 };
 export const relogin = () => request<never>("/api/login", { json: {} });
+
+// ------------------------------------------------------------------ pre-market analysis (information only; never places an order)
+export const getPremarket = (day?: string) => api<PmReportResponse>(`/api/premarket/report?${qs({ day })}`);
+export const refreshPremarket = () => api<{ report: PmReport }>("/api/premarket/refresh", { json: {} });
+export const addPremarketInput = (body: PmInput) => api<{ report: PmReport }>("/api/premarket/input", { json: body });
+export const getPremarketNews = (refresh = false) => api<PmNewsFeed>(`/api/premarket/news?${qs({ refresh: refresh ? 1 : undefined })}`);
+export const getPremarketHistory = () => api<PmHistory>("/api/premarket/history");

@@ -5,10 +5,10 @@ import { Card } from "../common/Card";
 import { Button, Field, inputCls } from "../common/Controls";
 import { Warning } from "../common/States";
 
-type NumKey = { [K in keyof BiasSettings]: BiasSettings[K] extends number ? K : never }[keyof BiasSettings];
+type NumKey = { [K in keyof BiasSettings]-?: BiasSettings[K] extends number ? K : never }[keyof BiasSettings];
 
 /** A number box that can be typed into key by key; a valid number is passed up as soon as it parses. */
-function Num({ label, k, s, set, step = 1, min = 0, max, unit }: {
+export function Num({ label, k, s, set, step = 1, min = 0, max, unit }: {
   label: string; k: NumKey; s: BiasSettings; set: (p: Partial<BiasSettings>) => void; step?: number; min?: number; max?: number; unit?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -106,6 +106,9 @@ export function AutoSettings({ s, set, indicators, running, onApply, busy, msg }
         <Num label="Minimum open interest" unit="0 = off" k="min_oi" s={s} set={set} step={1000} />
         <Num label="Maximum bid-ask spread" unit="%, 0 = off" k="max_spread_pct" s={s} set={set} step={0.5} max={100} />
         <Num label="Minimum |delta| when buying" unit="0 = off" k="min_delta" s={s} set={set} step={0.05} max={1} />
+        <Field label="Pre-market bias">
+          <select className={inputCls} value={s.premarket_mode ?? "log"} aria-label="Pre-market bias" onChange={(e) => set({ premarket_mode: e.target.value as NonNullable<BiasSettings["premarket_mode"]> })}>
+            <option value="log">Log whether it agreed</option><option value="block_opposed">Skip trades against it</option><option value="off">Ignore</option></select></Field>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">

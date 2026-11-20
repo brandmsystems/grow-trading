@@ -61,11 +61,13 @@ class EngineConfig:
     target_rr: float = 2.0             # bias mode: target distance = target_rr x stop distance
     trail_pct: float = 0.0             # trailing stop: premium distance from the best price, % (0 = off)
     trail_activate_pct: float = 10.0   # the trail starts once the premium has moved this % in your favour
+    profit_target_net: float = 0.0     # bias mode: exit when ONE trade's net profit (after charges and slippage) reaches this ₹ (0 = off); after such an exit the same signal may re-enter on a later candle
     sell_risk_pct: float = 0.5         # risk per trade, % of capital, when writing (selling) options
     min_premium: float = 5.0           # entries need a premium of at least this (₹)
     min_oi: float = 0.0                # entries need open interest of at least this when known (0 = not checked)
     max_spread_pct: float = 5.0        # entries need a bid-ask spread of at most this % of the premium when known (0 = off)
     min_delta: float = 0.25            # bought options need |delta| of at least this when Groww gives one (0 = off)
+    premarket_mode: str = "log"        # pre-market bias: off | log (store whether it agreed with each trade) | block_opposed (skip trades against a directional bias)
 
     def validate(self) -> "EngineConfig":
         """Coerce numeric fields and raise ValueError for any setting outside its allowed range.
@@ -87,6 +89,8 @@ class EngineConfig:
         self.max_trades_per_day = int(self.max_trades_per_day)
         if self.order_confirmation not in ("manual", "auto"):
             raise ValueError("order_confirmation must be manual or auto")
+        if self.premarket_mode not in ("off", "log", "block_opposed"):
+            raise ValueError("premarket_mode must be off, log or block_opposed")
         if self.signal_mode not in ("cross", "prediction", "trend", "scalp", "bias"):
             raise ValueError("signal_mode must be cross, prediction, trend, scalp or bias")
         if self.signal_mode == "bias":
@@ -147,7 +151,8 @@ class EngineConfig:
         for name, lo, hi in (("bias_min_confidence", 0, 100), ("bias_trend_thr", 0, 1), ("bias_confirm_thr", 0, 1),
                              ("bias_min_atr_pct", 0, 5), ("target_rr", 0.1, 20), ("trail_pct", 0, 99),
                              ("trail_activate_pct", 0, 1000), ("sell_risk_pct", 0, 100), ("min_premium", 0, 1e6),
-                             ("min_oi", 0, 1e12), ("max_spread_pct", 0, 100), ("min_delta", 0, 1)):
+                             ("min_oi", 0, 1e12), ("max_spread_pct", 0, 100), ("min_delta", 0, 1),
+                             ("profit_target_net", 0, 1e7)):
             v = float(getattr(self, name))
             if not lo <= v <= hi or (name == "sell_risk_pct" and v <= 0):
                 raise ValueError(f"{name.replace('_', ' ')} must be between {lo:g} and {hi:g}")

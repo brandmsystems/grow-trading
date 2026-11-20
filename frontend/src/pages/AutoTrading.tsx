@@ -3,7 +3,7 @@ import { Bot, Play, Square, ShieldCheck } from "lucide-react";
 import { usePoll } from "../hooks/usePoll";
 import { useApi } from "../hooks/useApi";
 import {
-  getBiasAnalysis, getBiasConfig, getBiasPredictions, getBiasStatus, getBiasSummary, getBiasTrades, startBias, stopEngine, updateBiasSettings,
+  getBiasAnalysis, getBiasConfig, getBiasPredictions, getBiasStatus, getBiasSummary, getBiasTrades, pauseBias, resumeBias, startBias, stopEngine, updateBiasSettings,
 } from "../services/api";
 import type { BiasGroup, BiasSettings } from "../types/api";
 import { hms, inr, pct, pnlClass, todayIST } from "../utils/format";
@@ -17,12 +17,18 @@ import { AccuracyPanel } from "../components/auto/AccuracyPanel";
 import { TradeTable } from "../components/auto/TradeTable";
 import { PositionCard } from "../components/auto/PositionCard";
 import { AutoSettings } from "../components/auto/AutoSettings";
+import { AutomationPanel } from "../components/auto/AutomationPanel";
 
 const STORE = "gt.auto.settings";
 const STATE = { stopped: ["Stopped", "neutral"], waiting: ["Waiting for market", "info"], running: ["Running", "good"], halted: ["Halted", "warn"], error: ["ERROR", "bad"] } as const;
 
 function saved(): Partial<BiasSettings> {
-  try { return JSON.parse(localStorage.getItem(STORE) ?? "{}") as Partial<BiasSettings>; } catch { return {}; }
+  try {
+    const v = JSON.parse(localStorage.getItem(STORE) ?? "{}") as Partial<BiasSettings>;
+    // settings saved before the continuous automation existed: take the new 70% default instead of the old 55%
+    if (!("profit_target_net" in v)) delete v.bias_min_confidence;
+    return v;
+  } catch { return {}; }
 }
 
 function GroupTable({ title, rows }: { title: string; rows: Record<string, BiasGroup> }) {
@@ -63,6 +69,7 @@ export default function AutoTrading() {
 
   const [s, setS] = useState<BiasSettings | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msgFrom, setMsgFrom] = useState<"panel" | "settings">("settings");   // the message shows beside the Apply button that was pressed
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [replayDay, setReplayDay] = useState("");
@@ -85,8 +92,9 @@ export default function AutoTrading() {
     setBusy(true); setErr(null);
     try { await fn(); await Promise.all([status.reload(), trades.reload(), summary.reload(), preds.reload()]); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
-  async function apply() {
+  async function apply(from: "panel" | "settings" = "settings") {
     if (!s) return;
+    setMsgFrom(from);
     try { localStorage.setItem(STORE, JSON.stringify(s)); } catch { /* private window */ }
     if (!running) { setMsg({ ok: true, text: "Saved. These settings are used when you start the engine." }); return; }
     const live = (st?.config ?? {}) as unknown as Record<string, unknown>;
@@ -97,6 +105,7 @@ export default function AutoTrading() {
     catch (e) { setMsg({ ok: false, text: (e as Error).message }); } finally { setBusy(false); }
   }
 
+  const auto = st?.bias?.automation;
   const [stLabel, stTone] = STATE[st?.state ?? "stopped"];
   const sm = summary.data;
   return (
@@ -120,7 +129,10 @@ export default function AutoTrading() {
               <Button disabled={busy || !s || !replayDay} onClick={() => act(() => startBias(s as BiasSettings, "replay", replayDay))}><Bot size={14} />Replay day</Button>
             </>
           ) : (
-            <Button variant="danger" disabled={busy} onClick={() => act(() => stopEngine())}><Square size={14} />Stop engine</Button>
+            <>
+              <Button disabled={busy} onClick={() => act(() => (auto?.paused ? resumeBias() : pauseBias()))}>{auto?.paused ? "Resume" : "Pause"}</Button>
+              <Button variant="danger" disabled={busy} onClick={() => act(() => stopEngine())}><Square size={14} />Stop engine</Button>
+            </>
           )}
           {st?.nifty && <span className="text-xs text-slate-500">NIFTY {st.nifty.price.toLocaleString("en-IN")} · {hms(st.nifty.ts)}</span>}
         </div>
@@ -129,6 +141,11 @@ export default function AutoTrading() {
         {err && <div className="mt-3"><ErrorNote>{err}</ErrorNote></div>}
         {status.error && <div className="mt-3"><ErrorNote offline>{status.error}</ErrorNote></div>}
       </Card>
+
+      {s && (
+        <AutomationPanel a={auto} bias={latest} s={s} set={set} running={running} onApply={() => void apply("panel")} busy={busy} summary={sm ?? null}
+          trades={trades.data ?? []} msg={msgFrom === "panel" ? msg : null} />
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
@@ -145,7 +162,7 @@ export default function AutoTrading() {
               <Stat label="Win rate" value={sm?.win_rate != null ? pct(sm.win_rate, 0) : "—"} sub={sm && sm.open ? `${sm.open} open` : undefined} />
             </div>
           </Card>
-          <PositionCard p={st?.position ?? null} editable={running && mode === "paper"} onChanged={() => { void status.reload(); void trades.reload(); void summary.reload(); }} />
+          <PositionCard p={st?.position ?? null} profitTarget={running ? Number((st?.config as Record<string, unknown> | undefined)?.profit_target_net ?? 0) : 0} editable={running && mode === "paper"} onChanged={() => { void status.reload(); void trades.reload(); void summary.reload(); }} />
         </div>
       </div>
 
@@ -172,7 +189,7 @@ export default function AutoTrading() {
       </div>
 
       {s && base && (
-        <AutoSettings s={s} set={set} indicators={base.indicators} running={running} onApply={apply} busy={busy} msg={msg} />
+        <AutoSettings s={s} set={set} indicators={base.indicators} running={running} onApply={() => void apply("settings")} busy={busy} msg={msgFrom === "settings" ? msg : null} />
       )}
 
       {running && st?.events && (

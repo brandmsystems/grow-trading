@@ -20,12 +20,12 @@ grow-trading/
 │   └── requirements.txt
 ├── frontend/                 React 19 + TypeScript + Vite + Tailwind app (served at /app)
 │   ├── src/pages/            Overview, LiveTrading, AutoTrading, Signals, Options, Backtest, Compare, Scalping, MarketData, HistoryCharts, Account
-│   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, auto/ (automated paper trading), charts/, common/
+│   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, auto/ (automated paper trading, `AutomationPanel` = continuous automation), charts/, common/
 │   ├── src/context/          SettingsContext (preferences), LiveContext (one shared live poll, alerts, trades)
 │   ├── src/hooks/            useDashboard, useAlerts, useApi (+ waitForJob), usePoll
 │   ├── src/services/api.ts   typed client for every API call
 │   ├── src/types/, src/utils/
-│   ├── src/__tests__/        Vitest + React Testing Library: 373 tests (hooks, components, pages, whole app)
+│   ├── src/__tests__/        Vitest + React Testing Library: 426 tests (hooks, components, pages, whole app)
 │   ├── src/test/             Shared test utilities: mock API, fixtures, fake WebSocket and charts, render helpers
 │   ├── e2e/                  Playwright browser tests (all pages × 8 widths, navigation, indicators, paper controls)
 │   ├── index.html, vite.config.ts (build, chunk split), vitest.config.ts, playwright.config.ts, tsconfig.json, package.json
@@ -54,6 +54,7 @@ grow-trading/
 | `research.py` | `/api/research*`, `/api/signals*` |
 | `live.py` | `/api/live/*` (incl. `confirm`, `reject`) |
 | `bias.py` | `/api/bias/*` (automated paper trading: config, status, analysis, start, settings, predictions, accuracy, trades, summary, trade reasoning) and `POST /api/paper/position/target` |
+| `premarket.py` | `/api/premarket/*` (report, refresh, manual input, history) |
 | `frontend.py` | `/app`, `/app/<path>`: the built React app |
 
 Details: [API.md](API.md).
@@ -82,6 +83,8 @@ Details: [API.md](API.md).
 | `trading/brokers.py` | Order execution: PaperBroker, LiveBroker, OrderError, OrderUnknown | from `live_market.py` |
 | `strategy/bias.py` | Pure: 12 indicator votes on two timeframes, bias, confidence, next-candle prediction, entry candidate, accuracy (causal; no I/O) | new 19 Nov |
 | `trading/bias_report.py` | Stored predictions, accuracy, trade list and summary, one trade's reasoning (paper/replay rows only) | new 19 Nov |
+| `premarket/news_analysis.py` | Pure news analysis: related-coverage grouping, categories, sentiment and NIFTY direction, impact level, periods, factor evidence |
+| `premarket/sources.py`, `scoring.py`, `service.py` | Pre-market analysis: Yahoo/Google News fetchers (the only network access), pure five-factor scoring and conclusion, report build/store/settle/schedule and the engine's read-only stamp | new 19 Nov |
 | `trading/engine.py` | Live / paper / replay engine: crossover, trend, prediction, scalp and bias modes, risk rails (re-exports `EngineConfig`) | `live_engine.py` |
 | `trading/engine_config.py` | `EngineConfig` and its validation | inside `engine.py` |
 | `trading/stops.py` | Pure stop-loss/target rules (`stop_levels`) and the NIFTY levels of an open position (`position_levels`) | inside `engine.py` |
@@ -124,6 +127,9 @@ Details: [API.md](API.md).
 | test_bias.py | Bias analysis: look-ahead and repainting, timeframe synchronisation, every indicator alone, timeframe pairs, labels, confidence, accuracy |
 | test_bias_engine.py | Bias engine in replay: every candle stored and settled, daily cap, one entry per signal, instruments, writing, exits, trailing, settings, contract checks |
 | test_bias_api.py | `/api/bias/*`: paper/replay only, settings, reports |
+| test_premarket_news.py | News feed parsing, cache and failure handling, grouping, categories, direction rules, periods, factor evidence |
+| test_premarket.py | Pre-market scoring rules and bands, news filtering, schedule, storage, settling, manual input, API, engine stamp and block mode |
+| test_entries.py | The 22 research entry methods are causal and well-formed |
 | test_privacy.py | What live mode may show: redacted status, events and alerts, kept safety information, order ids |
 
 The files under `services/` keep the names other modules and tests import. For example, `feed.py` still exposes `size_position`, and `manager.py` still exposes `recent_alerts`.

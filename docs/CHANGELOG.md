@@ -268,3 +268,20 @@ All dates are 2026, IST.
 
 ## 19 Nov 2026: five-year entry-method research
 - Added `services/strategy/entries.py` (22 causal entry methods), `tests/test_entries.py`, `scripts/research_entries.py`, [ENTRY_RESEARCH.md](ENTRY_RESEARCH.md). Result: 0 of 92 method/exit pairs profitable after costs (234,576 real-premium trades); nothing promoted, engine unchanged.
+
+## 19 Nov 2026: pre-market analysis
+- New page `/app/premarket`, `services/premarket/`, `api/premarket.py`, migration `0020_premarket.sql` (two new tables), `scripts/validate_premarket.py`, [PREMARKET.md](PREMARKET.md). Five one-point factors, -5..+5 score, conclusion, daily 08:30 IST report, history against NIFTY's actual day.
+- Engine: new setting `premarket_mode` (log / block_opposed / off, default log): paper and replay trades record whether the pre-market bias agreed; no entry is created from it.
+- Validation: 56.9% right on close-vs-close calls (269), 51.1% in 2025-26, no open-to-close relation. Unavailable: Gift Nifty, automatic FII/DII, an economic calendar.
+
+## 19 Nov 2026: live news on the pre-market page
+- New news section on `/app/premarket` (`GET /api/premarket/news`): real articles from publisher RSS feeds (ET, Mint, Business Standard, BusinessLine, BBC, CNBC) and Google News, with the publisher's summary, thumbnail, source, time, sentiment, expected NIFTY direction, impact level, why it matters, sectors, indices and the original link; 11 category tabs, search, date filter, breaking highlight, previous-day / overnight / pre-market separation, loading, error, stale and unavailable states.
+- Each factor card lists the articles that back it (one factor per article, no double counting). Evidence only: news never changes a score.
+- Fixed keyword rules, not validated; stated on the page. No summary or picture is ever invented; failed sources are reported, never replaced.
+
+## 20 Nov 2026: continuous automated paper trading (70% bias, ₹1,500 net per trade)
+- The existing bias engine (no new engine) now exits a trade when its **net** profit (after slippage, brokerage, STT, exchange, SEBI, stamp duty and GST) reaches `profit_target_net` (page default ₹1,500; engine default 0 = off), reason `profit_target`. Per trade, not a daily target; the stop-loss, daily loss limit, sizing, charges and 15:00 square-off are unchanged.
+- After any exit in bias mode the candle that contained the exit is closed to entries, and a profit-target exit releases its signal so a fresh candle with the bias still at or above the threshold can enter the next trade (after a stop, time or opposite-signal exit the one-entry-per-signal rule still applies).
+- Market Bias threshold default on the page is 70% (`bias_min_confidence`, inclusive); browser-saved settings from before this change take the new default.
+- New: Pause / Resume (`POST /api/bias/pause`, `/api/bias/resume`: no new entries, open position still managed), `bias.automation` in the status (phase, plain sentence, hits), `target_hits` in the summary, the entry reason on the open position, a Continuous automation panel on `/app/auto`, restart recovery of the exit candle, target hits and the released signal.
+- 13 backend tests and 18 frontend tests added. Not verified in a live market session. Nothing here changes the finding that the analysis has no tradable edge.

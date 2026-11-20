@@ -177,3 +177,19 @@ def test_explain_gives_reasons_and_never_calls_confidence_a_probability():
     assert "not a probability" in e["note"]
     hold = f[f["direction"] == 0].iloc[-1]
     assert bias.explain(hold)["hold_reasons"]
+
+
+def test_the_entry_threshold_is_inclusive_and_below_it_is_rejected_with_a_reason():
+    """Confidence exactly at the minimum qualifies (>=); a hair above it does not, and the reason names the minimum."""
+    c = candles(days=8, drift=0.35, seed=31, futures=True)
+    f = bias.analyse(c, c, bias.BiasParams(min_confidence=0, min_atr_pct=0, trend_thr=0.05, confirm_thr=0.02))
+    row = f[(f["direction"] != 0) & (f["confidence"] > 30)].iloc[-1]
+    conf = float(row["confidence"])
+    at = bias.analyse(c, c, bias.BiasParams(min_confidence=conf, min_atr_pct=0, trend_thr=0.05, confirm_thr=0.02))
+    above = bias.analyse(c, c, bias.BiasParams(min_confidence=conf + 0.01, min_atr_pct=0, trend_thr=0.05, confirm_thr=0.02))
+    i = f.index[f["close_ts"] == row["close_ts"]][0]
+    assert at.loc[i, "direction"] == row["direction"] != 0
+    assert above.loc[i, "direction"] == 0
+    p = bias.BiasParams(min_confidence=conf + 0.01, min_atr_pct=0, trend_thr=0.05, confirm_thr=0.02)
+    why = bias.explain(above.loc[i], p)["hold_reasons"]
+    assert any("below your minimum" in w for w in why)

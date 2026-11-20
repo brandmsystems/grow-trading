@@ -316,3 +316,227 @@ def test_contract_checks_refuse_a_bad_contract_and_skip_unknown_data():
     market.option_quote = lambda c_: {"oi": 10.0, "bid": 40.0, "ask": 60.0, "delta": 0.1}
     why = eng._bias_contract_check(c, "BUY", {"analysis": {}})
     assert "spread" in why and "delta" in why
+
+
+
+# ---------------------------------------------------------------- continuous automation: net profit target, re-entry, pause
+from app.services.strategy import rules as _st                          # noqa: E402
+from app.services.trading import charges as _costs                     # noqa: E402
+
+
+def net_at(price, side="BUY", entry=100.0, qty=75):
+    return _costs.round_trip(side, entry, price, qty, _costs.DEFAULT_COSTS)["net"]
+
+
+def real_engine(over=None, side="BUY", stop=None, target=None):
+    """Like bare_engine but the real _exit runs (paper fill, P&L, database row, alerts)."""
+    e, m = bare_engine(over, side)
+    del e._exit
+    e.position.update(stop_premium=stop if stop is not None else (1.0 if side == "BUY" else 900.0),
+                      target_premium=target if target is not None else (900.0 if side == "BUY" else 1.0))
+    return e, m
+
+
+def test_profit_target_exits_on_net_profit_after_charges_not_gross():
+    e, m = bare_engine({"profit_target_net": 1500})
+    e.position.update(stop_premium=1.0, target_premium=900.0)
+    price = 100.0
+    while net_at(price) < 1500:
+        price = round(price + 0.05, 2)
+    assert net_at(price - 0.05) < 1500 <= net_at(price)
+    gross_only = 100 + 1500 / 75                        # the premium where GROSS profit is 1,500: net is still short of the target
+    assert net_at(gross_only) < 1500
+    feed(e, m, gross_only)
+    assert e.exits == []                                # slippage and charges are deducted first
+    feed(e, m, round(price - 0.05, 2))
+    assert e.exits == []
+    feed(e, m, price)
+    assert e.exits == ["profit_target"]
+
+
+def test_profit_target_sell_side_and_off_by_default():
+    e, m = bare_engine({"profit_target_net": 1500}, side="SELL")
+    e.position.update(stop_premium=900.0, target_premium=1.0)
+    feed(e, m, 80)
+    assert e.exits == []                                # +1,500 gross for a writer is not +1,500 net
+    price = 100.0
+    while net_at(price, "SELL") < 1500:
+        price = round(price - 0.05, 2)
+    feed(e, m, price)
+    assert e.exits == ["profit_target"]
+    e, m = bare_engine()                                # default: off, only the stop, the risk-reward target and the rest apply
+    e.position.update(stop_premium=1.0, target_premium=900.0)
+    feed(e, m, 160)
+    assert e.exits == []
+
+
+def test_a_stale_price_never_triggers_the_profit_target():
+    e, m = bare_engine({"profit_target_net": 1500})
+    e.position.update(stop_premium=1.0, target_premium=900.0)
+    sym = e.position["contract"].trading_symbol
+    e.last_ltp[sym], e.last_ltp_at[sym] = 200, m.now() - timedelta(seconds=60)
+    e._bias_exits(m.now())
+    assert e.exits == []
+
+
+def test_profit_target_exit_records_net_blocks_the_exit_candle_and_releases_the_signal():
+    e, m = real_engine({"profit_target_net": 1500})
+    e._last_entry_signal = datetime(2025, 6, 9, 10, 55)        # the signal that opened this trade
+    m.t = datetime(2025, 6, 9, 11, 7, 3)                       # mid-candle: the 11:05-11:10 candle
+    feed(e, m, 130)
+    assert e.position is None and e.target_hits_today == 1
+    row = q("SELECT * FROM live_trades")[0]
+    assert row["exit_reason"] == "profit_target" and row["status"] == "CLOSED" and row["net"] >= 1500
+    assert row["net"] == pytest.approx(net_at(130)) and e.realised_today == pytest.approx(row["net"])
+    assert e._last_entry_signal is None                         # the same unchanged signal may enter again ...
+    assert e._no_entry_through == datetime(2025, 6, 9, 11, 10)  # ... but never on the candle that exited
+    assert row["exit_detail"]["reason"] == "profit_target"
+    # a stop-loss exit does not release the signal (no stacking after a loss) and is not a target hit
+    e, m = real_engine({"profit_target_net": 1500}, stop=80.0, target=900.0)
+    e._last_entry_signal = datetime(2025, 6, 9, 10, 55)
+    feed(e, m, 79)
+    assert e.position is None
+    assert q("SELECT exit_reason FROM live_trades ORDER BY id DESC")[0]["exit_reason"] == "stop_loss"
+    assert e._last_entry_signal == datetime(2025, 6, 9, 10, 55) and e.target_hits_today == 0
+    assert e._no_entry_through == datetime(2025, 6, 9, 11, 5)
+
+
+def test_automation_phase_says_what_the_engine_is_doing():
+    e, m = bare_engine({"profit_target_net": 1500})
+    m.t = datetime(2025, 6, 9, 11, 7, 3)
+    nxt = datetime(2025, 6, 9, 11, 10)
+    a = e._automation(nxt)
+    assert a["phase"] == "holding" and "1,500" in a["detail"] and a["profit_target_net"] == 1500
+    e.position["pending_reason"] = "profit_target"
+    assert e._automation(nxt)["phase"] == "exiting"
+    e.position = None
+    e._no_entry_through = datetime(2025, 6, 9, 11, 10)
+    a = e._automation(nxt)
+    assert a["phase"] == "waiting" and "11:15" in a["detail"]
+    e._no_entry_through = None
+    e.trades_today = 1
+    a = e._automation(nxt)
+    assert a["phase"] == "ready" and a["label"] == "Ready for re-entry" and "30%" in a["detail"]
+    e.trades_today = 0
+    assert e._automation(nxt)["label"] == "Ready for entry"
+    e.paused = True
+    assert e._automation(nxt)["phase"] == "paused"
+    e.paused = False
+    e.trades_today = e.cfg.max_trades_per_day
+    assert e._automation(nxt)["phase"] == "limit"
+    e.trades_today = 0
+    e.state, e.halt_reason = "halted", "Daily loss limit reached: no more trades today"
+    a = e._automation(nxt)
+    assert a["phase"] == "halted" and "loss limit" in a["detail"]
+
+
+def test_pause_and_resume_change_only_new_entries():
+    e, m = bare_engine({"profit_target_net": 1500})
+    e.pause()
+    assert e.paused and "paused" in e.events[0]["message"]
+    e.position.update(stop_premium=1.0, target_premium=900.0)
+    feed(e, m, 130)
+    assert e.exits == ["profit_target"]                        # an open position is still managed while paused
+    e.resume()
+    assert not e.paused
+    plain = le.Engine(le.EngineConfig(trade_mode="paper", signal_mode="cross"), FakeMarket(), PaperBroker(FakeMarket()))
+    with pytest.raises(ValueError, match="bias engine only"):
+        plain.pause()
+
+
+def test_profit_target_setting_validates_and_changes_without_restart():
+    with pytest.raises(ValueError, match="profit target net must be between"):
+        le.EngineConfig(**{**LOOSE, "profit_target_net": -1}).validate()
+    eng, market = make()
+    assert eng.cfg.profit_target_net == 0
+    out = eng.update_settings({"profit_target_net": 1500, "bias_min_confidence": 70})
+    assert eng.cfg.profit_target_net == 1500 and eng.cfg.bias_min_confidence == 70 and len(out["changed"]) == 2
+    with pytest.raises(ValueError):
+        eng.update_settings({"profit_target_net": -5})
+    assert eng.cfg.profit_target_net == 1500
+
+
+def test_daily_loss_limit_stops_new_entries():
+    e, m = bare_engine({"max_daily_loss": 100, "profit_target_net": 1500})
+    e.position = None
+    e.realised_today = -200.0
+    e._risk_check(m.now())
+    assert e.state == "halted" and "loss limit" in e.halt_reason
+    leg = _st.Leg(day=m.t.date(), direction=1, entry_ts=m.t, signal_close=25000.0, signal_bar_start=m.t, ordinal=1)
+    e._try_entry(m.t, leg)
+    assert e.position is None and any("engine halted" in x["message"] for x in e.events)
+    assert q("SELECT count(*) AS n FROM live_trades WHERE status='OPEN'")[0]["n"] == 1      # only the fixture's own row
+
+
+def test_restart_recovery_keeps_the_target_the_exit_candle_and_the_release():
+    e, m = real_engine({"profit_target_net": 1500})
+    e._last_entry_signal = datetime(2025, 6, 9, 10, 55)
+    m.t = datetime(2025, 6, 9, 11, 7, 3)
+    feed(e, m, 130)                                              # trade 1 closes by the net profit target
+    cfg = {**LOOSE, "trade_mode": "replay", "profit_target_net": 1500}
+    fresh = le.Engine(le.EngineConfig(**cfg), FakeMarket(), PaperBroker(FakeMarket()))
+    fresh.session_id, fresh.day = e.session_id, e.day
+    fresh._load_day_state(e.day)                                 # what a restarted engine reads back
+    assert fresh.target_hits_today == 1 and fresh.trades_today == 1 and fresh.position is None
+    assert fresh._no_entry_through == datetime(2025, 6, 9, 11, 10) and fresh._last_entry_signal is None
+    assert fresh.realised_today >= 1500
+    # an open position is resumed and still exits at the same net target
+    with db.engine().begin() as c:
+        c.execute(text("INSERT INTO live_trades (session_id, trade_mode, day, exec_mode, direction, side, trading_symbol, groww_symbol, "
+                       "strike, opt_type, expiry, qty, signal_ts, signal_close, entry_ts, entry_price, status, signal_mode, "
+                       "stop_premium, target_premium) VALUES (:s,'replay',:d,'ATM_BUY','Bullish','BUY','Y','Y',25000,'CE',:d,75,:t,25000,:t,"
+                       "100,'OPEN','bias',1,900)"),
+                  {"s": e.session_id, "d": e.day, "t": datetime(2025, 6, 9, 11, 20)})
+    m2 = FakeMarket()
+    m2.t = datetime(2025, 6, 9, 11, 30)
+    fresh2 = le.Engine(le.EngineConfig(**cfg), m2, PaperBroker(m2))
+    fresh2.session_id, fresh2.day, fresh2.state = e.session_id, e.day, "running"
+    fresh2._load_day_state(e.day)
+    assert fresh2.position and fresh2.position["entry_price"] == 100 and fresh2.trades_today == 2
+    fresh2.exits = []
+    fresh2._exit = lambda reason: (fresh2.exits.append(reason), setattr(fresh2, "position", None))
+    sym = fresh2.position["contract"].trading_symbol
+    fresh2.last_ltp[sym], fresh2.last_ltp_at[sym] = 130, m2.now()
+    fresh2._bias_exits(m2.now())
+    assert fresh2.exits == ["profit_target"]
+
+
+def test_entries_need_the_confidence_threshold_and_never_repeat_on_one_candle():
+    eng, market = make({"bias_min_confidence": 70, "profit_target_net": 300})
+    run_days(eng, market, DAYS)
+    trades = q("SELECT * FROM live_trades ORDER BY id")
+    assert trades, "the synthetic days must produce trades at a 70% threshold"
+    assert all(t["confidence"] >= 70 for t in trades)                             # below 70% never enters
+    assert all(t["status"] == "CLOSED" and t["exit_ts"].time() <= time(15, 0, 30) for t in trades)
+    for a, b in zip(trades, trades[1:]):
+        assert b["entry_ts"] >= a["exit_ts"]                                      # one position at a time
+        if a["day"] == b["day"]:
+            assert b["signal_ts"] != a["signal_ts"]                              # one entry per candle
+            assert b["signal_ts"] > eng._candle_close_after(a["exit_ts"])        # a candle that opened after the exit
+    assert len({(t["day"], t["signal_ts"]) for t in trades}) == len(trades)
+    for t in trades:
+        if t["exit_reason"] == "profit_target":
+            assert t["net"] >= 300
+
+
+def test_repeated_sequential_trades_after_target_hits_and_a_paused_engine_takes_none():
+    eng, market = make({"profit_target_net": 150, "bias_cooldown_bars": 0})
+    run_days(eng, market, DAYS)
+    trades = q("SELECT * FROM live_trades ORDER BY id")
+    hits = [i for i, t in enumerate(trades[:-1]) if t["exit_reason"] == "profit_target" and trades[i + 1]["day"] == t["day"]]
+    assert hits, "a target hit must be followed by another trade on at least one day"
+    i = hits[0]
+    assert trades[i + 1]["signal_ts"] > eng._candle_close_after(trades[i]["exit_ts"])
+    per_day = {}
+    for t in trades:
+        per_day[t["day"]] = per_day.get(t["day"], 0) + 1
+    assert 2 <= max(per_day.values()) <= 20                                          # several sequential trades, within the cap
+    assert all(t["status"] == "CLOSED" for t in trades)                              # market close: everything squared off
+    with db.engine().begin() as c:
+        c.execute(text("TRUNCATE live_trades, live_events, live_sessions, candle_bias RESTART IDENTITY CASCADE"))
+    eng, market = make({"profit_target_net": 150})
+    eng.pause()
+    run_days(eng, market, DAYS[:2])
+    assert q("SELECT count(*) AS n FROM live_trades")[0]["n"] == 0
+    assert any("paused" in e["message"] for e in eng.events)
+    assert q("SELECT count(*) AS n FROM candle_bias")[0]["n"] > 100                  # the analysis kept running

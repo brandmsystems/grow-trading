@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const WIDTHS: [number, number][] = [[1920, 1080], [1440, 900], [1280, 800], [1024, 768], [768, 1024], [430, 932], [390, 844], [360, 800]];
 const ROUTES: [string, string][] = [
-  ["/", "Overview"], ["/live", "Live Trading"], ["/auto", "Automated Paper Trading"], ["/signals", "Trading Signals"], ["/options", "Options Analysis"],
+  ["/", "Overview"], ["/live", "Live Trading"], ["/auto", "Automated Paper Trading"], ["/premarket", "Pre-Market Analysis"], ["/signals", "Trading Signals"], ["/options", "Options Analysis"],
   ["/backtest", "Backtesting"], ["/compare", "Strategy Comparison"], ["/scalping", "5-Minute Scalping"],
   ["/data", "Market Data"], ["/history", "Historical Charts"], ["/account", "Account & Settings"],
 ];
@@ -10,10 +10,11 @@ const ROUTES: [string, string][] = [
 /** Collects everything that would show up as a red flag in the browser console. */
 function watch(page: Page) {
   const problems: string[] = [];
-  page.on("console", (m) => { if (m.type() === "error") problems.push(`console: ${m.text()}`); });
+  // Publisher thumbnails are best-effort (the card falls back to a letter tile), so a thumbnail that fails to load is not a problem.
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) problems.push(`console: ${m.text()}`); });
   page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
   page.on("response", (r) => { if (r.url().includes("/api/") && r.status() >= 400) problems.push(`HTTP ${r.status()} ${r.url()}`); });
-  page.on("requestfailed", (r) => { if (!r.url().includes("socket.io")) problems.push(`request failed: ${r.url()} ${r.failure()?.errorText}`); });
+  page.on("requestfailed", (r) => { if (!r.url().includes("socket.io") && r.resourceType() !== "image") problems.push(`request failed: ${r.url()} ${r.failure()?.errorText}`); });
   return problems;
 }
 const overflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -79,6 +80,42 @@ for (const [w, h] of WIDTHS) {
       await p2.goto("/app/");
       await expect(p2.getByText("Polling", { exact: true }).filter({ visible: true })).toHaveCount(1, { timeout: 45_000 });   // desktop pill or phone pill, never both
       expect(await overflow(p2)).toBeLessThanOrEqual(0);                                 // the phone pill must not break the header
+    });
+  });
+}
+
+// The news section reads real feeds from this machine: it must show articles, or say plainly that no source answered.
+for (const [w, h] of [[1280, 900], [768, 1024], [390, 844]] as [number, number][]) {
+  test.describe(`pre-market news at ${w}px`, () => {
+    test.use({ viewport: { width: w, height: h } });
+
+    test("articles are readable here, filterable, and link to the original", async ({ page }, info) => {
+      const problems = watch(page);
+      await page.goto("/app/premarket");
+      const section = page.getByTestId("news-section");
+      await expect(section).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText(/Fetching the latest news/)).toHaveCount(0, { timeout: 60_000 });
+      if (await page.getByTestId("news-unavailable").count()) {
+        await expect(page.getByTestId("article")).toHaveCount(0);        // no source answered: nothing is shown, nothing is made up
+      } else {
+        const cards = page.getByTestId("article");
+        expect(await cards.count()).toBeGreaterThan(0);
+        const first = cards.first();
+        await expect(first.getByTestId("why")).toBeVisible();
+        const link = first.getByRole("link", { name: /Read full news/ });
+        await expect(link).toHaveAttribute("target", "_blank");
+        expect(await link.getAttribute("href")).toMatch(/^https?:\/\//);
+        await expect(page.getByRole("tab", { name: /Crude Oil/ })).toBeVisible();
+        await page.getByRole("tab", { name: /Crude Oil/ }).click();
+        await page.getByRole("tab", { name: /All News/ }).click();
+        await page.getByLabel("Search news").fill("zzzzqqqq");
+        await expect(page.getByText("No articles match")).toBeVisible();
+        await page.getByLabel("Search news").fill("");
+        expect(await page.getByTestId("article").count()).toBeGreaterThan(0);
+      }
+      expect(await overflow(page)).toBeLessThanOrEqual(1);
+      await section.screenshot({ path: info.outputPath(`news-${w}.png`) });
+      expect(problems).toEqual([]);
     });
   });
 }

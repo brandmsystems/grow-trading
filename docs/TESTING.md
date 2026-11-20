@@ -4,8 +4,8 @@ Three layers, all runnable locally. Counts are from the runs on 19 Nov 2026.
 
 | Layer | Tool | Where | Tests | Time |
 |---|---|---|---|---|
-| Backend unit + integration | pytest | `backend/tests/` | **398** | about 15 min (replays real days; the bias engine tests add about 8) |
-| Frontend unit + component + page | Vitest 4, jsdom, React Testing Library | `frontend/src/__tests__/` | **373** | about 12-20 s |
+| Backend unit + integration | pytest | `backend/tests/` | **493** | about 28 min (replays real days; the bias engine tests add about 8) |
+| Frontend unit + component + page | Vitest 4, jsdom, React Testing Library | `frontend/src/__tests__/` | **426** | about 12-25 s |
 | Browser (real Edge) | Playwright | `frontend/e2e/` | **116** | about 5-12 min |
 
 **Browser result (19 Nov):** 114 of 116 passed in the last clean full run (12.4 min); the two failures were the Live-page chart test and the "Polling" indicator test at 430 px timing out while the Groww dashboard was slow (market still open). The 16 Live-chart and indicator tests (all widths) passed when run alone, twice (4.0 and 4.4 min). An earlier full run that overlapped with a heavy replay had 5 failures, all in those same two tests. They wait for the cold Groww dashboard (about 9-13 s), so they are sensitive to a slow Groww; the new automated trading page, navigation and privacy tests passed in every run.
@@ -33,9 +33,9 @@ Also: `npx tsc -b` (strict type check) and `npm run build` (production build) bo
 | test_frontend.py | React build served at /app, route fallback, no files outside `dist` |
 | test_api_smoke.py (33) | Account endpoints with Groww mocked; live-control guard rails; `LIVE` phrase and lot cap checked before any key is read; Host/Origin guard; JSON errors; download validation; not-found cases; read endpoints |
 | test_stops.py (12) | `trading/stops.py` rules and `EngineConfig` validation messages |
-| test_bias.py (32) | Bias analysis (pure): no look-ahead (appending or changing later candles never changes an earlier row), each analysis candle sees only closed confirmation candles, the 15m candle is exactly its three 5m candles, every indicator alone, every timeframe pair, labels and thresholds, conflict = NEUTRAL, confidence, accuracy table, explanation |
-| test_bias_engine.py (13) | Bias engine replayed on stored candles: every candle stored once and settled against the next candle of the same day, entries match the stored analysis, one entry per signal episode, one position at a time, no reversal on the exit candle, daily cap and no forced trades, enabled instruments and writing, time exit, trailing stop only tightens, target and stop for buy and sell, stale price, settings change without a restart, contract checks skip unavailable data, live refused |
-| test_bias_api.py (7) | `/api/bias/*`: paper/replay only (live and other modes refused, trade mode and signal mode not overridable), settings and target need a running engine, report shapes, accuracy tally |
+| test_bias.py (33) | Bias analysis (pure): no look-ahead (appending or changing later candles never changes an earlier row), each analysis candle sees only closed confirmation candles, the 15m candle is exactly its three 5m candles, every indicator alone, every timeframe pair, labels and thresholds, conflict = NEUTRAL, confidence, accuracy table, explanation |
+| test_bias_engine.py (24) | Bias engine replayed on stored candles: every candle stored once and settled against the next candle of the same day, entries match the stored analysis, one entry per signal episode, one position at a time, no reversal on the exit candle, daily cap and no forced trades, enabled instruments and writing, time exit, trailing stop only tightens, target and stop for buy and sell, stale price, settings change without a restart, contract checks skip unavailable data, live refused |
+| test_bias_api.py (8) | `/api/bias/*`: paper/replay only (live and other modes refused, trade mode and signal mode not overridable), settings and target need a running engine, report shapes, accuracy tally |
 | test_privacy.py (8) + 2 in test_live_engine.py | What live mode may show the browser: redacted status, events and alerts, safety information kept, order ids removed, real trades never served while the database keeps them; paper/replay unchanged |
 
 Not covered by an automated test: stopping the engine while a live exit order fails (it now logs an error; checked by reading), prediction mode in the before/after snapshot (covered by `test_live_engine.py`).
@@ -60,5 +60,13 @@ A snapshot script ran real-data backtests (EMA 9/21, 15m and 5m, 1 Oct-12 Nov 20
 ## Validation scripts for the automated engine (not part of the suite)
 `scripts/validate_bias_accuracy.py` (read-only next-candle accuracy over stored candles, by year and by indicator) and `scripts/validate_bias_trades.py` (replays finished sessions through the engine on real premiums; writes only to a scratch database that it drops). Results: [AUTO_TRADING.md](AUTO_TRADING.md#validation-19-nov-2026-real-stored-candles-nothing-fitted).
 
+`scripts/validate_premarket.py` (read-only; rebuilds the pre-market factors that have history for every session since 2022 and compares them with NIFTY's day) and `scripts/research_entries.py` (five-year entry-method research). Results: [PREMARKET.md](PREMARKET.md), [ENTRY_RESEARCH.md](ENTRY_RESEARCH.md).
+
 ## Market-hours verification (not yet done)
 Real market-hours behaviour (the automated engine's 5-minute cadence, open-interest/spread/Greeks checks and live premium stop with Groww connected, 1 s push, premiums LIVE/DELAYED, a real signal producing one alert, reconnect with a live feed) can only be verified during a session. It is listed in [TODO.md](TODO.md); the closed-market checks and the replay/integration tests above are done.
+
+**Pre-market addition (19 Nov):** backend 436 passed (34 new in `test_premarket.py`, 4 in `test_entries.py`); frontend 389 passed (14 new page tests, 1 new settings test), `tsc` and the build clean. Playwright was run only for the new page, navigation and privacy (18 tests): 17 passed first time, and the one failure (a Groww-dependent `/api/bias/analysis` 502 on a cold server) passed alone. The full 124-test Playwright suite was not re-run after adding the page. An old server left on the test port made the first run fail with 404s on the new routes: stop any old server before running Playwright.
+
+**News addition (19 Nov):** backend 480 (the 78 pre-market tests plus smoke and privacy re-run after the change; the full suite was not re-run), frontend 408 passed (19 new), `tsc` and the production build clean. Playwright: the three news tests (1280, 768, 390 px) passed against live feeds. The news analysis is keyword rules and is not validated.
+
+**Continuous automation (20 Nov):** full backend suite 493 passed (28 min), Vitest 426 passed (18 new), `tsc` and the production build clean. New backend tests cover the net profit target (net not gross, buy and sell side, stale price), the 70% threshold (inclusive boundary, replayed days), no re-entry on the exit candle, release after a target hit, repeated sequential trades, pause, phases, daily loss limit, restart recovery and the API defaults.

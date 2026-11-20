@@ -1,5 +1,6 @@
 /** Typed, realistic builders for API payloads. Every builder takes a partial override (deep-merged). */
 import type {
+  PmArticle, PmFactor, PmHistory, PmNewsFeed, PmReport,
   BiasAccuracy, BiasAnalysis, BiasConfig, BiasPrediction, BiasStatus, BiasSummary, BiasTrade, BiasTradeDetail,
   Alert, Bar, BtMeta, BtResult, BtTrade, Dashboard, DataOverview, EngineConfig, Feed, HistSignal, Job, LiveTrade, LotSize, OptionChain,
   OptionsCoverage, PaperAccount, Position, Quote, Recommendation, Research, ResearchCell, RiskCalc, ScalpConfig, ScalpRun, SignalAnalysis,
@@ -274,20 +275,22 @@ export const makeBiasConfig = (o?: DeepPartial<BiasConfig>): BiasConfig => merge
   running: false, settings: null, note: "Weights and thresholds are fixed starting values, not fitted to any result.",
   indicators: INDICATORS.map(([key, label, weight]) => ({ key, label, weight })),
   defaults: {
-    timeframe: 5, bias_confirm_tf: 15, bias_indicators: INDICATORS.map(([k]) => k), bias_min_confidence: 55, bias_trend_thr: 0.25, bias_confirm_thr: 0.2, bias_min_atr_pct: 0.04,
+    timeframe: 5, bias_confirm_tf: 15, bias_indicators: INDICATORS.map(([k]) => k), bias_min_confidence: 70, bias_trend_thr: 0.25, bias_confirm_thr: 0.2, bias_min_atr_pct: 0.04,
     bias_allow: ["BUY_CE", "BUY_PE"], bias_exit_opposite: true, bias_max_hold_min: 0, bias_cooldown_bars: 2, target_rr: 2, trail_pct: 0,
-    trail_activate_pct: 10, sell_risk_pct: 0.5, min_premium: 5, min_oi: 0, max_spread_pct: 5, min_delta: 0.25, risk_pct: 1, daily_risk_pct: 3,
+    trail_activate_pct: 10, sell_risk_pct: 0.5, min_premium: 5, min_oi: 0, max_spread_pct: 5, min_delta: 0.25, premarket_mode: "log", risk_pct: 1, daily_risk_pct: 3,
     max_daily_loss: 5000, max_trades_per_day: 20, max_lots: 10, min_balance: 0, stop_mode: "atr", stop_atr: 1, stop_pct: 30, stop_points: 20,
-    entry_start: "09:30", cutoff: "14:30", exec_mode: "ATM_BUY", lots: 1,
+    entry_start: "09:30", cutoff: "14:30", exec_mode: "ATM_BUY", lots: 1, profit_target_net: 1500,
   },
 }, o);
 
 export const makeBiasStatus = (o?: DeepPartial<BiasStatus>): BiasStatus => merge<BiasStatus>({
   running: true, state: "running", halt_reason: null, trade_mode: "paper", day: DAY, now: at("10:26"), position: null, realised_today: 0,
   events: [{ ts: at("10:25"), level: "info", message: "10:25 BULLISH: signal" }], next_eval: at("10:30"), nifty: { price: 25012.5, ts: at("10:26") },
-  conn_error: null, session_id: 7, config: { bias_min_confidence: 55, trail_pct: 0, max_trades_per_day: 20 },
+  conn_error: null, session_id: 7, config: { bias_min_confidence: 70, profit_target_net: 1500, trail_pct: 0, max_trades_per_day: 20 },
   bias: {
     latest: makeBiasAnalysis(), trades_today: 3, max_trades: 20, remaining_trades: 17, cooldown_until: null,
+    automation: { phase: "ready", label: "Ready for re-entry", detail: "Next analysis at 10:30: enters if the bias confidence is at least 70% and a valid, new signal exists.", paused: false,
+      min_confidence: 70, profit_target_net: 1500, target_hits: 1, trades_today: 3, no_entry_through: null },
     history: [{ bar_close: at("10:25"), close: 25012.5, bias: "BULLISH", confidence: 78, signal: "BUY CE", predicted: "UP", score_5m: 0.38, score_15m: 0.45, outcome: null }],
   },
 }, o);
@@ -320,7 +323,7 @@ export const makeBiasTradeDetail = (o?: DeepPartial<BiasTradeDetail>): BiasTrade
 }, o);
 
 export const makeBiasSummary = (o?: DeepPartial<BiasSummary>): BiasSummary => merge<BiasSummary>({
-  trades: 4, wins: 3, losses: 1, win_rate: 75, net: 1250.5, gross: 1600, open: 1, mode: "paper", note: "An indicator is credited with every trade it supported.",
+  trades: 4, wins: 3, losses: 1, win_rate: 75, net: 1250.5, gross: 1600, open: 1, mode: "paper", target_hits: 1, note: "An indicator is credited with every trade it supported.",
   by_instrument: { "BUY CE": { trades: 3, wins: 2, losses: 1, win_rate: 66.7, net: 900, gross: 1100 } },
   by_exit: { target: { trades: 2, wins: 2, losses: 0, win_rate: 100, net: 1400, gross: 1500 } },
   by_confidence: { "70-85%": { trades: 4, wins: 3, losses: 1, win_rate: 75, net: 1250.5, gross: 1600 } },
@@ -335,4 +338,69 @@ export const makeBiasAccuracy = (): BiasAccuracy => ({
       key, label, timeframe: tf, correct: 510, incorrect: 490, neutral: 100, n: 1000, accuracy: tf === "5m" ? 51 : 54.5,
     }))),
   ],
+});
+
+// ------------------------------------------------------------------ pre-market analysis
+const pmFactor = (key: PmFactor["key"], title: string, score: number, o?: Partial<PmFactor>): PmFactor => ({
+  key, title, score, status: score > 0 ? "BULLISH" : score < 0 ? "BEARISH" : "NEUTRAL", available: true,
+  summary: `${title} summary`, explanation: `${title} rule`, data: [{ label: `${title} value`, value: "1.00", note: "last close" }],
+  asof: "2026-11-19T08:30", source: "Yahoo Finance", delayed: "may lag up to 15 minutes", warnings: [], ...o,
+});
+
+export const makePmReport = (o?: DeepPartial<PmReport>): PmReport => merge<PmReport>({
+  day: "2026-11-19", generated_at: "2026-11-19T08:40:00", total: { total: 3, bias: "BULLISH", available_factors: 4, max: 5 },
+  factors: [
+    pmFactor("global", "Global markets", 1, { news: [{ id: "a1", headline: "Wall Street rallies as Fed signals rate cut", source: "Reuters", link: "https://example.com/a", published: "2026-11-18T22:10", nifty_impact: "bullish", impact_level: "High", relation: "supports" }] }), pmFactor("fii_dii", "FII / DII flows", 0, { status: "UNAVAILABLE", available: false, summary: "Not available: no figures entered for the previous trading day.", asof: null, source: null, delayed: null, warnings: ["NSE does not publish FII/DII data to scripts."] }),
+    pmFactor("crude", "Crude oil", 1), pmFactor("vix", "India VIX", 0), pmFactor("structure", "NIFTY chart & structure", 1, { source: "Stored NIFTY 1-minute candles (Groww)" }),
+  ],
+  conclusion: {
+    direction: "BULLISH", opening: "a flat-to-higher opening", preference: "BUY CE", confidence: 60,
+    confidence_note: "3 of 5 points point the same way (4 of 5 factors had data). Confidence is agreement between factors, not a probability that NIFTY moves that way.",
+    levels: { support: [{ name: "Previous-day low", price: 25141.8 }], resistance: [{ name: "Pivot", price: 25253.5 }], breakout: 25390.7, breakdown: 25141.8, pivot: 25253.5, previous_close: 25228 },
+    risks: ["FII / DII flows data is unavailable, so it earned no point."], action: "This is a lean for the day, not an order. Paper entries still need a completed 5-minute candle signal confirmed by the 15-minute direction.", expiry_today: false,
+  },
+  news: [],
+  events: [{ kind: "calendar", title: "Weekly NIFTY options expiry", basis: "from the stored expiry list" }],
+  warnings: ["Gift Nifty is unavailable, so the opening gap is not estimated from it."], unavailable: { gift_nifty: "Gift Nifty is not published by any free source this app can read." },
+  note: "Pre-market direction is context, not a trade signal.", snapshots: [{ at: "2026-11-19T08:40:00", total: 3, scores: { global: 1 } }], actual: null, outcome: null,
+}, o);
+
+export const makePmHistory = (o?: DeepPartial<PmHistory>): PmHistory => merge<PmHistory>({
+  days: [{ day: "2026-11-18", total: 3, bias: "BULLISH", preference: "BUY CE", confidence: 60, outcome: "CORRECT", paper_trades: 2, paper_net: -450,
+    actual: { open: 25100, high: 25400, low: 25050, close: 25228, prev_close: 25000, change_pct: 0.91, gap_pct: 0.4, direction: "UP", source: "stored candles" } }],
+  accuracy: { days: 1, settled: 1, calls: 1, correct: 1, hit_pct: 100, note: "Too few days to say anything: a coin flip is within ±98 points of 50%." },
+  effectiveness: [{ group: "agreed", trades: 3, wins: 1, win_pct: 33.3, net: -900 }, { group: "opposed", trades: 2, wins: 1, win_pct: 50, net: 120 }],
+}, o);
+
+export const makePmArticle = (o?: Partial<PmArticle>): PmArticle => ({
+  id: "a1", headline: "Wall Street rallies as Fed signals rate cut", summary: "US stocks closed higher as the Federal Reserve hinted at easing.", image: "https://example.com/a.jpg",
+  source: "Reuters", link: "https://example.com/a", published: "2026-11-18T22:10", via: "publisher feed", sentiment: "positive", nifty_impact: "bullish",
+  impact_level: "High", why: "A firm Wall Street usually lifts global risk appetite and NIFTY's opening.", sectors: ["IT & technology"], indices: ["NIFTY IT"],
+  categories: ["us", "global", "central_banks"], topic: "US Market", period: "overnight", is_new: false, is_breaking: false, coverage: 1, related: [], factor: "global",
+  verified: "publisher RSS feed", ...o,
+});
+
+export const makePmFeed = (o?: Partial<PmNewsFeed>): PmNewsFeed => ({
+  now: "2026-11-19T08:45:00", fetched_at: "2026-11-19T08:44:30", status: "live", cached: false,
+  articles: [
+    makePmArticle(),
+    makePmArticle({ id: "a2", headline: "Crude oil slumps on demand fears", summary: null, image: null, source: "Bloomberg", link: "https://example.com/b", published: "2026-11-18T20:00",
+      sentiment: "positive", nifty_impact: "bullish", impact_level: "Medium", categories: ["crude"], topic: "Crude Oil", factor: "crude", sectors: ["Oil & gas"], indices: ["NIFTY 50"],
+      related: [{ source: "Mint", headline: "Oil falls as demand worries grow", link: "https://example.com/b2", published: "2026-11-18T20:30" }], coverage: 2 }),
+    makePmArticle({ id: "a3", headline: "RBI holds repo rate steady in surprise pause", source: "The Economic Times", link: "https://example.com/c", published: "2026-11-19T07:30", period: "today_pre_market", is_new: true,
+      is_breaking: true, categories: ["central_banks", "indian", "breaking"], topic: "RBI / Federal Reserve", sentiment: "neutral", nifty_impact: "neutral", factor: null, sectors: ["Banking & financials"], indices: ["Bank NIFTY"] }),
+    makePmArticle({ id: "a4", headline: "FIIs sell Rs 2,000 crore of Indian shares", source: "Mint", link: "https://example.com/d", published: "2026-11-17T18:00", period: "earlier", sentiment: "negative",
+      nifty_impact: "bearish", impact_level: "Low", categories: ["fii_dii", "indian"], topic: "FII / DII", factor: "fii_dii", sectors: [], indices: ["NIFTY 50"] }),
+  ],
+  events: [{ kind: "calendar", title: "Weekly NIFTY options expiry", basis: "from the stored expiry list" }],
+  categories: [["all", "All News", 4], ["indian", "Indian Stock Market", 2], ["global", "Global Markets", 1], ["us", "US Market", 1], ["asia", "Asian Markets", 0], ["fii_dii", "FII / DII", 1],
+    ["central_banks", "RBI / Federal Reserve", 2], ["crude", "Crude Oil", 1], ["economy", "Economic News", 0], ["nifty", "NIFTY / Bank NIFTY", 0], ["breaking", "Important Breaking News", 1]]
+    .map(([key, label, count]) => ({ key: key as string, label: label as string, count: count as number })),
+  periods: [{ key: "today_session", label: "Today, market hours" }, { key: "today_pre_market", label: "Today, pre-market" }, { key: "overnight", label: "Overnight (since the last close)" },
+    { key: "previous_day", label: "Previous trading day" }, { key: "earlier", label: "Earlier" }],
+  summary: { total: 4, with_summary: 3, with_image: 1, breaking: 1, periods: {}, sentiment: { positive: 2, negative: 1, neutral: 1 } },
+  sources: { publishers: [{ name: "Mint", feeds_ok: 2, feeds: 2, articles: 70 }, { name: "The Economic Times", feeds_ok: 4, feeds: 4, articles: 200 }], searches_ok: 9, searches: 9 },
+  warnings: [], previous_trading_day: "2026-11-18",
+  method: "Sentiment, NIFTY direction, impact level, sectors and the reason it matters come from fixed keyword rules applied to the publisher's headline and summary.",
+  ...o,
 });

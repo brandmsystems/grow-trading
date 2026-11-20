@@ -14,6 +14,7 @@ const Backtest = lazy(() => import("./pages/Backtest"));
 const Compare = lazy(() => import("./pages/Compare"));
 const Scalping = lazy(() => import("./pages/Scalping"));
 const AutoTrading = lazy(() => import("./pages/AutoTrading"));
+const PreMarket = lazy(() => import("./pages/PreMarket"));
 const MarketData = lazy(() => import("./pages/MarketData"));
 const HistoryCharts = lazy(() => import("./pages/HistoryCharts"));
 const Account = lazy(() => import("./pages/Account"));
@@ -34,6 +35,7 @@ export default function App() {
                 <Route path="compare" element={<Compare />} />
                 <Route path="scalping" element={<Scalping />} />
                 <Route path="auto" element={<AutoTrading />} />
+                <Route path="premarket" element={<PreMarket />} />
                 <Route path="data" element={<MarketData />} />
                 <Route path="history" element={<HistoryCharts />} />
                 <Route path="account" element={<Account />} />

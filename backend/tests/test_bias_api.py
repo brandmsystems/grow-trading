@@ -89,3 +89,16 @@ def test_accuracy_tally_counts_calls_neutral_and_flat_correctly():
     m5 = t[("macd", "5m")]           # DOWN vs UP wrong, DOWN vs DOWN right, two with no vote
     assert (m5["correct"], m5["incorrect"], m5["neutral"]) == (1, 1, 2)
     assert t[("rsi", "15m")]["n"] == 0 and t[("rsi", "15m")]["accuracy"] is None      # weak or missing votes make no call
+
+
+def test_continuous_automation_defaults_and_pause_need_a_running_engine(client, monkeypatch):
+    d = client.get("/api/bias/config").get_json()["data"]["defaults"]
+    assert d["bias_min_confidence"] == 70 and d["profit_target_net"] == 1500
+    assert client.post("/api/bias/pause").status_code == 409 and client.post("/api/bias/resume").status_code == 409
+    seen = []
+    monkeypatch.setattr(live_manager, "start", lambda cfg, confirm="", day=None, speed=120: seen.append(cfg) or {"state": "waiting"})
+    client.post("/api/bias/start", json={"config": {"profit_target_net": 2000}})
+    client.post("/api/bias/start", json={})
+    assert seen[0]["profit_target_net"] == 2000 and seen[1]["profit_target_net"] == 1500 and seen[1]["bias_min_confidence"] == 70
+    r = client.post("/api/bias/start", json={"config": {"profit_target_net": -5}})
+    assert r.status_code == 200          # start is mocked here: validation is covered in the engine tests

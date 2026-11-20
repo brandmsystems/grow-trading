@@ -89,6 +89,8 @@ export interface Position {
   // paper risk (paper positions only)
   stop_premium?: number; target_premium?: number | null; max_loss?: number; max_loss_pct?: number | null;
   risk_amount?: number; risk_reward?: number | null; nifty_stop?: number | null; nifty_target?: number | null; stop_method?: string;
+  // automated bias engine: why it was entered
+  entry_reason?: string | null; entry_confidence?: number | null; action?: string | null;
 }
 
 export interface PendingOrder {
@@ -434,21 +436,29 @@ export interface BiasSettings {
   timeframe: number; bias_confirm_tf: number; bias_indicators: string[]; bias_min_confidence: number; bias_trend_thr: number; bias_confirm_thr: number; bias_min_atr_pct: number;
   bias_allow: string[]; bias_exit_opposite: boolean; bias_max_hold_min: number; bias_cooldown_bars: number;
   target_rr: number; trail_pct: number; trail_activate_pct: number; sell_risk_pct: number;
-  min_premium: number; min_oi: number; max_spread_pct: number; min_delta: number;
+  min_premium: number; min_oi: number; max_spread_pct: number; min_delta: number; premarket_mode?: "off" | "log" | "block_opposed";
   risk_pct: number; daily_risk_pct: number; max_daily_loss: number; max_trades_per_day: number; max_lots: number; min_balance: number;
   stop_mode: "atr" | "pct" | "points"; stop_atr: number; stop_pct: number; stop_points: number;
   entry_start: string; cutoff: string; exec_mode: "ITM5_BUY" | "ATM_BUY" | "ATM_SELL"; lots: number;
+  /** Exit one trade when its NET profit (after charges and slippage) reaches this many rupees; 0 = off. */
+  profit_target_net: number;
 }
 export interface BiasConfig {
   defaults: BiasSettings; running: boolean; settings: BiasSettings | null;
   indicators: { key: string; label: string; weight: number }[]; note: string;
 }
 export interface EngineEvent { ts: string; level: string; message: string }
+export type AutomationPhase = "ready" | "holding" | "exiting" | "waiting" | "paused" | "limit" | "halted";
+/** What the continuous automation is doing right now (from the engine). */
+export interface BiasAutomation {
+  phase: AutomationPhase; label: string; detail: string; paused: boolean; min_confidence: number; profit_target_net: number;
+  target_hits: number; trades_today: number; no_entry_through: string | null;
+}
 export interface BiasStatus {
   running: boolean; state?: EngineState; halt_reason?: string | null; trade_mode?: "paper" | "replay"; day?: string | null; now?: string;
   position?: Position | null; realised_today?: number; events?: EngineEvent[]; next_eval?: string | null;
   nifty?: { price: number; ts: string } | null; conn_error?: string | null; session_id?: number | null; config?: Record<string, unknown>;
-  bias?: { latest: BiasAnalysis | null; history: BiasHistoryItem[]; trades_today: number; max_trades: number; remaining_trades: number; cooldown_until: string | null } | null;
+  bias?: { latest: BiasAnalysis | null; history: BiasHistoryItem[]; trades_today: number; max_trades: number; remaining_trades: number; cooldown_until: string | null; automation?: BiasAutomation } | null;
 }
 export interface BiasAnalysisResponse {
   as_of_day: string; live: boolean; analysis: BiasAnalysis; futures: boolean; error: string | null;
@@ -467,8 +477,58 @@ export interface BiasTrade extends LiveTrade {
 }
 export interface BiasGroup { trades: number; wins: number; losses: number; win_rate: number | null; net: number; gross: number }
 export interface BiasSummary extends BiasGroup {
-  open: number; mode: string; note: string;
+  open: number; mode: string; note: string; target_hits?: number;
   by_instrument: Record<string, BiasGroup>; by_exit: Record<string, BiasGroup>;
   by_confidence: Record<string, BiasGroup>; by_indicator: Record<string, BiasGroup>;
 }
 export interface BiasTradeDetail { trade: BiasTrade & { analysis: BiasAnalysis | null }; stop_changes: StopChange[] }
+
+// ------------------------------------------------------------------ pre-market analysis
+export type PmStatus = "BULLISH" | "BEARISH" | "NEUTRAL" | "UNAVAILABLE";
+export interface PmRow { label: string; value: string; note?: string }
+export interface PmFactor {
+  key: "global" | "fii_dii" | "crude" | "vix" | "structure"; title: string; score: number; status: PmStatus; available: boolean;
+  summary: string; explanation: string; data: PmRow[]; asof: string | null; source: string | null; delayed: string | null; warnings: string[];
+  /** Articles that back this factor (each article backs one factor only). Evidence: it never changes the score. */
+  news?: PmEvidence[];
+}
+export type PmDirection = "bullish" | "bearish" | "neutral";
+export type PmLevelName = "High" | "Medium" | "Low";
+export type PmPeriod = "today_session" | "today_pre_market" | "overnight" | "previous_day" | "earlier";
+export interface PmEvidence { id: string; headline: string; source: string; link: string; published: string; nifty_impact: PmDirection; impact_level: PmLevelName; relation: "supports" | "conflicts" | "context" }
+export interface PmRelated { source: string; headline: string; link: string; published: string }
+/** One article (related coverage already combined). Analysis fields come from fixed keyword rules, not from reading the article. */
+export interface PmArticle {
+  id: string; headline: string; summary: string | null; image: string | null; source: string; link: string; published: string; via: string;
+  sentiment: "positive" | "negative" | "neutral"; nifty_impact: PmDirection; impact_level: PmLevelName; why: string;
+  sectors: string[]; indices: string[]; categories: string[]; topic: string; period: PmPeriod; is_new: boolean; is_breaking: boolean;
+  coverage: number; related: PmRelated[]; factor: PmFactor["key"] | null; verified: string;
+}
+export interface PmNewsFeed {
+  now: string; fetched_at: string | null; status: "live" | "stale" | "unavailable"; cached: boolean; articles: PmArticle[]; events: PmEvent[];
+  categories: { key: string; label: string; count: number }[]; periods: { key: PmPeriod; label: string }[];
+  summary: { total: number; with_summary: number; with_image: number; breaking: number; periods: Record<string, number>; sentiment: Record<string, number> };
+  sources: { publishers: { name: string; feeds_ok: number; feeds: number; articles: number }[]; searches_ok: number; searches: number };
+  warnings: string[]; previous_trading_day: string; method: string;
+}
+export interface PmEvent { kind: string; title: string; basis: string }
+export interface PmLevel { name: string; price: number }
+export interface PmLevels { support?: PmLevel[]; resistance?: PmLevel[]; breakout?: number; breakdown?: number; pivot?: number; previous_close?: number }
+export interface PmConclusion {
+  direction: string; opening: string; preference: "BUY CE" | "BUY PE" | "HOLD"; confidence: number; confidence_note: string;
+  levels: PmLevels; risks: string[]; action: string; expiry_today: boolean;
+}
+export interface PmActual { open: number; high: number; low: number; close: number; prev_close: number; change_pct: number; gap_pct: number; direction: "UP" | "DOWN" | "FLAT"; source: string }
+export interface PmReport {
+  day: string; generated_at: string; total: { total: number; bias: string; available_factors: number; max: number };
+  factors: PmFactor[]; conclusion: PmConclusion; news: PmArticle[]; events: PmEvent[]; warnings: string[]; unavailable: Record<string, string>; note: string;
+  snapshots?: { at: string; total: number; scores: Record<string, number> }[]; actual?: PmActual | null; outcome?: string | null; updated_at?: string; changed?: boolean;
+}
+export interface PmReportResponse { day: string; report: PmReport | null; now: string; thresholds: Record<string, number>; unavailable: Record<string, string> }
+export interface PmHistoryDay { day: string; total: number; bias: string; preference: string; confidence: number | null; actual: PmActual | null; outcome: string | null; paper_trades: number; paper_net: number }
+export interface PmHistory {
+  days: PmHistoryDay[];
+  accuracy: { days: number; settled: number; calls: number; correct: number; hit_pct: number | null; note: string };
+  effectiveness: { group: string; trades: number; wins: number; win_pct: number | null; net: number }[];
+}
+export interface PmInput { kind: "fii_dii" | "event"; day?: string; title?: string; fii_net_cash?: number | null; dii_net_cash?: number | null; fii_index_fut_long?: number | null; fii_index_fut_short?: number | null; source?: string }

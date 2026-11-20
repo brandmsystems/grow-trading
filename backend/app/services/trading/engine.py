@@ -113,6 +113,9 @@ class Engine:
         self.bias_history: deque = deque(maxlen=80)
         self._cooldown_until: datetime | None = None
         self._last_entry_signal: datetime | None = None   # signal time of the latest entry today (one entry per signal episode)
+        self.paused = False                       # bias mode: no new entries while paused (open positions are still managed)
+        self._no_entry_through: datetime | None = None    # bias mode: no entry on a candle closing at or before this (the candle that exited)
+        self.target_hits_today = 0                # trades closed today by the net profit target
 
     # ------------------------------------------------------------ logging / persistence
     def log(self, msg: str, level: str = "info"):
@@ -164,6 +167,15 @@ class Engine:
         self.last_fill_today = max(fills) if fills else None
         sigs = [r["signal_ts"] for r in rows if r["signal_ts"] is not None]
         self._last_entry_signal = max(sigs) if sigs else None
+        # Restart recovery for the continuous mode: the candle of the latest exit stays closed to entries, and a net
+        # profit-target exit releases its signal exactly as it did before the restart.
+        self.target_hits_today = sum(1 for r in rows if r["exit_reason"] == "profit_target")
+        self._no_entry_through = None
+        closed = sorted((r for r in rows if r["status"] == "CLOSED" and r["exit_ts"] is not None), key=lambda r: r["exit_ts"])
+        if closed and self.cfg.signal_mode == "bias":
+            self._no_entry_through = self._candle_close_after(pd.Timestamp(closed[-1]["exit_ts"]).to_pydatetime().replace(tzinfo=None))
+            if closed[-1]["exit_reason"] == "profit_target" and self.cfg.profit_target_net > 0:
+                self._last_entry_signal = None
         open_rows = [r for r in rows if r["status"] == "OPEN"]
         self.position = None
         if open_rows:
@@ -237,6 +249,24 @@ class Engine:
                 pass
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=40)
+
+    def pause(self) -> None:
+        """Bias mode: stop taking new entries. The analysis keeps running and an open position is still managed
+        (stop, profit target, 15:00 square-off); nothing is closed by pausing."""
+        with self._lock:
+            if self.cfg.signal_mode != "bias":
+                raise ValueError("Pause is available for the automated bias engine only.")
+            if not self.paused:
+                self.paused = True
+                self.log("Automation paused: no new entries" + (" (the open position is still managed)" if self.position else ""))
+
+    def resume(self) -> None:
+        with self._lock:
+            if self.cfg.signal_mode != "bias":
+                raise ValueError("Resume is available for the automated bias engine only.")
+            if self.paused:
+                self.paused = False
+                self.log("Automation resumed: the next closed candle can open a trade")
 
     def square_off_now(self):
         with self._lock:
@@ -319,6 +349,10 @@ class Engine:
     def _last_bar_close_at_or_before(self, now: datetime) -> datetime:
         closes = [c for c in self._bar_closes(now.date()) if c <= now]
         return closes[-1] if closes else datetime.combine(now.date(), MARKET_OPEN)
+
+    def _candle_close_after(self, ts: datetime) -> datetime | None:
+        """Close time of the candle that contains `ts` (the first close strictly after it)."""
+        return next((c for c in self._bar_closes(ts.date()) if c > ts), None)
 
     def _next_bar_close(self, after: datetime | None) -> datetime | None:
         day = self.day
@@ -585,6 +619,14 @@ class Engine:
         if not c:
             self.log(f"Contract NIFTY {expiry} {int(strike)} {typ} not found; entry skipped", "error")
             return
+        pm = self._premarket(leg.direction)
+        if pm and pm["agrees"] is False and self.cfg.premarket_mode == "block_opposed":
+            self.log(f"{dirn} signal at {leg.entry_ts:%H:%M}: NO TRADE. The pre-market bias ({pm['bias']}, {pm['total']:+d}) opposes it "
+                     f"(setting: block opposed trades)", "warn")
+            self._hold(leg, f"pre-market bias {pm['bias']} opposes this trade")
+            return
+        if pm:
+            refs = {**(refs or {}), "analysis": {**((refs or {}).get("analysis") or {}), "premarket": pm}}
         if self.cfg.signal_mode == "bias":
             why = self._bias_contract_check(c, side, refs)
             if why:
@@ -609,6 +651,18 @@ class Engine:
             self._propose(now, leg, c, side, qty, strike, typ, expiry, refs)
             return
         self._execute_entry(leg, c, side, qty, strike, typ, expiry, refs)
+
+    def _premarket(self, direction: int) -> dict | None:
+        """The stored pre-market report's view of this trade (agrees / opposes / no view), or None. Read-only information:
+        it never creates an entry, and it blocks one only when premarket_mode is block_opposed."""
+        if self.cfg.premarket_mode == "off" or self.cfg.trade_mode == "live":
+            return None
+        try:
+            from app.services.premarket import service as premarket
+            return premarket.stamp(self.day, direction, self.dbe)
+        except Exception as exc:
+            self.log(f"Pre-market stamp unavailable: {exc}", "warn")
+            return None
 
     # ------------------------------------------------------------ paper risk management
     def _paper_stop(self, c, side: str, premium: float) -> tuple[float | None, float | None, str, str | None]:
@@ -806,6 +860,13 @@ class Engine:
         if self.position:
             self.log(f"{bar_close:%H:%M} {expl['signal']} candidate ignored: position already open (holding)")
             return
+        if self.paused:
+            self.log(f"{bar_close:%H:%M} {expl['signal']} candidate not traded: automation is paused (no new entries)")
+            return
+        if self._no_entry_through and bar_close <= self._no_entry_through:
+            self.log(f"{bar_close:%H:%M} {expl['signal']} candidate skipped: this candle contains the last exit; "
+                     f"the next entry needs a later candle")
+            return
         if not (_hm(cfg.entry_start) <= t <= _hm(cfg.cutoff)) or t >= st.SQUARE_OFF:
             self.log(f"{bar_close:%H:%M} {expl['signal']} candidate outside the entry window "
                      f"{cfg.entry_start}-{cfg.cutoff}: no trade")
@@ -925,6 +986,13 @@ class Engine:
             return
         if not self.paper and p.get("stop_premium") is None and not p.get("levels_set"):
             self._bias_levels_from_fill(p)
+        if cfg.profit_target_net > 0:
+            # net of slippage, brokerage, STT and the other charges, valued at the current premium (the exit fill)
+            net = self._pnl(p, ltp)["net"]
+            if net >= cfg.profit_target_net:
+                self.log(f"Net profit {net:+,.2f} reached the ₹{cfg.profit_target_net:,.0f} target (premium {ltp:.2f}): exiting")
+                self._exit("profit_target")
+                return
         entry = float(p["entry_price"])
         best = p["best"] = (max if buy else min)(p.get("best", entry), ltp)
         move_pct = (best - entry) / entry * 100 * (1 if buy else -1)
@@ -965,7 +1033,7 @@ class Engine:
         "bias_exit_opposite", "bias_max_hold_min", "bias_cooldown_bars", "target_rr", "trail_pct", "trail_activate_pct",
         "sell_risk_pct", "min_premium", "min_oi", "max_spread_pct", "min_delta", "risk_pct", "daily_risk_pct",
         "max_daily_loss", "max_trades_per_day", "max_lots", "min_balance", "stop_mode", "stop_atr", "stop_pct",
-        "stop_points", "entry_start", "cutoff", "exec_mode", "lots"})
+        "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net"})
 
     def update_settings(self, changes: dict) -> dict:
         """Apply new bias-mode settings to the running engine (no restart). The whole new configuration is validated
@@ -1187,6 +1255,16 @@ class Engine:
         self.position = None
         self.exit_failures = 0
         self.log(f"EXITED {p['contract'].trading_symbol} @ {fill['price']:.2f} ({reason}) · net {pnl['net']:+,.2f}")
+        if self.cfg.signal_mode == "bias":
+            # Never re-enter on the candle that exited: the next entry needs a candle that opened after this exit.
+            self._no_entry_through = self._candle_close_after(pd.Timestamp(fill["ts"]).to_pydatetime().replace(tzinfo=None))
+            if reason == "profit_target":
+                self.target_hits_today += 1
+                if self.cfg.profit_target_net > 0:
+                    self._last_entry_signal = None      # a net profit-target exit releases the signal: the next candle may re-enter
+                self.log(f"Profit target hit: net {pnl['net']:+,.2f} (target ₹{self.cfg.profit_target_net:,.0f}). "
+                         f"Next entry: a new analysis on a candle closing after {self._no_entry_through:%H:%M}"
+                         if self._no_entry_through else f"Profit target hit: net {pnl['net']:+,.2f}")
 
     def _pnl(self, p: dict, exit_price: float) -> dict:
         if self.broker.models_slippage:
@@ -1238,6 +1316,46 @@ class Engine:
         self.log(reason, "error" if error else "warn")
 
     # ------------------------------------------------------------ status for UI
+    def _automation(self, nxt: datetime | None) -> dict:
+        """What the continuous paper automation is doing right now, in plain words (bias mode, caller holds the lock)."""
+        cfg, now = self.cfg, self.market.now()
+        later = next((c for c in self._bar_closes(self.day) if self._no_entry_through and c > self._no_entry_through), None) if self.day else None
+        if self.state in ("halted", "error"):
+            phase, detail = "halted", self.halt_reason or "The engine is halted: no new entries."
+        elif self.position:
+            p = self.position
+            if self.exit_failures or p.get("pending_reason") or p.get("exiting"):
+                phase, detail = "exiting", "Closing the position; an exit is being retried or confirmed."
+            else:
+                phase = "holding"
+                tgt = f" until the net profit reaches ₹{cfg.profit_target_net:,.0f}" if cfg.profit_target_net > 0 else ""
+                detail = f"Holding the open paper position{tgt}, the stop-loss or the 15:00 square-off."
+        elif self.paused:
+            phase, detail = "paused", "Paused: the analysis keeps running but no new entry is taken."
+        elif now.weekday() >= 5 or now.time() < MARKET_OPEN or now.time() >= MARKET_CLOSE:
+            phase, detail = "waiting", "Market closed: waiting for the next session."
+        elif self.trades_today >= cfg.max_trades_per_day:
+            phase, detail = "limit", f"Daily trade limit ({cfg.max_trades_per_day}) reached: no new entries today."
+        elif not (_hm(cfg.entry_start) <= now.time() <= _hm(cfg.cutoff)):
+            phase, detail = "waiting", f"Outside the entry window {cfg.entry_start}-{cfg.cutoff}: no new entries."
+        elif self._no_entry_through and nxt is not None and nxt <= self._no_entry_through:
+            phase = "waiting"
+            detail = (f"Waiting for a new candle after the last exit (the {self._no_entry_through:%H:%M} candle contains it); "
+                      f"earliest next entry on the {later:%H:%M} candle." if later else "No further candle today.")
+        elif self._cooldown_until and nxt is not None and nxt < self._cooldown_until:
+            phase, detail = "waiting", f"Cooling down after an opposite-signal exit until {self._cooldown_until:%H:%M}."
+        else:
+            phase = "ready"
+            detail = (f"Next analysis at {nxt:%H:%M}: enters if the bias confidence is at least {cfg.bias_min_confidence:g}% "
+                      f"and a valid, new signal exists." if nxt else "No further candle today.")
+        labels = {"halted": "Halted", "exiting": "Exiting", "holding": "Holding a position", "paused": "Paused",
+                  "limit": "Daily limit reached", "waiting": "Waiting",
+                  "ready": "Ready for re-entry" if self.trades_today else "Ready for entry"}
+        return {"phase": phase, "label": labels[phase], "detail": detail, "paused": self.paused,
+                "min_confidence": cfg.bias_min_confidence, "profit_target_net": cfg.profit_target_net,
+                "target_hits": self.target_hits_today, "trades_today": self.trades_today,
+                "no_entry_through": self._no_entry_through.isoformat() if self._no_entry_through else None}
+
     def status(self) -> dict:
         with self._lock:
             pos = None
@@ -1251,6 +1369,8 @@ class Engine:
                        "entry_price": p["entry_price"], "entry_ts": pd.Timestamp(p["entry_ts"]).isoformat(),
                        "ltp": ltp, "mtm": self._pnl(p, ltp)["net"] if ltp else None,
                        "exit_failures": self.exit_failures, "score": p.get("score"),
+                       "entry_reason": (p.get("analysis") or {}).get("summary"), "entry_confidence": p.get("confidence"),
+                       "action": p.get("action"),
                        "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref"),
                        **stops.position_levels(p)}
             pend = None
@@ -1275,6 +1395,7 @@ class Engine:
                 **({"bias": {"latest": self.bias_state, "history": list(self.bias_history)[:60],
                              "trades_today": self.trades_today, "max_trades": self.cfg.max_trades_per_day,
                              "remaining_trades": max(0, self.cfg.max_trades_per_day - self.trades_today),
-                             "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None}}
+                             "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None,
+                             "automation": self._automation(nxt)}}
                    if self.cfg.signal_mode == "bias" else {}),
             })

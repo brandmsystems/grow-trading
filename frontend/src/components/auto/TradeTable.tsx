@@ -10,7 +10,7 @@ import { Decision, RiskRows } from "../trading/RiskManagement";
 import { IndicatorTable } from "./IndicatorTable";
 
 const REASON: Record<string, string> = {
-  opposite_signal: "analysis turned the other way", stop_loss: "stop-loss", target: "target", time_exit: "holding-time limit",
+  opposite_signal: "analysis turned the other way", stop_loss: "stop-loss", target: "target", profit_target: "net profit target", time_exit: "holding-time limit",
   square_off: "15:00 square-off", daily_loss_limit: "daily loss limit", manual_stop: "engine stopped", manual_square_off: "closed manually",
 };
 

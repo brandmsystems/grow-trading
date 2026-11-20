@@ -7,7 +7,7 @@ import { Card, Pill, Stat } from "../common/Card";
 import { Button, inputCls } from "../common/Controls";
 
 /** The open paper position: entry, stop, target, P&L, with manual close and stop/target adjustment. */
-export function PositionCard({ p, editable, onChanged }: { p: Position | null; editable: boolean; onChanged: () => void }) {
+export function PositionCard({ p, editable, onChanged, profitTarget = 0 }: { p: Position | null; editable: boolean; onChanged: () => void; profitTarget?: number }) {
   const [stop, setStop] = useState("");
   const [target, setTarget] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -34,7 +34,9 @@ export function PositionCard({ p, editable, onChanged }: { p: Position | null; e
             <Stat label="Target" value={p.target_premium != null ? `₹${num(p.target_premium)}` : "—"} className="text-gain" />
             <Stat label="Max loss at entry" value={p.max_loss != null ? inr(-p.max_loss, false, 0) : "—"} />
             <Stat label="Risk : reward" value={p.risk_reward ? `1 : ${num(p.risk_reward, 1)}` : "—"} />
+            {profitTarget > 0 && <Stat label="Net profit target" value={inr(profitTarget, false, 0)} sub={p.mtm != null ? `${Math.max(0, Math.round((p.mtm / profitTarget) * 100))}% reached` : undefined} />}
           </div>
+          {p.entry_reason && <p className="text-xs text-slate-600 dark:text-slate-400" data-testid="entry-reason"><b>Why it was entered:</b> {p.entry_reason}{p.entry_confidence != null ? ` (agreement ${Math.round(p.entry_confidence)}%)` : ""}</p>}
           {editable && (
             <div className="flex flex-wrap items-end gap-2">
               <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-400">New stop ₹

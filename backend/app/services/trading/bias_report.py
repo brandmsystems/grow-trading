@@ -165,6 +165,7 @@ def summary(mode: str | None, day: str | None, session: int | None = None) -> di
             by_ind.setdefault(s.rsplit(" (", 1)[0], []).append(r)
     open_n = sum(1 for r in rows if r["status"] == "OPEN")
     return {**agg(closed), "open": open_n, "mode": m,
+            "target_hits": len(by_exit.get("profit_target", [])),
             "by_instrument": {k: agg(v) for k, v in by_instr.items()},
             "by_exit": {k: agg(v) for k, v in by_exit.items()},
             "by_confidence": {k: agg(v) for k, v in sorted(by_conf.items())},

@@ -53,6 +53,7 @@
 | GET | `/api/bias/status` | Engine state, latest analysis (bias, confidence, trends, prediction, every indicator's votes), recent history, position, daily counters, events |
 | GET | `/api/bias/analysis` | The bias now (or at the last close) from stored and live candles, with or without the engine running (cached 15 s) |
 | POST | `/api/bias/start` | Body `{"trade_mode": "paper"\|"replay", "config"?, "replay_day"?, "replay_speed"?}`. Anything else is a 400; the engine refuses live mode, so no real order is possible |
+| POST | `/api/bias/pause`, `/api/bias/resume` | Stop / allow new entries; an open position is still managed. 409 when the engine is not running. `bias.automation` in the status says what the engine is doing (`phase`, `label`, `detail`, `paused`, `target_hits`, ...) |
 | POST | `/api/bias/settings` | Change the running engine's settings without a restart. The whole configuration is validated first; a bad value changes nothing. `timeframe` cannot change while running |
 | POST | `/api/paper/position/target` | Body `{"target"}`: change the open paper position's target premium (must stay on the profit side of the current premium) |
 | GET | `/api/bias/predictions?day=&mode=&limit=&session=` | Stored candle analyses with the prediction and, once known, the actual next-candle result, newest first |
@@ -124,3 +125,14 @@ Path `/socket.io`, WebSocket transport, served by the same Flask process (`socke
 - Change detection ignores clock-only fields (`now`, `age_sec`, `computed_at`...). Every event has a per-room `seq`; the client drops anything not newer.
 - Socket.IO ping every 10 s (timeout 10 s). The client treats no event for `heartbeat_stale_sec` (15 s) as stale.
 - When disconnected or stale, the client falls back to REST polling; it reconnects automatically (1–10 s backoff) and subscribes again.
+
+## Pre-market analysis (`api/premarket.py`)
+Information only; nothing here places an order. Details: [PREMARKET.md](PREMARKET.md).
+
+| Route | Purpose |
+|---|---|
+| GET `/api/premarket/report?day=` | The stored report of a day (default today) or `report: null`, thresholds, unavailable sources |
+| GET `/api/premarket/news?refresh=` | Live news: analysed articles (summary, image, source, time, sentiment, NIFTY direction, impact level, why, sectors, indices, categories, period, related coverage, original link), category counts, today's events, per-source state, `status` live / stale / unavailable and the fetch time. `refresh=1` skips the two-minute cache |
+| POST `/api/premarket/refresh` | Fetch outside data again and recalculate today's report |
+| POST `/api/premarket/input` | `{kind: "fii_dii", day, fii_net_cash, dii_net_cash, fii_index_fut_long, fii_index_fut_short, source}` (day must be before today) or `{kind: "event", title}`; recalculates at once |
+| GET `/api/premarket/history` | Stored days with the actual NIFTY day, outcome, paper result, accuracy so far, and paper trades grouped by whether the bias agreed |

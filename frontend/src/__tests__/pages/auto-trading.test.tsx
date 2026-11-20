@@ -230,6 +230,17 @@ describe("Automated Paper Trading page, engine running", () => {
     expect(api.callsTo("POST", "/api/live/stop")).toHaveLength(0);
   });
 
+  it("lets the pre-market bias be logged, used to skip opposed trades, or ignored, applied without a restart", async () => {
+    const api = withEngine();
+    const { user } = page(api);
+    const sel = await screen.findByLabelText("Pre-market bias");
+    expect(sel).toHaveValue("log");
+    await user.selectOptions(sel, "block_opposed");
+    await user.click(screen.getByRole("button", { name: "Apply to running engine" }));
+    await waitFor(() => expect(api.callsTo("POST", "/api/bias/settings")).toHaveLength(1));
+    expect(api.callsTo("POST", "/api/bias/settings")[0].body).toMatchObject({ premarket_mode: "block_opposed" });
+  });
+
   it("shows the engine's refusal of a bad setting", async () => {
     const api = withEngine().on("POST", "/api/bias/settings", () => fail("bias min confidence must be between 0 and 100"));
     const { user } = page(api);
@@ -297,5 +308,128 @@ describe("trade detail data", () => {
     const d = makeBiasTradeDetail();
     expect(d.trade.analysis?.contract_checks?.map((c) => c.ok)).toEqual([true, null, false]);
     expect(d.stop_changes.map((s) => s.source)).toEqual(["entry", "trail"]);
+  });
+});
+
+
+describe("continuous automation: threshold, net profit target, phases, pause", () => {
+  const withEngine = (extra = {}, trades: ReturnType<typeof makeBiasTrade>[] = []) => {
+    const api = running(mockApi(), extra);
+    api.on("GET", "/api/bias/summary", makeBiasSummary());
+    api.on("GET", "/api/bias/trades", trades);
+    return api;
+  };
+  const phase = (label: string, detail: string, over = {}) => ({ bias: { automation: { phase: "waiting", label, detail, ...over } } });
+
+  it("defaults to a 70% Market Bias threshold and a ₹1,500 net profit target, and sends both on start", async () => {
+    const api = mockApi();
+    const { user } = page(api);
+    expect(await screen.findByLabelText("Market Bias threshold")).toHaveValue(70);
+    expect(screen.getByLabelText("Net profit target per trade")).toHaveValue(1500);
+    expect(screen.getByText("Not running")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    expect(screen.getByText(/per trade, after brokerage, taxes and slippage; it is not a daily target/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Start paper trading/ }));
+    await waitFor(() => expect(api.callsTo("POST", "/api/bias/start")).toHaveLength(1));
+    expect((api.callsTo("POST", "/api/bias/start")[0].body as { config: Record<string, unknown> }).config).toMatchObject({ bias_min_confidence: 70, profit_target_net: 1500 });
+  });
+
+  it("starts with an edited threshold and target", async () => {
+    const api = mockApi();
+    const { user } = page(api);
+    fireEvent.change(await screen.findByLabelText("Market Bias threshold"), { target: { value: "75" } });
+    fireEvent.change(screen.getByLabelText("Net profit target per trade"), { target: { value: "2000" } });
+    await user.click(screen.getByRole("button", { name: /Start paper trading/ }));
+    await waitFor(() => expect(api.callsTo("POST", "/api/bias/start")).toHaveLength(1));
+    expect((api.callsTo("POST", "/api/bias/start")[0].body as { config: Record<string, unknown> }).config).toMatchObject({ bias_min_confidence: 75, profit_target_net: 2000 });
+  });
+
+  it("takes the new 70% default over a 55% saved before this feature existed, but keeps a deliberate later choice", async () => {
+    localStorage.setItem("gt.auto.settings", JSON.stringify({ bias_min_confidence: 55 }));
+    page();
+    expect(await screen.findByLabelText("Market Bias threshold")).toHaveValue(70);
+  });
+
+  it("keeps a threshold saved after this feature existed", async () => {
+    localStorage.setItem("gt.auto.settings", JSON.stringify({ bias_min_confidence: 80, profit_target_net: 1000 }));
+    page();
+    expect(await screen.findByLabelText("Market Bias threshold")).toHaveValue(80);
+    expect(screen.getByLabelText("Net profit target per trade")).toHaveValue(1000);
+  });
+
+  it("shows the current bias against the threshold and says whether it is eligible", async () => {
+    page(withEngine());
+    expect(await screen.findByTestId("automation-bias")).toHaveTextContent(/BULLISH.*78%.*minimum 70%.*eligible for BUY CE/);
+  });
+
+  it("says a bias below the threshold gets no entry", async () => {
+    page(withEngine({ bias: { latest: makeBiasAnalysis({ confidence: 62, signal: "HOLD", direction: 0 }) } }));
+    expect(await screen.findByTestId("automation-bias")).toHaveTextContent(/62%.*minimum 70%.*below the threshold or no confirmed signal: no entry/);
+  });
+
+  it("says what the engine is doing: ready for re-entry, waiting, holding, exiting, paused, limit, halted", async () => {
+    page(withEngine());
+    expect(await screen.findByTestId("automation-phase")).toHaveTextContent(/Ready for re-entry.*at least 70%/);
+  });
+
+  it.each([
+    ["holding", "Holding a position", "Holding the open paper position until the net profit reaches ₹1,500"],
+    ["exiting", "Exiting", "Closing the position; an exit is being retried"],
+    ["waiting", "Waiting", "Waiting for a new candle after the last exit (the 11:10 candle contains it); earliest next entry on the 11:15 candle."],
+    ["paused", "Paused", "Paused: the analysis keeps running but no new entry is taken."],
+    ["limit", "Daily limit reached", "Daily trade limit (20) reached: no new entries today."],
+    ["halted", "Halted", "Daily loss limit reached: no more trades today"],
+  ])("shows the %s phase", async (ph, label, detail) => {
+    page(withEngine(phase(label, detail, { phase: ph, paused: ph === "paused" })));
+    await waitFor(() => expect(screen.getByTestId("automation-phase")).toHaveTextContent(label));
+    expect(screen.getByTestId("automation-phase")).toHaveTextContent(detail.slice(0, 30));
+  });
+
+  it("pauses and resumes automation without stopping the engine", async () => {
+    const api = withEngine().on("POST", "/api/bias/pause", { paused: true }).on("POST", "/api/bias/resume", { paused: false });
+    const { user } = page(api);
+    await user.click(await screen.findByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(api.callsTo("POST", "/api/bias/pause")).toHaveLength(1));
+    expect(api.callsTo("POST", "/api/live/stop")).toHaveLength(0);
+    expect(api.callsTo("POST", "/api/bias/resume")).toHaveLength(0);
+  });
+
+  it("resumes a paused automation", async () => {
+    const api = withEngine(phase("Paused", "Paused: no new entry", { phase: "paused", paused: true })).on("POST", "/api/bias/resume", { paused: false });
+    const { user } = page(api);
+    await user.click(await screen.findByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(api.callsTo("POST", "/api/bias/resume")).toHaveLength(1));
+    expect(api.callsTo("POST", "/api/bias/pause")).toHaveLength(0);
+  });
+
+  it("applies a changed target and threshold to the running engine at once", async () => {
+    const api = withEngine();
+    const { user } = page(api);
+    fireEvent.change(await screen.findByLabelText("Net profit target per trade"), { target: { value: "1800" } });
+    fireEvent.change(screen.getByLabelText("Market Bias threshold"), { target: { value: "74" } });
+    await user.click(screen.getByRole("button", { name: "Apply threshold & target" }));
+    await waitFor(() => expect(api.callsTo("POST", "/api/bias/settings")).toHaveLength(1));
+    const sent = api.callsTo("POST", "/api/bias/settings")[0].body as Record<string, unknown>;
+    expect(sent).toMatchObject({ profit_target_net: 1800, bias_min_confidence: 74 });
+    expect(api.callsTo("POST", "/api/bias/start")).toHaveLength(0);
+  });
+
+  it("shows the open position with its entry reason, CE/PE, entry price, live paper P&L and progress to the target", async () => {
+    const pos = makePosition({ entry_reason: "BULLISH: 15m bullish (0.45), 5m bullish (0.38); BUY CE candidate", entry_confidence: 78, mtm: 750, entry_price: 120 });
+    page(withEngine({ position: pos }));
+    expect(await screen.findByTestId("entry-reason")).toHaveTextContent(/Why it was entered:.*15m bullish.*agreement 78%/);
+    const card = screen.getByText("Active position").closest("section")!;
+    expect(within(card).getByText("BUY CE")).toBeInTheDocument();
+    expect(within(card).getByText("₹120.00")).toBeInTheDocument();
+    expect(within(card).getByText("Open P&L (net)").parentElement).toHaveTextContent("750");
+    expect(within(card).getByText("Net profit target").parentElement).toHaveTextContent(/₹1,500.*50% reached/);
+  });
+
+  it("shows completed trades, profit target hits, total trades, net P&L and the last exit reason", async () => {
+    const t = makeBiasTrade({ exit_reason: "profit_target", net: 1534.2, exit_ts: "2026-11-18T10:47:00" });
+    page(withEngine({}, [t]));
+    const stats = await screen.findByTestId("automation-stats");
+    await waitFor(() => expect(stats).toHaveTextContent(/Completed trades4.*Profit target hits1.*Total trades today3.*Net paper P&L/));
+    expect(await screen.findByTestId("last-exit")).toHaveTextContent(/Last exit 10:47: net profit target · net.*1,534/);
   });
 });

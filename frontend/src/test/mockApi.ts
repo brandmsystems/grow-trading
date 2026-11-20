@@ -5,7 +5,7 @@
 import { vi } from "vitest";
 import {
   makeBars, makeBtResult, makeScalpConfig, makeAccount, makeBtMeta, makeDashboard, makeDataOverview, makeJob, makeLotSizes, makeOptionChain, makeOptionsCoverage, makeResearch, makeRisk,
-  makeScalpRun, makeSignalAnalysis, makeBiasAccuracy, makeBiasAnalysis, makeBiasConfig, makeBiasSummary, makeBiasTradeDetail,
+  makeScalpRun, makeSignalAnalysis, makeBiasAccuracy, makeBiasAnalysis, makeBiasConfig, makeBiasSummary, makeBiasTradeDetail, makePmFeed, makePmHistory, makePmReport,
 } from "./fixtures";
 
 export interface ApiRequest { method: string; path: string; query: URLSearchParams; body: Record<string, unknown> | undefined }
@@ -72,7 +72,14 @@ export function defaultRoutes(): Route[] {
     r("GET", /^\/api\/bias\/trade\//, () => makeBiasTradeDetail()),
     r("POST", "/api/bias/start", () => ({})),
     r("POST", "/api/bias/settings", () => ({ changed: [] })),
+    r("POST", "/api/bias/pause", () => ({ paused: true })),
+    r("POST", "/api/bias/resume", () => ({ paused: false })),
     r("POST", "/api/paper/position/target", () => ({ old_target: 140, new_target: 150 })),
+    r("GET", "/api/premarket/report", () => ({ day: "2026-11-19", report: makePmReport(), now: "2026-11-19T08:45:00", thresholds: {}, unavailable: {} })),
+    r("GET", "/api/premarket/news", () => makePmFeed()),
+    r("GET", "/api/premarket/history", () => makePmHistory()),
+    r("POST", "/api/premarket/refresh", () => ({ report: makePmReport() })),
+    r("POST", "/api/premarket/input", () => ({ report: makePmReport() })),
     r("GET", /^\/api\/jobs\//, () => makeJob()),
   ];
 }
