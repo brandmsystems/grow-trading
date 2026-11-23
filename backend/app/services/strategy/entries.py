@@ -43,20 +43,27 @@ METHODS: dict[str, str] = {
 }
 
 
-def frame(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None) -> pd.DataFrame:
-    """Closed 5-minute bars with indicators, the latest closed 15-minute trend and the volume ratio."""
-    b = bias.tf_bars(spot1m, fut1m, 5)
-    if b.empty:
-        return b
-    b15 = bias.tf_bars(spot1m, fut1m, 15)
-    if not b15.empty:
-        t = np.where((b15["ema20"] > b15["ema50"]) & (b15["close"] > b15["ema50"]), 1,
-                     np.where((b15["ema20"] < b15["ema50"]) & (b15["close"] < b15["ema50"]), -1, 0))
-        h = pd.DataFrame({"close_ts": b15["close_ts"], "trend15": t}).sort_values("close_ts")
+def attach_trend(b: pd.DataFrame, higher: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Add the latest CLOSED higher-timeframe trend to each bar (backward as-of on close time): +1 when EMA 20 > EMA 50 and the
+    close is above EMA 50, -1 for the mirror, else 0. Bars before any higher bar closed get 0."""
+    if not higher.empty:
+        t = np.where((higher["ema20"] > higher["ema50"]) & (higher["close"] > higher["ema50"]), 1,
+                     np.where((higher["ema20"] < higher["ema50"]) & (higher["close"] < higher["ema50"]), -1, 0))
+        h = pd.DataFrame({"close_ts": higher["close_ts"], col: t}).sort_values("close_ts")
         b = pd.merge_asof(b.sort_values("close_ts"), h, on="close_ts", direction="backward")
     else:
-        b["trend15"] = 0
-    b["trend15"] = b["trend15"].fillna(0).astype(int)
+        b[col] = 0
+    b[col] = b[col].fillna(0).astype(int)
+    return b
+
+
+def frame(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None, tf: int = 5, confirm: int = 15, ip: "bias.IndParams | None" = None) -> pd.DataFrame:
+    """Closed `tf`-minute bars (default 5) with indicators, the latest closed `confirm`-minute trend (default 15, EMA 20/50;
+    column `trend15` whatever the timeframe) and the volume ratio."""
+    b = bias.tf_bars(spot1m, fut1m, tf, ip)
+    if b.empty:
+        return b
+    b = attach_trend(b, bias.tf_bars(spot1m, fut1m, confirm, ip), "trend15")
     b["vol_ratio"] = b["fut_volume"] / b["vol_avg20"].where(b["vol_avg20"] > 0)
     b["body"] = (b["close"] - b["open"]).abs()
     return b.reset_index(drop=True)
@@ -84,6 +91,15 @@ def _cooldown(sig: pd.Series, day: pd.Series, bars: int = COOLDOWN_BARS) -> pd.S
             out[i] = v[i]
             last, last_day = i, dd[i]
     return pd.Series(out, index=sig.index)
+
+
+def vwap_geometry(f: pd.DataFrame):
+    """(distance of the futures close from the futures VWAP, was far above it in the last 6 bars, was far below it,
+    is within 0.25 ATR of it now). Shared by the VWAP retest method here and the confluence strategy; closed bars only."""
+    a = f["atr"]
+    dist = f["fut_close"] - f["fut_vwap"]
+    far_up, far_dn = dist.shift(1).rolling(6).max() > 0.75 * a, dist.shift(1).rolling(6).min() < -0.75 * a
+    return dist, far_up, far_dn, dist.abs() <= 0.25 * a
 
 
 def signals(f: pd.DataFrame, cooldown: bool = True) -> pd.DataFrame:
@@ -133,9 +149,7 @@ def signals(f: pd.DataFrame, cooldown: bool = True) -> pd.DataFrame:
         - ((c.shift(1) > f["bb_up"].shift(1)) & (c < f["bb_up"]) & dn_c).astype(int)
 
     out["vwap_breakout"] = _flip(vside)
-    dist = (f["fut_close"] - f["fut_vwap"])
-    far_up, far_dn = dist.shift(1).rolling(6).max() > 0.75 * a, dist.shift(1).rolling(6).min() < -0.75 * a
-    near = dist.abs() <= 0.25 * a
+    dist, far_up, far_dn, near = vwap_geometry(f)
     out["vwap_retest"] = (far_up & near & (dist >= -0.25 * a) & up_c & (t15 > 0)).astype(int) \
         - (far_dn & near & (dist <= 0.25 * a) & dn_c & (t15 < 0)).astype(int)
 

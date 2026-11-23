@@ -4,8 +4,8 @@
  */
 import { vi } from "vitest";
 import {
-  makeBars, makeBtResult, makeScalpConfig, makeAccount, makeBtMeta, makeDashboard, makeDataOverview, makeJob, makeLotSizes, makeOptionChain, makeOptionsCoverage, makeResearch, makeRisk,
-  makeScalpRun, makeSignalAnalysis, makeBiasAccuracy, makeBiasAnalysis, makeBiasConfig, makeBiasSummary, makeBiasTradeDetail, makePmFeed, makePmHistory, makePmReport,
+  makeBars, makeBtResult, makeScalpConfig, makeAccount, makeBtMeta, makeDailyRange, makeDashboard, makeDataOverview, makeJob, makeLotSizes, makeOptionChain, makeOptionsCoverage, makeResearch, makeRisk,
+  makeScalpRun, makeSignalAnalysis, makeBiasAccuracy, makeBiasAnalysis, makeBiasConfig, makeBiasSummary, makeBiasTradeDetail, makePmFeed, makePmHistory, makePmReport, makeTsState, makeTsSummary,
 } from "./fixtures";
 
 export interface ApiRequest { method: string; path: string; query: URLSearchParams; body: Record<string, unknown> | undefined }
@@ -20,7 +20,7 @@ const isWire = (v: unknown): v is Wire => !!v && typeof v === "object" && (v as 
 /** `{ok: true, data, ...extra}`: `extra` carries envelope fields such as `job` or `hash`. */
 export const ok = (data?: unknown, extra: Record<string, unknown> = {}) => wire(200, { ok: true, ...(data !== undefined ? { data } : {}), ...extra });
 /** `{ok: false, error, kind}` with an HTTP status, the way api_error() answers. */
-export const fail = (error: string, status = 400, kind = "ValueError") => wire(status, { ok: false, error, kind });
+export const fail = (error: string, status = 400, kind = "ValueError", extra: Record<string, unknown> = {}) => wire(status, { ok: false, error, kind, ...extra });
 /** fetch() itself rejects: the backend is unreachable. */
 export const unreachable = (): Wire => ({ __wire: true, status: 0, network: true });
 
@@ -56,11 +56,16 @@ export function defaultRoutes(): Route[] {
     r("GET", "/api/data/overview", () => makeDataOverview()),
     r("GET", "/api/data/options", () => makeOptionsCoverage()),
     r("GET", "/api/data/lot-sizes", () => makeLotSizes()),
+    r("GET", "/api/data/daily-range", () => makeDailyRange()),
     r("GET", "/api/data/candles", () => ({ bars: [{ t: "2026-11-17T09:15:00", o: 100, h: 110, l: 95, c: 105 }, { t: "2026-11-17T09:20:00", o: 105, h: 112, l: 101, c: 108 }] })),
     r("GET", "/api/research", () => ok(makeResearch())),
     r("GET", "/api/signals", () => ok(makeSignalAnalysis())),
     r("GET", "/api/scalping/paper/trades", () => []),
     r("GET", "/api/scalping", () => ok(makeScalpRun())),
+    r("GET", "/api/trading-settings", () => makeTsState()),
+    r("PUT", "/api/trading-settings", (req: ApiRequest) => makeTsState({ version: 4, saved_at: "2026-11-21T11:00:00", config: (req.body as { config: never }).config })),
+    r("POST", "/api/trading-settings/validate", (req: ApiRequest) => ({ valid: true, errors: [], warnings: [], config: (req.body as { config: never }).config, summary: makeTsSummary((req.body as { config: never }).config) })),
+    r("POST", "/api/trading-settings/reset", () => makeTsState({ version: 4, saved_at: "2026-11-21T11:05:00" })),
     r("GET", "/api/bias/config", () => makeBiasConfig()),
     r("GET", "/api/bias/status", () => ({ running: false })),
     r("GET", "/api/bias/analysis", () => ({ as_of_day: "2026-11-18", live: true, analysis: makeBiasAnalysis(), futures: true, error: null, recent: [] })),

@@ -5,7 +5,7 @@ import { useApi } from "../hooks/useApi";
 import {
   getBiasAnalysis, getBiasConfig, getBiasPredictions, getBiasStatus, getBiasSummary, getBiasTrades, pauseBias, resumeBias, startBias, stopEngine, updateBiasSettings,
 } from "../services/api";
-import type { BiasGroup, BiasSettings } from "../types/api";
+import type { BiasGroup, BiasSettings, StrategyStats } from "../types/api";
 import { hms, inr, pct, pnlClass, todayIST } from "../utils/format";
 import { Card, Pill, Stat } from "../components/common/Card";
 import { Button, Field, inputCls, PageHeader } from "../components/common/Controls";
@@ -18,8 +18,20 @@ import { TradeTable } from "../components/auto/TradeTable";
 import { PositionCard } from "../components/auto/PositionCard";
 import { AutoSettings } from "../components/auto/AutoSettings";
 import { AutomationPanel } from "../components/auto/AutomationPanel";
+import { ConfluencePanel } from "../components/auto/ConfluencePanel";
+import { ScoredPanel } from "../components/auto/ScoredPanel";
 
 const STORE = "gt.auto.settings";
+/** The confluence settings an older server does not send yet: the page still works (bias strategy) instead of failing on a missing list. */
+const CF_FALLBACK: Partial<BiasSettings> = {
+  entry_strategy: "bias", cf_factors: ["ema", "vwap", "fvg", "structure"], cf_require: [], cf_min_score: 75, cf_adr_filter: true, cf_adr_period: 10,
+  cf_adr_max_used: 100, cf_fvg_min_atr: 0.1, cf_fvg_max_age: 24, cf_htf: true,
+  sc_min_score: 80, sc_adr_period: 10, sc_adr_max_used: 100, sc_fvg_min_atr: 0.1, sc_fvg_max_age: 24, sc_ctx_tf: 0, sc_stop_min_pct: 5, sc_stop_max_pct: 50,
+};
+/** What the analysis preview depends on (the scored settings and timeframes only count while that strategy is selected). */
+const cfOf = (x: Partial<BiasSettings>) => JSON.stringify([x.cf_factors, x.cf_require, x.cf_min_score, x.cf_adr_filter, x.cf_adr_period, x.cf_adr_max_used, x.cf_fvg_min_atr, x.cf_fvg_max_age, x.cf_htf,
+  x.entry_strategy === "scored" ? [x.timeframe, x.bias_confirm_tf, x.sc_min_score, x.sc_adr_period, x.sc_adr_max_used, x.sc_fvg_min_atr, x.sc_fvg_max_age, x.sc_ctx_tf, x.sc_stop_min_pct, x.sc_stop_max_pct] : null]);
+const CF_DEFAULT_KEY = cfOf(CF_FALLBACK);
 const STATE = { stopped: ["Stopped", "neutral"], waiting: ["Waiting for market", "info"], running: ["Running", "good"], halted: ["Halted", "warn"], error: ["ERROR", "bad"] } as const;
 
 function saved(): Partial<BiasSettings> {
@@ -52,6 +64,35 @@ function GroupTable({ title, rows }: { title: string; rows: Record<string, BiasG
   );
 }
 
+const STRATEGY_LABEL: Record<string, string> = { bias: "Bias votes", confluence: "Confluence", scored: "Scored (structure + EMA + VWAP + FVG + ADR)" };
+
+/** Performance of each entry strategy on its own trades: sample size, win rate, net expectancy per trade, profit factor, drawdown. */
+function StrategyTable({ rows }: { rows: Record<string, StrategyStats> }) {
+  const e = Object.entries(rows);
+  if (!e.length) return null;
+  return (
+    <div className="sm:col-span-2" data-testid="by-strategy">
+      <div className="mb-1 text-xs font-semibold text-slate-600 dark:text-slate-300">By entry strategy · trades, win rate, net expectancy per trade, profit factor, max drawdown, net</div>
+      <div className="scroll-thin overflow-x-auto">
+        <table className="w-full min-w-[480px] text-xs">
+          <tbody>
+            {e.map(([k, g]) => (
+              <tr key={k} className="border-t border-slate-100 dark:border-slate-800" data-testid={`strategy-${k}`}>
+                <td className="py-1">{STRATEGY_LABEL[k] ?? k}</td><td className="num text-right">{g.trades}</td>
+                <td className="num text-right">{g.win_rate != null ? pct(g.win_rate, 0) : "—"}</td>
+                <td className={`num text-right ${pnlClass(g.expectancy)}`}>{g.expectancy != null ? inr(g.expectancy, true, 0) : "—"}</td>
+                <td className="num text-right">{g.profit_factor != null ? g.profit_factor.toFixed(2) : "—"}</td>
+                <td className="num text-right">{inr(g.max_drawdown, false, 0)}</td>
+                <td className={`num text-right font-medium ${pnlClass(g.net)}`}>{inr(g.net, true, 0)}</td>
+              </tr>))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1 text-[11px] text-slate-500">A small sample says little: these numbers describe paper trades, they do not show an edge.</p>
+    </div>
+  );
+}
+
 /** Automated multi-timeframe paper trading: 5m entries confirmed by the 15m trend. Paper and replay only. */
 export default function AutoTrading() {
   const cfg = useApi(getBiasConfig, []);
@@ -62,23 +103,36 @@ export default function AutoTrading() {
   const day = st?.day ?? todayIST();
   const session = mode === "replay" ? st?.session_id ?? null : null;
 
-  const idle = usePoll(() => (running ? Promise.resolve(null) : getBiasAnalysis()), 30000, [running]);
   const trades = usePoll(() => getBiasTrades(day, mode, session), 8000, [day, mode, session]);
   const summary = usePoll(() => getBiasSummary(day, mode, session), 8000, [day, mode, session]);
   const preds = usePoll(() => getBiasPredictions(day, mode, 80, session), 8000, [day, mode, session]);
 
   const [s, setS] = useState<BiasSettings | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [msgFrom, setMsgFrom] = useState<"panel" | "settings">("settings");   // the message shows beside the Apply button that was pressed
+  const [msgFrom, setMsgFrom] = useState<"panel" | "settings" | "confluence" | "scored">("settings");   // the message shows beside the Apply button that was pressed
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [replayDay, setReplayDay] = useState("");
 
   const base = cfg.data;
   useEffect(() => {
-    if (base && !s) setS({ ...base.defaults, ...saved(), ...(base.settings ?? {}) });
+    if (base && !s) setS({ ...CF_FALLBACK, ...base.defaults, ...saved(), ...(base.settings ?? {}) });
   }, [base, s]);
   const set = (p: Partial<BiasSettings>) => setS((x) => (x ? { ...x, ...p } : x));
+
+  // The latest candle's analysis (idle: the bias; always: a preview of the confluence factors). It is first read at once with the
+  // default confluence settings (in parallel with the config); later edits reach the server once they stop changing, and a
+  // running engine answers with its own settings.
+  const cfNow = cfOf(s ?? CF_FALLBACK);
+  const [cfKey, setCfKey] = useState(CF_DEFAULT_KEY);
+  useEffect(() => {
+    if (cfNow === cfKey) return;
+    const t = setTimeout(() => setCfKey(cfNow), 500);
+    return () => clearTimeout(t);
+  }, [cfNow, cfKey]);
+  const engineStrategy = running ? (st?.config as Record<string, unknown> | undefined)?.entry_strategy : undefined;
+  const engineCf = engineStrategy === "confluence" || engineStrategy === "scored";
+  const idle = usePoll(() => (engineCf ? Promise.resolve(null) : getBiasAnalysis(s ?? CF_FALLBACK)), 30000, [engineCf, cfKey]);
 
   const latest = running ? st?.bias?.latest ?? null : idle.data?.analysis ?? null;
   const counters = useMemo(() => {
@@ -92,7 +146,7 @@ export default function AutoTrading() {
     setBusy(true); setErr(null);
     try { await fn(); await Promise.all([status.reload(), trades.reload(), summary.reload(), preds.reload()]); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
-  async function apply(from: "panel" | "settings" = "settings") {
+  async function apply(from: "panel" | "settings" | "confluence" | "scored" = "settings") {
     if (!s) return;
     setMsgFrom(from);
     try { localStorage.setItem(STORE, JSON.stringify(s)); } catch { /* private window */ }
@@ -147,6 +201,15 @@ export default function AutoTrading() {
           trades={trades.data ?? []} msg={msgFrom === "panel" ? msg : null} />
       )}
 
+      {s && (
+        <ConfluencePanel a={engineCf ? latest : idle.data?.analysis ?? null} s={s} set={set} running={running} onApply={() => void apply("confluence")} busy={busy}
+          msg={msgFrom === "confluence" ? msg : null} periods={base?.adr_periods} />
+      )}
+      {s && s.entry_strategy === "scored" && (
+        <ScoredPanel a={engineCf ? latest : idle.data?.analysis ?? null} s={s} set={set} running={running} onApply={() => void apply("scored")} busy={busy}
+          msg={msgFrom === "scored" ? msg : null} periods={base?.adr_periods} preset={base?.presets?.scored} rejected={st?.bias?.rejected} />
+      )}
+
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           {!running && idle.loading && !latest && <Card><Loading text="Reading candles…" /></Card>}
@@ -182,6 +245,7 @@ export default function AutoTrading() {
               <GroupTable title="By exit reason" rows={sm.by_exit} />
               <GroupTable title="By confidence at entry" rows={sm.by_confidence} />
               <GroupTable title="By supporting strategy" rows={sm.by_indicator} />
+              {sm.by_strategy && <StrategyTable rows={sm.by_strategy} />}
             </div>
           )}
           {sm && <div className="mt-3"><Limitation>{sm.note}</Limitation></div>}

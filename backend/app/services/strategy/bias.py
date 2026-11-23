@@ -31,7 +31,7 @@ constants that were not fitted to any result.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,29 @@ import pandas as pd
 from app.services.strategy import indicators as ind
 from app.services.strategy import rules as st
 from app.services.strategy import strategies
+
+@dataclass(frozen=True)
+class IndParams:
+    """Indicator parameters (Trading Settings). The defaults are the values this code always used, so passing nothing changes nothing."""
+    rsi_period: int = 14
+    rsi_hi: float = 75.0           # the scored strategy's momentum counts RSI only inside (50, rsi_hi] for a buy and [rsi_lo, 50) for a sell
+    rsi_lo: float = 25.0
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    bb_period: int = 20
+    bb_std: float = 2.0
+    atr_period: int = 14
+    vol_sma: int = 20              # period of the volume average (column `vol_avg20` keeps its name)
+    div_k: int = 3                 # RSI divergence: a swing pivot is confirmed this many bars later
+    div_decay: int = 6             # and a divergence stays valid this many bars
+    swing_k: int = 3               # market structure: a swing pivot is confirmed this many bars later
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "IndParams":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in (d or {}).items() if k in known})
+
 
 # key -> (label, weight)
 INDICATORS = {
@@ -74,13 +97,14 @@ class BiasParams:
     flat_atr: float = 0.10         # next-candle moves below this x ATR count as NEUTRAL (flat)
     primary: int = 5               # analysis candle (minutes); entries are decided on its close
     higher: int = 15               # confirmation candle (minutes); its trend is the primary directional filter
+    ind: IndParams = field(default_factory=IndParams)
 
     @classmethod
     def from_cfg(cls, cfg) -> "BiasParams":
         en = tuple(k for k in (cfg.bias_indicators or INDICATORS) if k in INDICATORS) or tuple(INDICATORS)
         return cls(enabled=en, trend_thr=cfg.bias_trend_thr, confirm_thr=cfg.bias_confirm_thr,
                    min_confidence=cfg.bias_min_confidence, min_atr_pct=cfg.bias_min_atr_pct,
-                   primary=int(cfg.timeframe), higher=int(cfg.bias_confirm_tf))
+                   primary=int(cfg.timeframe), higher=int(cfg.bias_confirm_tf), ind=IndParams.from_dict(getattr(cfg, "ind", None)))
 
 
 def _clip(x):
@@ -88,26 +112,27 @@ def _clip(x):
 
 
 # ---------------------------------------------------------------- one timeframe
-def tf_bars(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None, tf: int) -> pd.DataFrame:
-    """Closed bars of one timeframe with every indicator the votes need."""
+def tf_bars(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None, tf: int, ip: IndParams | None = None) -> pd.DataFrame:
+    """Closed bars of one timeframe with every indicator the votes need (parameters from `ip`, the long-standing values by default)."""
+    ip = ip or IndParams()
     b = st.resample(spot1m, tf)
     if b.empty:
         return b
     c = b["close"]
-    b["atr"] = ind.atr(b)
-    b["rsi"] = ind.rsi(c)
-    b["macd"], b["macd_sig"], b["macd_hist"] = ind.macd(c)
+    b["atr"] = ind.atr(b, ip.atr_period)
+    b["rsi"] = ind.rsi(c, ip.rsi_period)
+    b["macd"], b["macd_sig"], b["macd_hist"] = ind.macd(c, ip.macd_fast, ip.macd_slow, ip.macd_signal)
     for n in (5, 8, 9, 20, 21, 50, 200):
         b[f"ema{n}"] = ind.ema(c, n)
-    mid, sd = c.rolling(20).mean(), c.rolling(20).std(ddof=0)
-    b["bb_mid"], b["bb_up"], b["bb_lo"] = mid, mid + 2 * sd, mid - 2 * sd
+    mid, sd = c.rolling(ip.bb_period).mean(), c.rolling(ip.bb_period).std(ddof=0)
+    b["bb_mid"], b["bb_up"], b["bb_lo"] = mid, mid + ip.bb_std * sd, mid - ip.bb_std * sd
     fb = strategies.futures_bars(fut1m, tf)
     if fb.empty:
         for col in ("fut_close", "fut_vwap", "fut_volume"):
             b[col] = np.nan
     else:
         b = b.merge(fb, on="start", how="left")
-    b["vol_avg20"] = b["fut_volume"].shift(1).rolling(20, min_periods=10).mean()
+    b["vol_avg20"] = b["fut_volume"].shift(1).rolling(ip.vol_sma, min_periods=max(2, ip.vol_sma // 2)).mean()
     prev = b.groupby("day").agg(pdh=("high", "max"), pdl=("low", "min"), pdc=("close", "last")).shift(1)
     return b.join(prev, on="day")
 
@@ -147,8 +172,9 @@ def divergence(b: pd.DataFrame, k: int = 3, decay: int = 6) -> pd.Series:
     return pd.Series(ev, index=b.index).ffill(limit=decay - 1)
 
 
-def votes(b: pd.DataFrame) -> pd.DataFrame:
+def votes(b: pd.DataFrame, ip: IndParams | None = None) -> pd.DataFrame:
     """Every indicator's vote on every bar of one timeframe (NaN = cannot vote)."""
+    ip = ip or IndParams()
     v = pd.DataFrame(index=b.index)
     if b.empty:
         return pd.DataFrame(columns=list(INDICATORS))
@@ -160,7 +186,7 @@ def votes(b: pd.DataFrame) -> pd.DataFrame:
     v["ema_200"] = pd.Series(_clip((close - b["ema200"]) / (1.5 * a)), index=b.index).where(n >= 200)
     v["vwap"] = pd.Series(_clip((b["fut_close"] - b["fut_vwap"]) / (0.5 * a)), index=b.index)
     v["rsi"] = _clip((b["rsi"] - 50) / 15)
-    v["rsi_divergence"] = divergence(b)
+    v["rsi_divergence"] = divergence(b, ip.div_k, ip.div_decay)
 
     sgn = np.sign(b["macd_hist"])
     crossed = (sgn != sgn.shift(1)) & sgn.shift(1).notna() & (sgn != 0)
@@ -215,10 +241,10 @@ def analyse(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None, params: BiasParams
     bias, confidence, prediction, entry candidate. Column suffixes 5 / 15 are slot names (analysis / confirmation),
     whatever the timeframes are. An analysis bar only sees confirmation bars that had closed by its own close time."""
     p = params or BiasParams()
-    b5, b15 = tf_bars(spot1m, fut1m, p.primary), tf_bars(spot1m, fut1m, p.higher)
+    b5, b15 = tf_bars(spot1m, fut1m, p.primary, p.ind), tf_bars(spot1m, fut1m, p.higher, p.ind)
     if b5.empty:
         return pd.DataFrame()
-    v5, v15 = votes(b5), (votes(b15) if not b15.empty else pd.DataFrame(columns=list(INDICATORS)))
+    v5, v15 = votes(b5, p.ind), (votes(b15, p.ind) if not b15.empty else pd.DataFrame(columns=list(INDICATORS)))
     s5 = tf_score(v5, p.enabled)
     s15_own = tf_score(v15, p.enabled) if not b15.empty else pd.Series(dtype=float)
 

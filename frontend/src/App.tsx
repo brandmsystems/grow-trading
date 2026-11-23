@@ -17,6 +17,8 @@ const AutoTrading = lazy(() => import("./pages/AutoTrading"));
 const PreMarket = lazy(() => import("./pages/PreMarket"));
 const MarketData = lazy(() => import("./pages/MarketData"));
 const HistoryCharts = lazy(() => import("./pages/HistoryCharts"));
+const DailyRange = lazy(() => import("./pages/DailyRange"));
+const TradingSettings = lazy(() => import("./pages/TradingSettings"));
 const Account = lazy(() => import("./pages/Account"));
 
 export default function App() {
@@ -38,6 +40,8 @@ export default function App() {
                 <Route path="premarket" element={<PreMarket />} />
                 <Route path="data" element={<MarketData />} />
                 <Route path="history" element={<HistoryCharts />} />
+                <Route path="range" element={<DailyRange />} />
+                <Route path="trading-settings" element={<TradingSettings />} />
                 <Route path="account" element={<Account />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>

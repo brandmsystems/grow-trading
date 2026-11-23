@@ -18,7 +18,9 @@ export function AutomationPanel({ a, bias, s, set, running, onApply, busy, summa
   onApply: () => void; busy: boolean; summary: BiasSummary | null; trades: BiasTrade[]; msg: { ok: boolean; text: string } | null;
 }) {
   const last = trades.find((t) => t.status === "CLOSED");
-  const eligible = bias ? bias.confidence >= s.bias_min_confidence && bias.direction !== 0 : null;
+  const cf = s.entry_strategy === "confluence";
+  const conf = bias?.confluence;
+  const eligible = cf ? (conf ? conf.passed : null) : bias ? bias.confidence >= s.bias_min_confidence && bias.direction !== 0 : null;
   return (
     <Card title="Continuous automation" icon={<Repeat size={16} className="text-green-600" />} accent="strat"
       right="paper only · one position at a time">
@@ -30,7 +32,13 @@ export function AutomationPanel({ a, bias, s, set, running, onApply, busy, summa
           </span>
         </div>
 
-        {bias && (
+        {bias && cf && conf && (
+          <p className="text-sm" data-testid="automation-bias">
+            Confluence confirmation score <b>{conf.score.toFixed(0)}%</b> vs your minimum <b>{s.cf_min_score}%</b>
+            {" · "}<span className={conf.passed ? "text-gain" : "text-slate-500"}>{conf.passed ? `eligible for ${conf.candidate}` : `no entry: ${conf.rejections[0] ?? "no factor points one way"}`}</span>
+          </p>
+        )}
+        {bias && !cf && (
           <p className="text-sm" data-testid="automation-bias">
             Current bias <b>{bias.bias}</b> · agreement <b>{bias.confidence.toFixed(0)}%</b> vs your minimum <b>{s.bias_min_confidence}%</b>
             {eligible != null && <> · <span className={eligible ? "text-gain" : "text-slate-500"}>{eligible ? `eligible for ${bias.signal}` : "below the threshold or no confirmed signal: no entry"}</span></>}
@@ -38,7 +46,8 @@ export function AutomationPanel({ a, bias, s, set, running, onApply, busy, summa
         )}
 
         <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-4">
-          <Num label="Market Bias threshold" unit="%" k="bias_min_confidence" s={s} set={set} step={1} max={100} />
+          {cf ? <Num label="Confirmation score threshold" unit="%" k="cf_min_score" s={s} set={set} step={5} max={100} />
+            : <Num label="Market Bias threshold" unit="%" k="bias_min_confidence" s={s} set={set} step={1} max={100} />}
           <Num label="Net profit target per trade" unit="₹, 0 = off" k="profit_target_net" s={s} set={set} step={100} />
           <Button variant="primary" onClick={onApply} disabled={busy}>{running ? "Apply threshold & target" : "Save threshold & target"}</Button>
           {msg && <span role="status" data-testid="automation-msg" className={`text-xs ${msg.ok ? "text-gain" : "text-red-600"}`}>{msg.text}</span>}

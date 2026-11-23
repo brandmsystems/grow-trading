@@ -19,13 +19,13 @@ grow-trading/
 │   ├── pytest.ini
 │   └── requirements.txt
 ├── frontend/                 React 19 + TypeScript + Vite + Tailwind app (served at /app)
-│   ├── src/pages/            Overview, LiveTrading, AutoTrading, Signals, Options, Backtest, Compare, Scalping, MarketData, HistoryCharts, Account
-│   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, auto/ (automated paper trading, `AutomationPanel` = continuous automation), charts/, common/
+│   ├── src/pages/            Overview, LiveTrading, AutoTrading, Signals, Options, Backtest, Compare, Scalping, MarketData, HistoryCharts, DailyRange, Account
+│   ├── src/components/       layout/ (sidebar, header, mobile nav, notifications), market/, trading/, auto/ (automated paper trading, `AutomationPanel` = continuous automation, `ConfluencePanel` = confluence strategy, `ScoredPanel` = scored strategy), charts/, common/
 │   ├── src/context/          SettingsContext (preferences), LiveContext (one shared live poll, alerts, trades)
 │   ├── src/hooks/            useDashboard, useAlerts, useApi (+ waitForJob), usePoll
 │   ├── src/services/api.ts   typed client for every API call
 │   ├── src/types/, src/utils/
-│   ├── src/__tests__/        Vitest + React Testing Library: 426 tests (hooks, components, pages, whole app)
+│   ├── src/__tests__/        Vitest + React Testing Library: 463 tests (hooks, components, pages, whole app)
 │   ├── src/test/             Shared test utilities: mock API, fixtures, fake WebSocket and charts, render helpers
 │   ├── e2e/                  Playwright browser tests (all pages × 8 widths, navigation, indicators, paper controls)
 │   ├── index.html, vite.config.ts (build, chunk split), vitest.config.ts, playwright.config.ts, tsconfig.json, package.json
@@ -54,6 +54,7 @@ grow-trading/
 | `research.py` | `/api/research*`, `/api/signals*` |
 | `live.py` | `/api/live/*` (incl. `confirm`, `reject`) |
 | `bias.py` | `/api/bias/*` (automated paper trading: config, status, analysis, start, settings, predictions, accuracy, trades, summary, trade reasoning) and `POST /api/paper/position/target` |
+| `trading_settings.py` | `/api/trading-settings/*` (Trading Settings: get, validate, save, reset) |
 | `premarket.py` | `/api/premarket/*` (report, refresh, manual input, history) |
 | `frontend.py` | `/app`, `/app/<path>`: the built React app |
 
@@ -65,6 +66,7 @@ Details: [API.md](API.md).
 | `groww/client.py` | Groww login (TOTP or key+secret), token cache, one re-login on auth errors | `groww_client.py` |
 | `market_data/history.py` | Historical download (spot + futures), validation, coverage report, chart candles | `data_manager.py` |
 | `market_data/providers.py` | Groww candles, expiries, option contracts; synthetic provider (tests only) | `providers.py` |
+| `market_data/daily_range.py` | Daily OHLC and range statistics from `candles_1m` (SQL aggregation by IST date, complete/partial/live classification, 10/20/50 averages, ADR, utilization, cache) | new |
 | `market_data/options_history.py` | Option history scope (ATM ±10, CE/PE, all expiry rules), resumable download, coverage | new |
 | `options/lot_sizes.py` | NIFTY lot size of a contract from the NSE `lot_sizes` table | new |
 | `strategy/insight.py` | Signal explanations (actual indicator values, confidence) and today's trading plan | new |
@@ -81,6 +83,9 @@ Details: [API.md](API.md).
 | `strategy/signals.py` | Signal engine: features, outcomes, walk-forward model, scorer | `signals.py` |
 | `trading/charges.py` | Slippage and Indian options charges | `costs.py` |
 | `trading/brokers.py` | Order execution: PaperBroker, LiveBroker, OrderError, OrderUnknown | from `live_market.py` |
+| `strategy/configured.py` | Pure: the signals of the strategies that are ON in Trading Settings (crossovers, bias, confluence, scored, research methods), combined per candle, one order per signal, conflicts rejected | new 21 Nov |
+| `trading/trading_settings.py` | Trading Settings: the registry (32 strategies, 11 indicators, timeframes, rules), validation, the append-only storage, the resolved view the engine reads (gate, overrides, order snapshot) | new 21 Nov |
+| `strategy/confluence.py` | Pure: the opt-in confluence entry strategy (FVG + VWAP + ADR + EMA + market structure): votes, confirmation score, gates, rejection reasons, research signals; its FVG / ADR / structure studies are in `indicators.py` | new 21 Nov |
 | `strategy/bias.py` | Pure: 12 indicator votes on two timeframes, bias, confidence, next-candle prediction, entry candidate, accuracy (causal; no I/O) | new 19 Nov |
 | `trading/bias_report.py` | Stored predictions, accuracy, trade list and summary, one trade's reasoning (paper/replay rows only) | new 19 Nov |
 | `premarket/news_analysis.py` | Pure news analysis: related-coverage grouping, categories, sentiment and NIFTY direction, impact level, periods, factor evidence |
@@ -129,6 +134,9 @@ Details: [API.md](API.md).
 | test_bias_api.py | `/api/bias/*`: paper/replay only, settings, reports |
 | test_premarket_news.py | News feed parsing, cache and failure handling, grouping, categories, direction rules, periods, factor evidence |
 | test_premarket.py | Pre-market scoring rules and bands, news filtering, schedule, storage, settling, manual input, API, engine stamp and block mode |
+| test_daily_range.py | Daily range: OHLC against the source minutes, IST dates and midnight, weekends/holidays/gaps, partial and live sessions, averages, trend, utilization, default window, cache, API, speed on a year of data |
+| test_trading_settings.py | Trading Settings: registry coverage, validation, blockers, indicator and rule mapping, every strategy at both entry timeframes, causality, conflicts, persistence, fail-closed, API |
+| test_confluence.py | FVG (status, retest, first-return rule, size, expiry, sessions), ADR, swing structure, VWAP retest / rejection, the confluence and scored strategies: every point and gate, causality and repainting on 5m and 15m, rejections, missing data, premium stop validation, per-strategy statistics |
 | test_entries.py | The 22 research entry methods are causal and well-formed |
 | test_privacy.py | What live mode may show: redacted status, events and alerts, kept safety information, order ids |
 

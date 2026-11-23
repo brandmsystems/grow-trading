@@ -138,9 +138,33 @@ def trades(mode: str | None, day: str | None, limit: int = 300, session: int | N
             r[k] = _iso(v)
         a = r.get("analysis") or {}
         r["supporting"] = a.get("supports") or []
+        r["strategy"] = strategy_of(r)
         r.pop("analysis", None)       # the list stays small; the full reasoning is one click away (trade_detail)
         out.append(r)
     return out
+
+
+def strategy_of(r: dict) -> str:
+    """Which entry strategy opened a trade: the one recorded in its analysis, `bias` for trades that predate the choice."""
+    return (r.get("analysis") or {}).get("strategy") or "bias"
+
+
+def strategy_stats(items: list[dict]) -> dict:
+    """Per-strategy performance on closed trades: sample size, win rate, net expectancy per trade, profit factor, maximum drawdown."""
+    net = [float(r["net"] or 0) for r in sorted(items, key=lambda r: str(r.get("entry_ts") or r.get("signal_ts") or ""))]
+    wins, losses = [x for x in net if x > 0], [x for x in net if x <= 0]
+    peak = eq = dd = 0.0
+    for x in net:
+        eq += x
+        peak = max(peak, eq)
+        dd = max(dd, peak - eq)
+    n = len(net)
+    return {"trades": n, "wins": len(wins), "losses": len(losses), "win_rate": round(100 * len(wins) / n, 1) if n else None,
+            "net": round(sum(net), 2), "gross": round(sum(float(r["gross"] or 0) for r in items), 2),
+            "expectancy": round(sum(net) / n, 2) if n else None,
+            "profit_factor": round(sum(wins) / -sum(losses), 2) if losses and sum(losses) < 0 else None,
+            "max_drawdown": round(dd, 2), "avg_win": round(sum(wins) / len(wins), 2) if wins else None,
+            "avg_loss": round(sum(losses) / len(losses), 2) if losses else None}
 
 
 def summary(mode: str | None, day: str | None, session: int | None = None) -> dict:
@@ -163,6 +187,9 @@ def summary(mode: str | None, day: str | None, session: int | None = None) -> di
         by_conf.setdefault(band, []).append(r)
         for s in (r.get("analysis") or {}).get("supports") or []:
             by_ind.setdefault(s.rsplit(" (", 1)[0], []).append(r)
+    by_strategy: dict[str, list] = {}
+    for r in closed:
+        by_strategy.setdefault(strategy_of(r), []).append(r)
     open_n = sum(1 for r in rows if r["status"] == "OPEN")
     return {**agg(closed), "open": open_n, "mode": m,
             "target_hits": len(by_exit.get("profit_target", [])),
@@ -170,6 +197,7 @@ def summary(mode: str | None, day: str | None, session: int | None = None) -> di
             "by_exit": {k: agg(v) for k, v in by_exit.items()},
             "by_confidence": {k: agg(v) for k, v in sorted(by_conf.items())},
             "by_indicator": {k: agg(v) for k, v in sorted(by_ind.items())},
+            "by_strategy": {k: strategy_stats(v) for k, v in sorted(by_strategy.items())},
             "note": "An indicator is credited with every trade it supported at entry (several indicators share each trade), "
                     "so these rows are descriptive, not independent evidence."}
 

@@ -1,18 +1,21 @@
 // Typed client for the Flask API. Every page goes through these functions (no direct fetch elsewhere).
 import type {
   ApiErr, BiasAccuracy, BiasAnalysisResponse, BiasConfig, BiasPrediction, BiasSettings, BiasStatus, BiasSummary, BiasTrade,
-  BiasTradeDetail, BtChart, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
+  BiasTradeDetail, BtChart, DailyRange, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
   LiveTrade, LotSize, OptionChain, OptionsCoverage, PaperAccount, Research, RiskCalc, ScalpConfig, ScalpPaperTrade, ScalpRun,
-  ScalpTrade, SignalAnalysis, StopChange, PmHistory, PmInput, PmNewsFeed, PmReport, PmReportResponse,
+  ScalpTrade, SignalAnalysis, StopChange, PmHistory, PmInput, PmNewsFeed, PmReport, PmReportResponse, TsCheck, TsConfig, TsState,
 } from "../types/api";
 
 export class ApiError extends Error {
   kind?: string;
   status: number;
-  constructor(message: string, status: number, kind?: string) {
+  /** Field-level problems the server listed (a settings save that was refused). */
+  errors?: { path: string; message: string }[];
+  constructor(message: string, status: number, kind?: string, errors?: { path: string; message: string }[]) {
     super(message);
     this.status = status;
     this.kind = kind;
+    this.errors = errors;
   }
 }
 
@@ -31,7 +34,7 @@ export async function request<T>(path: string, init?: RequestInit & { json?: unk
     throw new ApiError("Backend unreachable. Is the server running (python start.py)?", 0, "network");
   }
   const body = (await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }))) as Envelope<T> | ApiErr;
-  if (!body.ok) throw new ApiError(body.error || `HTTP ${res.status}`, res.status, body.kind);
+  if (!body.ok) throw new ApiError(body.error || `HTTP ${res.status}`, res.status, body.kind, (body as { errors?: { path: string; message: string }[] }).errors);
   return body;
 }
 
@@ -68,7 +71,14 @@ export const pauseBias = () => api<{ paused: boolean }>("/api/bias/pause", { jso
 export const resumeBias = () => api<{ paused: boolean }>("/api/bias/resume", { json: {} });
 export const getBiasConfig = () => api<BiasConfig>("/api/bias/config");
 export const getBiasStatus = () => api<BiasStatus>("/api/bias/status");
-export const getBiasAnalysis = () => api<BiasAnalysisResponse>("/api/bias/analysis");
+/** The latest candle's analysis; the confluence settings only matter while no engine runs (a running engine uses its own). */
+export const getBiasAnalysis = (cf?: Partial<BiasSettings>) => api<BiasAnalysisResponse>(`/api/bias/analysis?${qs({
+  entry_strategy: cf?.entry_strategy === "scored" ? "scored" : undefined, timeframe: cf?.entry_strategy === "scored" ? cf.timeframe : undefined,
+  bias_confirm_tf: cf?.entry_strategy === "scored" ? cf.bias_confirm_tf : undefined, sc_min_score: cf?.sc_min_score, sc_adr_period: cf?.sc_adr_period,
+  sc_adr_max_used: cf?.sc_adr_max_used, sc_fvg_min_atr: cf?.sc_fvg_min_atr, sc_fvg_max_age: cf?.sc_fvg_max_age, sc_ctx_tf: cf?.sc_ctx_tf,
+  sc_stop_min_pct: cf?.sc_stop_min_pct, sc_stop_max_pct: cf?.sc_stop_max_pct,
+  cf_factors: cf?.cf_factors?.join(","), cf_require: cf?.cf_require?.join(","), cf_min_score: cf?.cf_min_score, cf_adr_filter: cf?.cf_adr_filter,
+  cf_adr_period: cf?.cf_adr_period, cf_adr_max_used: cf?.cf_adr_max_used, cf_fvg_min_atr: cf?.cf_fvg_min_atr, cf_fvg_max_age: cf?.cf_fvg_max_age, cf_htf: cf?.cf_htf })}`);
 /** Paper (live clock) or replay (a finished day). There is no live mode for this engine. */
 export const startBias = (config: Partial<BiasSettings>, trade_mode: "paper" | "replay" = "paper", replay_day?: string, replay_speed = 120) =>
   api<unknown>("/api/bias/start", { json: { config, trade_mode, replay_day, replay_speed } });
@@ -82,6 +92,12 @@ export const getBiasHistoryAccuracy = (from?: string, to?: string, tf?: number, 
 export const getBiasTrades = (day: string, mode: string, session?: number | null) => api<BiasTrade[]>(`/api/bias/trades?${qs({ day, mode, session })}`);
 export const getBiasSummary = (day: string, mode: string, session?: number | null) => api<BiasSummary>(`/api/bias/summary?${qs({ day, mode, session })}`);
 export const getBiasTrade = (id: number) => api<BiasTradeDetail>(`/api/bias/trade/${id}`);
+
+// ------------------------------------------------------------------ Trading Settings
+export const getTradingSettings = () => api<TsState>("/api/trading-settings");
+export const validateTradingSettings = (config: TsConfig) => api<TsCheck>("/api/trading-settings/validate", { json: { config } });
+export const saveTradingSettings = (config: TsConfig, base_version: number) => api<TsState>("/api/trading-settings", { method: "PUT", json: { config, base_version } });
+export const resetTradingSettings = () => api<TsState>("/api/trading-settings/reset", { json: {} });
 
 // ------------------------------------------------------------------ jobs
 export const getJob = (id: string) => api<Job>(`/api/jobs/${encodeURIComponent(id)}`);
@@ -116,6 +132,7 @@ export const stopDownload = () => request<never>("/api/data/stop", { json: {} })
 export const getOptionsCoverage = () => api<OptionsCoverage>("/api/data/options");
 export const startOptionsDownload = (from: string, to: string) => request<never>("/api/data/options/download", { json: { from, to } });
 export const getLotSizes = () => api<LotSize[]>("/api/data/lot-sizes");
+export const getDailyRange = (from?: string, to?: string) => api<DailyRange>(`/api/data/daily-range?${qs({ from, to })}`);
 export const getCandles = (from: string, to: string, tf: number) =>
   api<{ bars: { t: string; o: number; h: number; l: number; c: number }[] }>(`/api/data/candles?${qs({ from, to, tf })}`);
 

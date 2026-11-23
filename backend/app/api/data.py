@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
+from app.services.market_data import daily_range
 from app.services.market_data import history as data_manager
 from app.services.market_data import options_history
 from app.services.options import lot_sizes
@@ -55,6 +56,17 @@ def data_candles():
         return jsonify({"ok": True, "data": data_manager.candles(
             date_arg("from"), date_arg("to"), int(request.args.get("tf", 5)))})
     except (TypeError, ValueError) as exc:
+        return api_error(exc, 400)
+    except Exception as exc:
+        return api_error(exc, 500)
+
+
+@bp.get("/api/data/daily-range")
+def data_daily_range():
+    """Daily OHLC, range and range statistics of NIFTY spot (default: previous 1 year), from stored 1-minute candles."""
+    try:
+        return jsonify({"ok": True, "data": daily_range.daily_range(date_arg("from"), date_arg("to"))})
+    except ValueError as exc:
         return api_error(exc, 400)
     except Exception as exc:
         return api_error(exc, 500)

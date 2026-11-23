@@ -17,9 +17,9 @@ const serve = (d: Dashboard) => mockApi().on("GET", "/api/live/dashboard", () =>
 const saved = () => JSON.parse(localStorage.getItem("gt-settings") ?? "{}");
 
 describe("navigation list", () => {
-  it("has the eleven pages once each, and exactly four flagged for the phone bottom bar", () => {
-    expect(NAV).toHaveLength(12);
-    expect(new Set(NAV.map((n) => n.to)).size).toBe(12);
+  it("has the thirteen pages once each, and exactly four flagged for the phone bottom bar", () => {
+    expect(NAV).toHaveLength(14);
+    expect(new Set(NAV.map((n) => n.to)).size).toBe(14);
     expect(NAV.filter((n) => n.mobile).map((n) => n.short)).toEqual(["Overview", "Live", "Signals", "Backtest"]);
   });
 });

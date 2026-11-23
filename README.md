@@ -69,6 +69,7 @@ python start.py             # http://127.0.0.1:5000  (React dashboard at /app)
 | Market Data | http://127.0.0.1:5000/app/data |
 
 | Historical Charts | http://127.0.0.1:5000/app/history |
+| Daily Range | http://127.0.0.1:5000/app/range |
 
 | Account & Settings | http://127.0.0.1:5000/app/account |
 
@@ -91,9 +92,9 @@ http://127.0.0.1:5000 opens the app. Old addresses like `/live` or `/compare` re
 ## Tests
 ```powershell
 cd backend
-..\.venv\Scripts\python -m pytest      # backend: 493 tests (about 28 min; replays real days)
+..\.venv\Scripts\python -m pytest      # backend: 639 tests (about 28 min; replays real days)
 cd ..\frontend
-npm test                               # Vitest + React Testing Library: 426 tests (start from C:\..., not c:\...)
+npm test                               # Vitest + React Testing Library: 463 tests (start from C:\..., not c:\...)
 npm run build; npx playwright test     # browser tests: 116 (2 Live-page timing tests are flaky when Groww is slow; see docs/TESTING.md; needs the built app; uses Edge; paper mode only)
 ```
 Details, counts and rules: [docs/TESTING.md](docs/TESTING.md).
@@ -125,6 +126,7 @@ Details, counts and rules: [docs/TESTING.md](docs/TESTING.md).
 | [docs/BACKTESTING.md](docs/BACKTESTING.md) | Historical data, backtests, comparison results |
 
 | [docs/AUTO_TRADING.md](docs/AUTO_TRADING.md) | Automated multi-timeframe paper trading: indicators, bias, prediction log, trade rules, validation |
+| [docs/TRADING_SETTINGS.md](docs/TRADING_SETTINGS.md) | Trading Settings: strategy, timeframe, indicator and risk controls, how they drive paper orders, validation, storage, limits |
 | [docs/PREMARKET.md](docs/PREMARKET.md) | Pre-market analysis: five factors, total score, conclusion, daily workflow, history, validation |
 | [docs/SCALPING.md](docs/SCALPING.md) | 5-minute options scalping analyzer, results and paper trading |
 

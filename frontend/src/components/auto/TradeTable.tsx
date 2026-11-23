@@ -41,7 +41,7 @@ function TradeDetail({ id, onClose }: { id: number; onClose: () => void }) {
               <Stat label="Entry → exit" value={`₹${num(t.entry_price)} → ${t.exit_price != null ? `₹${num(t.exit_price)}` : "open"}`} sub={`${hm(t.entry_ts)} → ${hm(t.exit_ts)}`} />
               <Stat label="Quantity" value={String(t.qty)} sub={t.risk ? `${t.risk.lots} lot(s) × ${t.risk.lot_size}` : undefined} />
               <Stat label="Stop / target" value={`${t.stop_premium != null ? num(t.stop_premium) : "—"} / ${t.target_premium != null ? num(t.target_premium) : "—"}`} />
-              <Stat label="Confidence" value={t.confidence != null ? `${num(t.confidence, 0)}%` : "—"} sub="indicator agreement" />
+              <Stat label="Confidence" value={t.confidence != null ? `${num(t.confidence, 0)}%` : "—"} sub={a?.strategy === "confluence" ? "confirmation score" : a?.strategy === "scored" ? "strategy score of 100" : "indicator agreement"} />
               <Stat label="Gross" value={t.gross != null ? inr(t.gross, true) : "—"} className={pnlClass(t.gross)} />
               <Stat label="Charges + slippage" value={t.charges?.total != null ? inr(t.charges.total + (t.slippage ?? 0)) : "—"} className="text-orange-600" />
               <Stat label="Net P&L" value={t.net != null ? inr(t.net, true) : "open"} className={pnlClass(t.net)} />
@@ -54,6 +54,24 @@ function TradeDetail({ id, onClose }: { id: number; onClose: () => void }) {
                   <p className="text-slate-600 dark:text-slate-300">{a.summary}.</p>
                   <div className="mt-2 flex flex-wrap gap-1">{a.supports.map((s) => <Pill key={s} tone="good">{s}</Pill>)}{a.against.map((s) => <Pill key={s} tone="bad">against: {s}</Pill>)}</div>
                 </div>
+                {a.confluence && (
+                  <div data-testid="trade-confluence">
+                    <div className="mb-1 font-semibold">Confluence at entry · score {num(a.confluence.score, 0)}% (minimum {num(a.confluence.min_score, 0)}%)</div>
+                    <ul className="space-y-0.5 text-xs">
+                      {a.confluence.factors.filter((f) => f.enabled).map((f) => (
+                        <li key={f.key}><b>{f.label}</b> ({f.vote != null ? num(f.vote, 1) : "n/a"}{f.required ? ", required" : ""}): {f.condition}</li>))}
+                      <li><b>ADR</b>: {a.confluence.adr.text}</li>
+                    </ul>
+                  </div>
+                )}
+                {a.scored && (
+                  <div data-testid="trade-scored">
+                    <div className="mb-1 font-semibold">Scored strategy at entry · {num(a.scored.score, 0)} / 100 (minimum {num(a.scored.min_score, 0)}) · {a.scored.entry_tf}m entry, {a.scored.confirm_tf}m trend</div>
+                    <ul className="space-y-0.5 text-xs">
+                      {a.scored.components.map((c) => <li key={c.key}><b>{c.label}</b> ({num(c.points, 0)} / {c.max}): {c.condition}</li>)}
+                    </ul>
+                  </div>
+                )}
                 {a.contract_checks && a.contract_checks.length > 0 && (
                   <div>
                     <div className="mb-1 font-semibold">Contract checks</div>

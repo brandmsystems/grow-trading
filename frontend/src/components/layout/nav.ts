@@ -1,5 +1,5 @@
 import {
-  Activity, BarChart3, Bot, CandlestickChart, Database, FlaskConical, LayoutDashboard, Layers, Settings, Sunrise, Timer, Zap,
+  Activity, BarChart3, Bot, CandlestickChart, Database, Ruler, FlaskConical, LayoutDashboard, Layers, Settings, SlidersHorizontal, Sunrise, Timer, Zap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -18,5 +18,7 @@ export const NAV: NavItem[] = [
   { to: "/scalping", label: "5-Minute Scalping", short: "Scalping", icon: Timer },
   { to: "/data", label: "Market Data", short: "Data", icon: Database },
   { to: "/history", label: "Historical Charts", short: "Charts", icon: CandlestickChart },
+  { to: "/range", label: "Daily Range", short: "Range", icon: Ruler },
+  { to: "/trading-settings", label: "Trading Settings", short: "Rules", icon: SlidersHorizontal },
   { to: "/account", label: "Account & Settings", short: "Account", icon: Settings },
 ];

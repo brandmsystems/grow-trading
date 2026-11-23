@@ -1,5 +1,8 @@
 """The bias-mode engine (automated multi-timeframe paper trading), replayed on stored candles."""
+import json
 from datetime import date, datetime, time, timedelta
+
+import pandas as pd
 
 import psycopg2
 import pytest
@@ -41,7 +44,9 @@ def test_db():
 @pytest.fixture(autouse=True)
 def clean():
     with db.engine().begin() as c:
-        c.execute(text("TRUNCATE live_trades, live_events, live_sessions, candle_bias, paper_stop_changes RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE live_trades, live_events, live_sessions, candle_bias, paper_stop_changes, trading_settings RESTART IDENTITY CASCADE"))
+    from app.services.trading import trading_settings as _clean_ts
+    _clean_ts.invalidate()
 
 
 # thresholds loosened so the synthetic candles produce trades; the logic under test is the same
@@ -540,3 +545,369 @@ def test_repeated_sequential_trades_after_target_hits_and_a_paused_engine_takes_
     assert q("SELECT count(*) AS n FROM live_trades")[0]["n"] == 0
     assert any("paused" in e["message"] for e in eng.events)
     assert q("SELECT count(*) AS n FROM candle_bias")[0]["n"] > 100                  # the analysis kept running
+
+
+# ---------------------------------------------------------------- confluence strategy (FVG + VWAP + ADR + EMA + structure)
+CF = {"entry_strategy": "confluence", "cf_min_score": 40, "cf_htf": False}
+
+
+def test_confluence_settings_validate_and_live_trading_stays_refused():
+    for over, msg in (({"entry_strategy": "magic"}, "bias, confluence, scored or configured"), ({"cf_factors": ["nope"], "entry_strategy": "confluence"}, "at least one confluence factor"),
+                      ({"cf_adr_period": 7}, "5, 10 or 20"), ({"cf_min_score": 120}, "between"), ({"cf_adr_max_used": 0}, "between"),
+                      ({"cf_fvg_max_age": 0}, "1 to 200"), ({"cf_fvg_min_atr": -1}, "between")):
+        with pytest.raises(ValueError, match=msg):
+            le.EngineConfig(**{**LOOSE, **over}).validate()
+    with pytest.raises(ValueError, match="paper only"):
+        le.EngineConfig(trade_mode="live", signal_mode="bias", entry_strategy="confluence").validate()
+    cfg = le.EngineConfig(**{**LOOSE, "cf_require": ["fvg", "vwap", "bogus"], "cf_factors": ["fvg", "ema"]}).validate()
+    assert cfg.entry_strategy == "bias" and cfg.cf_require == ["fvg"]            # bias stays the default; a required factor must be enabled
+
+
+def test_confluence_trades_are_explained_with_every_factor_and_follow_the_stored_analysis():
+    eng, market = make(CF)
+    run_days(eng, market, DAYS)
+    trades = q("SELECT * FROM live_trades ORDER BY id")
+    assert trades, "confluence at a 40% score must trade the synthetic days"
+    rows = {r["bar_close"]: r for r in q("SELECT bar_close, signal, predicted, bias FROM candle_bias ORDER BY bar_close")}
+    for t in trades:
+        a = t["analysis"]
+        c = a["confluence"]
+        assert a["strategy"] == "confluence" and a["signal"] == t["action"] and c["passed"] and c["score"] >= 40
+        assert t["confidence"] == pytest.approx(a["entry_score"]) == pytest.approx(c["score"])
+        assert [f["key"] for f in c["factors"]] == ["ema", "vwap", "fvg", "structure"] and all(f["condition"] for f in c["factors"])
+        assert [r_["period"] for r_ in c["adr"]["rows"]] == [5, 10, 20]
+        assert rows[t["signal_ts"]]["signal"] == t["action"]                       # the stored analysis says the same as the trade
+        assert t["status"] == "CLOSED" and t["signal_mode"] == "bias" and t["exit_ts"].time() <= time(15, 0, 30)
+    for a, b in zip(trades, trades[1:]):
+        assert b["entry_ts"] >= a["exit_ts"]                                      # one position at a time, as before
+    assert all(r["predicted"] in ("UP", "DOWN", "NEUTRAL") for r in rows.values())    # the bias prediction keeps running
+
+
+def test_confluence_that_cannot_be_satisfied_takes_no_trade_and_says_why():
+    eng, market = make({**CF, "cf_min_score": 100, "cf_require": ["fvg", "vwap", "ema", "structure"]})
+    run_days(eng, market, DAYS[:2])
+    assert q("SELECT count(*) AS n FROM live_trades")[0]["n"] == 0
+    assert q("SELECT count(*) AS n FROM candle_bias")[0]["n"] == 148
+    assert any("HOLD" in e["message"] for e in eng.events) and eng.bias_state["confluence"]["rejections"]
+
+
+def test_confluence_filters_and_factors_change_without_a_restart_and_the_status_carries_them():
+    eng, market = make(CF)
+    run_days(eng, market, DAYS[:1], step=60)
+    s = eng.status()
+    assert s["bias"]["latest"]["confluence"]["factors"] and s["bias"]["automation"]["strategy"] == "confluence"
+    assert s["bias"]["automation"]["min_confidence"] == 40
+    eng.update_settings({"cf_factors": ["ema", "vwap"], "cf_min_score": 90, "cf_adr_filter": False, "cf_adr_period": 20})
+    assert eng.cfg.cf_factors == ["ema", "vwap"] and eng.cfg.cf_min_score == 90 and not eng.cfg.cf_adr_filter
+    with pytest.raises(ValueError, match="5, 10 or 20"):
+        eng.update_settings({"cf_adr_period": 3})
+    assert eng.cfg.cf_adr_period == 20                                               # a bad value changed nothing
+    assert any("Settings changed" in e["message"] for e in eng.events)
+    eng.update_settings({"entry_strategy": "bias"})
+    run_days(eng, market, DAYS[1:2], step=60)
+    assert "confluence" not in eng.status()["bias"]["latest"]
+
+
+def test_the_default_strategy_is_still_the_bias_engine_and_has_no_confluence_block():
+    eng, market = make()
+    run_days(eng, market, DAYS[:1], step=60)
+    assert eng.cfg.entry_strategy == "bias"
+    assert "confluence" not in eng.status()["bias"]["latest"] and eng.status()["bias"]["automation"]["strategy"] == "bias"
+
+
+# ---------------------------------------------------------------- scored strategy (market structure + EMA + VWAP + FVG + ADR)
+from app.services.strategy import confluence as _cf          # noqa: E402
+from app.services.trading import bias_report as _report      # noqa: E402
+
+SC = {"entry_strategy": "scored", "sc_min_score": 30}
+
+
+def test_scored_settings_validate_and_live_trading_stays_refused():
+    for over, msg in (({"entry_strategy": "magic"}, "bias, confluence, scored or configured"), ({"sc_adr_period": 7}, "5, 10 or 20"), ({"sc_min_score": 120}, "between"),
+                      ({"sc_ctx_tf": 45}, "0 \\(off\\), 30 or 60"), ({"sc_fvg_max_age": 0}, "1 to 200"), ({"sc_stop_min_pct": 60, "sc_stop_max_pct": 50}, "below the largest"),
+                      ({"sc_stop_max_pct": 0}, "between"), ({"sc_adr_max_used": 5}, "between")):
+        with pytest.raises(ValueError, match=msg):
+            le.EngineConfig(**{**LOOSE, **over}).validate()
+    with pytest.raises(ValueError, match="paper only"):
+        le.EngineConfig(trade_mode="live", signal_mode="bias", entry_strategy="scored").validate()
+    cfg = le.EngineConfig(**{**LOOSE, **SC}).validate()
+    assert (cfg.sc_adr_period, cfg.sc_ctx_tf, cfg.sc_stop_min_pct, cfg.sc_stop_max_pct) == (10, 0, 5.0, 50.0)
+
+
+def test_scored_strategy_analyses_every_candle_logs_near_misses_and_is_never_forced():
+    eng, market = make(SC)
+    run_days(eng, market, DAYS[:2])
+    assert q("SELECT count(*) AS n FROM candle_bias")[0]["n"] == 148                  # every candle is still analysed and stored
+    st_ = eng.status()
+    s = st_["bias"]["latest"]["scored"]
+    assert [c["key"] for c in s["components"]] == ["trend", "ema", "vwap", "fvg", "momentum", "volume", "adr"] and all(c["condition"] for c in s["components"])
+    assert sum(c["points"] for c in s["components"]) == pytest.approx(s["score"]) and 0 <= s["score"] <= 100
+    assert st_["bias"]["automation"]["strategy"] == "scored" and st_["bias"]["automation"]["min_confidence"] == 30
+    assert eng.rejected, "near-miss candidates must be recorded with their reasons"
+    for r in eng.rejected:
+        assert r["side"] in ("BUY CE", "BUY PE") and r["score"] >= 0.8 * 30 and r["reasons"] and r["min_score"] == 30
+    assert st_["bias"]["rejected"] == list(eng.rejected)[:30]
+    for t in q("SELECT * FROM live_trades"):                                           # whatever it did trade met the score and every gate
+        a = t["analysis"]
+        assert a["strategy"] == "scored" and a["scored"]["passed"] and all(g["ok"] for g in a["scored"]["gates"]) and a["scored"]["score"] >= 30
+    last_id = q("SELECT coalesce(max(id), 0) AS m FROM live_trades")[0]["m"]
+    eng.update_settings({"sc_min_score": 100})
+    run_days(eng, market, DAYS[2:5], step=60)
+    for t in q("SELECT * FROM live_trades WHERE id > :i", i=last_id):                   # after raising the bar, anything traded scored a perfect 100
+        assert t["analysis"]["scored"]["score"] >= 100
+    assert any("HOLD" in e["message"] for e in eng.events)
+
+
+def _forced(monkeypatch, hhmm="10:30", side=1):
+    """Make the scored strategy 'qualify' on one candle a day (the synthetic candles rarely form an unmitigated gap), leaving everything
+    after the decision (entry, sizing, stop validation, exits, reports) as it really runs."""
+    orig = _cf.overlay
+
+    def overlay(bf, spot, fut, p):
+        o = orig(bf, spot, fut, p)
+        m = o["close_ts"].dt.strftime("%H:%M") == hhmm
+        o.loc[m, ["direction", "sc_direction", "sc_cand"]] = side
+        for g in ("trend", "ema", "vwap", "fvg", "momentum", "adr", "atr", "conflict", "ctx", "score"):
+            o.loc[m, f"sc_g_{g}"] = True
+        o.loc[m, "sc_score"] = 95.0
+        return o
+    monkeypatch.setattr(_cf, "overlay", overlay)
+
+
+def test_a_qualifying_scored_candle_is_traded_with_its_snapshot_and_reported_separately(monkeypatch):
+    _forced(monkeypatch)
+    eng, market = make({**SC, "sc_min_score": 80, "max_trades_per_day": 5, "bias_exit_opposite": False})
+    run_days(eng, market, DAYS)
+    trades = q("SELECT * FROM live_trades ORDER BY id")
+    assert trades and len(trades) <= len(DAYS)                                          # at most one per forced candle, none invented
+    for t in trades:
+        a = t["analysis"]
+        assert a["strategy"] == "scored" and a["signal"] == "BUY CE" and t["action"] == "BUY CE" and t["signal_ts"].strftime("%H:%M") == "10:30"
+        assert t["confidence"] == pytest.approx(95.0) == pytest.approx(a["entry_score"]) and len(a["scored"]["components"]) == 7
+        assert t["status"] == "CLOSED" and t["stop_premium"] is not None and t["target_premium"] > t["entry_price"]
+        assert t["exit_ts"].time() <= time(15, 0, 30)
+        stop_check = [c for c in a["contract_checks"] if c["check"] == "stop"]
+        assert stop_check and stop_check[0]["ok"] and "allowed 5% to 50%" in stop_check[0]["text"]          # the premium validation is on the record
+    s = _report.summary("replay", None)
+    assert set(s["by_strategy"]) == {"scored"} and s["by_strategy"]["scored"]["trades"] == len(trades)
+    assert s["by_strategy"]["scored"]["net"] == pytest.approx(sum(t["net"] for t in trades), abs=0.01)
+    assert {r["strategy"] for r in _report.trades("replay", None)} == {"scored"}
+
+
+def test_the_premium_stop_validation_refuses_a_trade_whose_stop_is_outside_the_range(monkeypatch):
+    _forced(monkeypatch)
+    eng, market = make({**SC, "sc_min_score": 80, "stop_mode": "pct", "stop_pct": 70})        # a 70% stop is not a controlled risk (limit 50%)
+    run_days(eng, market, DAYS[:2])
+    assert q("SELECT count(*) AS n FROM live_trades")[0]["n"] == 0
+    assert any("needs 5% to 50%" in e["message"] for e in eng.events)
+
+
+def test_scored_settings_change_without_a_restart_and_the_strategy_can_be_switched():
+    eng, market = make({"sc_min_score": 40})
+    run_days(eng, market, DAYS[:1], step=60)
+    assert eng.cfg.entry_strategy == "bias" and "scored" not in eng.status()["bias"]["latest"]
+    eng.update_settings({"entry_strategy": "scored", "sc_min_score": 90, "sc_adr_period": 20, "sc_ctx_tf": 30, "sc_stop_min_pct": 8})
+    assert (eng.cfg.entry_strategy, eng.cfg.sc_min_score, eng.cfg.sc_adr_period, eng.cfg.sc_ctx_tf, eng.cfg.sc_stop_min_pct) == ("scored", 90.0, 20, 30, 8.0)
+    with pytest.raises(ValueError, match="0 \\(off\\), 30 or 60"):
+        eng.update_settings({"sc_ctx_tf": 15})
+    assert eng.cfg.sc_ctx_tf == 30                                                       # a bad value changed nothing
+    run_days(eng, market, DAYS[1:2], step=60)
+    s = eng.status()["bias"]["latest"]["scored"]
+    assert s["min_score"] == 90 and s["ctx_tf"] == 30 and any(g["key"] == "ctx" for g in s["gates"])      # the optional context gate appears when it is on
+
+
+# ---------------------------------------------------------------- Trading Settings drive the paper-trading engine
+from app.services.strategy import configured as _configured   # noqa: E402
+from app.services.trading import trading_settings as _ts      # noqa: E402
+
+
+def saved(on=(), **paths):
+    """Save a Trading Settings version with only the strategies in `on` switched ON, then any `a__b__c` path overrides."""
+    d = _ts.defaults()
+    for k in d["strategies"]:
+        d["strategies"][k]["enabled"] = k in on
+    d["rules"].update(stop_mode="pct", daily_loss_pct=0.0, daily_loss_rupees=0.0, max_trades_per_day=20)
+    d["timeframes"]["trend_filter"] = False
+    for path, v in paths.items():
+        node = d
+        keys = path.split("__")
+        for k in keys[:-1]:
+            node = node[k]
+        node[keys[-1]] = v
+    return _ts.save(d)
+
+
+def make_cross(tf=15, **over):
+    market = ReplayMarket("synthetic", START - timedelta(days=12), datetime.combine(DAYS[0], time(9, 0)))
+    cfg = le.EngineConfig(trade_mode="replay", signal_mode="cross", timeframe=tf, entry_start="09:30", cutoff="14:30", lots=1, max_trades_per_day=20, **over)
+    eng = le.Engine(cfg, market, PaperBroker(market))
+    eng.start(threaded=False)
+    return eng, market
+
+
+def reset_settings_table():
+    with db.engine().begin() as c:
+        c.execute(text("TRUNCATE trading_settings RESTART IDENTITY"))
+    _ts.invalidate()
+
+
+def n_trades():
+    return q("SELECT count(*) AS n FROM live_trades")[0]["n"]
+
+
+def test_an_off_strategy_never_places_a_paper_order_and_the_same_strategy_trades_when_on_and_records_its_settings():
+    eng, market = make_cross()
+    run_days(eng, market, DAYS[:3])
+    on = q("SELECT * FROM live_trades ORDER BY id")
+    assert on, "EMA 9/21 crossovers must trade the synthetic days under the default settings"
+    for t in on:
+        s = t["analysis"]["settings"]                                                   # every order records what it was placed under
+        assert t["analysis"]["strategy"] == "ema_9_21" and s["version"] == 0 and s["strategies"] == ["ema_9_21"] and s["engine_timeframe"] == 15
+        assert s["timeframes"]["entry"] == 5 and set(s["indicators"]) == set(_ts.INDICATORS) and "EMA 9/21" in t["analysis"]["summary"]
+        assert t["exit_reason"] is not None
+    with db.engine().begin() as c:
+        c.execute(text("TRUNCATE live_trades, live_events, live_sessions, candle_bias RESTART IDENTITY CASCADE"))
+    saved(on=[k for k in _ts.DEFAULT_ON if k != "ema_9_21"])                              # EMA 9/21 OFF, everything else ON
+    eng, market = make_cross()
+    run_days(eng, market, DAYS[:3])
+    assert n_trades() == 0
+    assert any("switched OFF" in e["message"] for e in eng.events)
+    saved(on=["ema_9_21"])                                                                # and ON again: it trades (the toggle, not the data, decided)
+    eng, market = make_cross()
+    run_days(eng, market, DAYS[:3])
+    assert n_trades() > 0
+    assert {t["analysis"]["settings"]["version"] for t in q("SELECT * FROM live_trades")} == {2}
+
+
+def test_a_disabled_timeframe_blocks_the_engine_that_uses_it():
+    saved(on=["ema_9_21"], timeframes__enabled={"1": False, "5": False, "15": True, "30": True}, timeframes__entry=15, timeframes__trend=30)
+    eng, market = make_cross(tf=5)
+    run_days(eng, market, DAYS[:3])
+    assert n_trades() == 0 and any("5-minute timeframe is disabled" in e["message"] for e in eng.events)
+    with db.engine().begin() as c:
+        c.execute(text("TRUNCATE live_trades, live_events, live_sessions RESTART IDENTITY CASCADE"))
+    eng, market = make_cross(tf=15)
+    run_days(eng, market, DAYS[:3])
+    assert n_trades() > 0                                                                   # the enabled timeframe trades
+
+
+def test_invalid_or_unreadable_saved_settings_stop_every_order(monkeypatch):
+    with db.engine().begin() as c:
+        c.execute(text("INSERT INTO trading_settings (config, note) VALUES (CAST(:c AS JSONB), 'tampered')"), {"c": json.dumps({"rules": {"risk_pct": -1}})})
+    _ts.invalidate()
+    eng, market = make_cross()
+    run_days(eng, market, DAYS[:3])
+    assert n_trades() == 0 and any("invalid or unreadable" in e["message"] for e in eng.events)
+    assert eng.status()["settings"]["saved_version"] == 1
+    reset_settings_table()
+    monkeypatch.setattr(_ts, "load_current", lambda eng=None: (_ for _ in ()).throw(RuntimeError("down")))
+    _ts.invalidate()
+    with db.engine().begin() as c:
+        c.execute(text("TRUNCATE live_trades, live_events, live_sessions RESTART IDENTITY CASCADE"))
+    eng, market = make_cross()
+    run_days(eng, market, DAYS[:2])
+    assert n_trades() == 0                                                                  # a database that cannot be read is never treated as "all on"
+
+
+def test_a_configured_engine_trades_only_the_strategy_that_is_on_and_records_everything():
+    res = saved(on=["ema_9_21"])
+    eng, market = make({"entry_strategy": "configured"})
+    run_days(eng, market, DAYS[:4])
+    assert eng.cfg.entry_strategy == "configured" and eng._settings_version == res.version and eng.cfg.stop_mode == "pct"
+    trades = q("SELECT * FROM live_trades ORDER BY id")
+    assert trades, "a configured engine with EMA 9/21 ON must trade the synthetic days"
+    seen = set()
+    for t in trades:
+        a = t["analysis"]
+        s = a["settings"]
+        assert a["strategy"] == "ema_9_21" and s["strategies"] == ["ema_9_21"] and s["version"] == res.version                  # no other strategy ordered
+        assert s["timeframes"] == {"entry": 5, "trend": 15, "exit": "entry", "enabled": [5, 15, 30]} and s["engine_timeframe"] == 5
+        assert set(s["indicators"]) == set(_ts.INDICATORS) and a["configured"]["fired"] == ["ema_9_21"] and "CONFIGURED" in a["summary"]
+        assert t["exit_reason"] and t["status"] == "CLOSED" and a["signal"] == t["action"]
+        key = (t["day"], t["signal_ts"])
+        assert key not in seen                                                                                                      # never two orders from one candle
+        seen.add(key)
+    states = {r["key"]: r["state"] for r in eng.status()["bias"]["latest"]["configured"]["strategies"]}
+    assert states["ema_9_21"] in ("signal", "no signal") and all(v == "off" for k, v in states.items() if k != "ema_9_21")
+    assert q("SELECT count(*) AS n FROM candle_bias")[0]["n"] >= 4 * 74 - 5                                                         # every candle is still analysed
+
+
+def test_a_configured_engine_with_no_strategy_on_analyses_but_never_orders():
+    saved(on=[])
+    eng, market = make({"entry_strategy": "configured"})
+    run_days(eng, market, DAYS[:2])
+    assert n_trades() == 0 and q("SELECT count(*) AS n FROM candle_bias")[0]["n"] == 148
+    latest = eng.status()["bias"]["latest"]
+    assert latest["signal"] == "HOLD" and any("no strategy is able to trade" in r for r in latest["hold_reasons"])
+    assert all(r["state"] == "off" for r in latest["configured"]["strategies"])
+
+
+def test_a_strategy_blocked_by_a_disabled_indicator_never_orders_even_though_it_is_on():
+    saved(on=["ema_9_21_vwap"], indicators__vwap={"enabled": False, "params": {}})
+    eng, market = make({"entry_strategy": "configured"})
+    run_days(eng, market, DAYS[:3])
+    assert n_trades() == 0
+    row = {r["key"]: r for r in eng.status()["bias"]["latest"]["configured"]["strategies"]}["ema_9_21_vwap"]
+    assert row["state"] == "blocked" and "VWAP (disabled)" in row["reason"]
+
+
+def test_changing_the_settings_while_the_engine_runs_applies_to_the_next_candle_without_a_restart():
+    first = saved(on=["ema_9_21"])
+    eng, market = make({"entry_strategy": "configured"})
+    run_days(eng, market, DAYS[:2])
+    assert eng._settings_version == first.version and n_trades() > 0
+    before = n_trades()
+    with pytest.raises(_ts.SettingsError):
+        saved(on=["ema_5_20"], rules__risk_pct=0)                                           # an invalid change is refused and changes nothing
+    assert _ts.load_current().version == first.version and eng.cfg.risk_pct == first.doc["rules"]["risk_pct"]
+    second = saved(on=["ema_5_20"], rules__risk_pct=0.5, rules__start="10:00", rules__end="11:30", rules__max_trades_per_day=1)
+    run_days(eng, market, DAYS[2:4])
+    assert eng._settings_version == second.version and eng.cfg.risk_pct == 0.5 and eng.cfg.entry_start == "10:00" and eng.cfg.max_trades_per_day == 1
+    assert any(f"Trading Settings version {second.version} applied" in e["message"] for e in eng.events)
+    assert eng.status()["settings"]["applied_version"] == second.version and eng.status()["settings"]["saved_version"] == second.version
+    late = q("SELECT * FROM live_trades WHERE day >= :d ORDER BY id", d=DAYS[2])
+    assert late and len(late) <= 2                                                          # at most one a day under the new limit
+    for t in late:
+        assert t["analysis"]["strategy"] == "ema_5_20" and t["analysis"]["settings"]["version"] == second.version
+        assert time(10, 0) <= t["signal_ts"].time() <= time(11, 30)                         # inside the new trading window
+    assert n_trades() >= before
+    assert q("SELECT config FROM live_sessions ORDER BY id DESC LIMIT 1")[0]["config"]["risk_pct"] == 0.5          # the session record follows the settings
+
+
+def test_exit_confirmation_timeframe_decides_which_candle_may_close_a_trade_on_an_opposite_signal(monkeypatch):
+    orig = _configured.evaluate
+
+    def forced(res, spot, fut, bf, cfg, bar_close):
+        out, info = orig(res, spot, fut, bf, cfg, bar_close)
+        hhmm = out["close_ts"].dt.strftime("%H:%M")
+        out["direction"] = 0                                                      # only the two forced candles carry a signal in this scenario
+        out.loc[hhmm == "10:30", "direction"] = 1
+        out.loc[hhmm == "11:30", "direction"] = -1
+        last = pd.Timestamp(bar_close).strftime("%H:%M")
+        info.update(direction=(1 if last == "10:30" else -1) if last in ("10:30", "11:30") else 0, fired=["ema_9_21"] if last in ("10:30", "11:30") else [], conflict=False)
+        return out, info
+    monkeypatch.setattr(_configured, "evaluate", forced)
+    results = {}
+    for role in ("entry", "trend"):
+        with db.engine().begin() as c:
+            c.execute(text("TRUNCATE live_trades, live_events, live_sessions, candle_bias RESTART IDENTITY CASCADE"))
+        saved(on=["ema_9_21"], timeframes__exit=role, strategies__ema_9_21__params={"fast": 9, "slow": 21})
+        eng, market = make({"entry_strategy": "configured"})
+        run_days(eng, market, DAYS[:3])
+        results[role] = (q("SELECT * FROM live_trades ORDER BY id"), q("SELECT bar_close, score_15m FROM candle_bias WHERE bar_close::time = '11:30'"))
+    entry_trades, _ = results["entry"]
+    assert entry_trades
+    for t in entry_trades:
+        if t["exit_ts"].strftime("%H:%M") >= "11:30":                                                              # still open when the opposite candle closed
+            assert t["exit_reason"] == "opposite_signal" and t["exit_ts"].strftime("%H:%M") in ("11:30", "11:31")  # so the entry rule closed it there
+    assert any(t["exit_reason"] == "opposite_signal" for t in entry_trades)                                        # (the others were stopped out earlier)
+    trend_trades, s15 = results["trend"]
+    scores = {r["bar_close"].date(): r["score_15m"] for r in s15}
+    assert trend_trades
+    for t in trend_trades:
+        assert t["analysis"]["settings"]["timeframes"]["exit"] == "trend"
+        turned = scores.get(t["day"]) is not None and scores[t["day"]] <= -0.25                                    # the trend timeframe is clearly against a buy
+        if t["exit_reason"] == "opposite_signal":
+            assert turned, t["day"]                                                                                  # closed on the trend rule only when it really turned
+        if t["exit_ts"].strftime("%H:%M") > "11:31":
+            assert not turned, t["day"]                                                                              # still open after the candle means it had not turned

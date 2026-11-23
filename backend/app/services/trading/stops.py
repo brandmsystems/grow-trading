@@ -18,6 +18,7 @@ class StopLevels(NamedTuple):
     how: str                 # human-readable method, shown in the risk calculation
     error: str | None        # set when no stop can be calculated (the trade is then refused)
     delta: float | None      # |option delta| used (ATR mode only)
+    invalid: bool = False    # the stop was calculated but is outside the range the strategy allows (a refusal, not a missing input)
 
 
 def stop_levels(cfg: EngineConfig, side: str, premium: float, atr: float | None,
@@ -73,6 +74,11 @@ def stop_levels(cfg: EngineConfig, side: str, premium: float, atr: float | None,
     stop = round_stop(stop)
     if stop <= 0:
         return StopLevels(None, None, how, zero_error, delta_used)
+    if cfg.signal_mode == "bias" and cfg.entry_strategy == "scored" and premium > 0:
+        pct = 100 * abs(premium - stop) / premium          # option premium validation: a controlled, meaningful stop distance
+        if not cfg.sc_stop_min_pct <= pct <= cfg.sc_stop_max_pct:
+            return StopLevels(None, None, how, f"The stop is {pct:.1f}% of the premium ({premium:.2f}); the scored strategy needs "
+                              f"{cfg.sc_stop_min_pct:g}% to {cfg.sc_stop_max_pct:g}%.", delta_used, True)
     return StopLevels(stop, round(target, 2), how, None, delta_used)
 
 

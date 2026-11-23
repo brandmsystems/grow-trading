@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.services.strategy import bias
+from app.services.strategy import bias, confluence
 from app.services.strategy import rules as st
 from app.services.strategy import strategies
 from app.services.trading import charges as costs
@@ -62,6 +62,25 @@ class EngineConfig:
     trail_pct: float = 0.0             # trailing stop: premium distance from the best price, % (0 = off)
     trail_activate_pct: float = 10.0   # the trail starts once the premium has moved this % in your favour
     profit_target_net: float = 0.0     # bias mode: exit when ONE trade's net profit (after charges and slippage) reaches this ₹ (0 = off); after such an exit the same signal may re-enter on a later candle
+    entry_strategy: str = "bias"       # bias mode: bias = the weighted indicator votes | confluence = FVG + VWAP + ADR + EMA + structure | scored = the same ideas as points out of 100 | configured = every strategy that is ON in Trading Settings (applied live)
+    ind: dict = field(default_factory=dict)   # indicator parameters (RSI, MACD, Bollinger, ATR, volume SMA, RSI divergence, structure): bias.IndParams fields; {} = the long-standing values
+    cf_factors: list = field(default_factory=lambda: list(confluence.FACTORS))   # confluence: enabled factors (ema, vwap, fvg, structure)
+    cf_require: list = field(default_factory=list)   # confluence: factors that must be fully confirmed for an entry
+    cf_min_score: float = 75.0         # confluence: % confirmation needed
+    cf_adr_filter: bool = True         # confluence: refuse entries once today's range has used cf_adr_max_used % of the ADR
+    cf_adr_period: int = 10            # confluence: ADR over the last 5, 10 or 20 sessions
+    cf_adr_max_used: float = 100.0     # confluence: % of the ADR today's range may have used
+    cf_fvg_min_atr: float = 0.1        # confluence: smallest fair value gap, in ATRs
+    cf_fvg_max_age: int = 24           # confluence: bars a fair value gap stays tradable
+    cf_htf: bool = True                # confluence: the closed 15-minute trend must not be against the trade
+    sc_min_score: float = 80.0         # scored: minimum points out of 100 (experimental)
+    sc_adr_period: int = 10            # scored: ADR over the last 5, 10 or 20 sessions
+    sc_adr_max_used: float = 100.0     # scored: no entry once today's range has used this % of the ADR
+    sc_fvg_min_atr: float = 0.1        # scored: smallest fair value gap, in ATRs
+    sc_fvg_max_age: int = 24           # scored: candles a gap stays tradable
+    sc_ctx_tf: int = 0                 # scored: optional higher-timeframe context, 30 or 60 minutes (0 = off): its trend must not be against the trade
+    sc_stop_min_pct: float = 5.0       # scored: the ATR stop must be at least this % of the premium (a tighter stop is noise)
+    sc_stop_max_pct: float = 50.0      # scored: and at most this % (a wider stop is not a controlled risk)
     sell_risk_pct: float = 0.5         # risk per trade, % of capital, when writing (selling) options
     min_premium: float = 5.0           # entries need a premium of at least this (₹)
     min_oi: float = 0.0                # entries need open interest of at least this when known (0 = not checked)
@@ -157,9 +176,46 @@ class EngineConfig:
             if not lo <= v <= hi or (name == "sell_risk_pct" and v <= 0):
                 raise ValueError(f"{name.replace('_', ' ')} must be between {lo:g} and {hi:g}")
             setattr(self, name, v)
+        self._validate_confluence()
         self.bias_exit_opposite = bool(self.bias_exit_opposite)
         self.bias_max_hold_min, self.bias_cooldown_bars = int(self.bias_max_hold_min), int(self.bias_cooldown_bars)
         if not 0 <= self.bias_max_hold_min <= 375 or not 0 <= self.bias_cooldown_bars <= 20:
             raise ValueError("maximum holding time must be 0 to 375 minutes and the cooldown 0 to 20 candles")
         if self.max_trades_per_day < 1:
             raise ValueError("maximum trades per day must be at least 1")
+
+    def _validate_confluence(self) -> None:
+        """The confluence strategy's settings (they are checked in every bias run, used only when entry_strategy is confluence)."""
+        if self.entry_strategy not in ("bias", "confluence", "scored", "configured"):
+            raise ValueError("entry strategy must be bias, confluence, scored or configured")
+        known = set(bias.IndParams.__dataclass_fields__)
+        self.ind = {k: v for k, v in dict(self.ind or {}).items() if k in known}
+        self.cf_factors = [k for k in dict.fromkeys(self.cf_factors or []) if k in confluence.FACTORS]
+        if self.entry_strategy == "confluence" and not self.cf_factors:
+            raise ValueError("enable at least one confluence factor (EMA, VWAP, fair value gap, market structure)")
+        self.cf_require = [k for k in dict.fromkeys(self.cf_require or []) if k in self.cf_factors]
+        self.cf_adr_period, self.cf_fvg_max_age = int(self.cf_adr_period), int(self.cf_fvg_max_age)
+        if self.cf_adr_period not in confluence.ADR_PERIODS:
+            raise ValueError("ADR period must be 5, 10 or 20 sessions")
+        if not 1 <= self.cf_fvg_max_age <= 200:
+            raise ValueError("fair value gap age must be 1 to 200 candles")
+        for name, lo, hi in (("cf_min_score", 0, 100), ("cf_adr_max_used", 10, 1000), ("cf_fvg_min_atr", 0, 5)):
+            v = float(getattr(self, name))
+            if not lo <= v <= hi:
+                raise ValueError(f"{name[3:].replace('_', ' ')} must be between {lo:g} and {hi:g}")
+            setattr(self, name, v)
+        self.cf_adr_filter, self.cf_htf = bool(self.cf_adr_filter), bool(self.cf_htf)
+        self.sc_adr_period, self.sc_fvg_max_age, self.sc_ctx_tf = int(self.sc_adr_period), int(self.sc_fvg_max_age), int(self.sc_ctx_tf)
+        if self.sc_adr_period not in confluence.ADR_PERIODS:
+            raise ValueError("ADR period must be 5, 10 or 20 sessions")
+        if not 1 <= self.sc_fvg_max_age <= 200:
+            raise ValueError("fair value gap age must be 1 to 200 candles")
+        if self.sc_ctx_tf not in (0, 30, 60):
+            raise ValueError("the context timeframe must be 0 (off), 30 or 60 minutes")
+        for name, lo, hi in (("sc_min_score", 0, 100), ("sc_adr_max_used", 10, 1000), ("sc_fvg_min_atr", 0, 5), ("sc_stop_min_pct", 0, 100), ("sc_stop_max_pct", 1, 100)):
+            v = float(getattr(self, name))
+            if not lo <= v <= hi:
+                raise ValueError(f"{name[3:].replace('_', ' ')} must be between {lo:g} and {hi:g}")
+            setattr(self, name, v)
+        if self.sc_stop_min_pct >= self.sc_stop_max_pct:
+            raise ValueError("the smallest stop % must be below the largest")

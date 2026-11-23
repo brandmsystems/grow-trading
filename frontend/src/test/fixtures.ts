@@ -1,10 +1,10 @@
 /** Typed, realistic builders for API payloads. Every builder takes a partial override (deep-merged). */
 import type {
   PmArticle, PmFactor, PmHistory, PmNewsFeed, PmReport,
-  BiasAccuracy, BiasAnalysis, BiasConfig, BiasPrediction, BiasStatus, BiasSummary, BiasTrade, BiasTradeDetail,
+  BiasAccuracy, BiasAnalysis, BiasConfig, BiasPrediction, Confluence, Scored, TsConfig, TsMeta, TsParam, TsState, TsSummary, BiasStatus, BiasSummary, BiasTrade, BiasTradeDetail,
   Alert, Bar, BtMeta, BtResult, BtTrade, Dashboard, DataOverview, EngineConfig, Feed, HistSignal, Job, LiveTrade, LotSize, OptionChain,
   OptionsCoverage, PaperAccount, Position, Quote, Recommendation, Research, ResearchCell, RiskCalc, ScalpConfig, ScalpRun, SignalAnalysis,
-  TradingPlan,
+  TradingPlan, DailyRange, RangeDay, DayStatus,
 } from "../types/api";
 
 type DP<V> = unknown extends V ? V : V extends (infer U)[] ? U[] : V extends object ? DeepPartial<V> : V;
@@ -280,7 +280,53 @@ export const makeBiasConfig = (o?: DeepPartial<BiasConfig>): BiasConfig => merge
     trail_activate_pct: 10, sell_risk_pct: 0.5, min_premium: 5, min_oi: 0, max_spread_pct: 5, min_delta: 0.25, premarket_mode: "log", risk_pct: 1, daily_risk_pct: 3,
     max_daily_loss: 5000, max_trades_per_day: 20, max_lots: 10, min_balance: 0, stop_mode: "atr", stop_atr: 1, stop_pct: 30, stop_points: 20,
     entry_start: "09:30", cutoff: "14:30", exec_mode: "ATM_BUY", lots: 1, profit_target_net: 1500,
+    entry_strategy: "bias", cf_factors: ["ema", "vwap", "fvg", "structure"], cf_require: [], cf_min_score: 75, cf_adr_filter: true, cf_adr_period: 10,
+    cf_adr_max_used: 100, cf_fvg_min_atr: 0.1, cf_fvg_max_age: 24, cf_htf: true,
+    sc_min_score: 80, sc_adr_period: 10, sc_adr_max_used: 100, sc_fvg_min_atr: 0.1, sc_fvg_max_age: 24, sc_ctx_tf: 0, sc_stop_min_pct: 5, sc_stop_max_pct: 50,
   },
+  presets: { scored: { timeframe: 5, bias_confirm_tf: 15, risk_pct: 0.5, target_rr: 2, stop_mode: "atr", stop_atr: 1, daily_risk_pct: 1.5, max_trades_per_day: 5, profit_target_net: 0, sc_min_score: 80 } },
+  scored_components: [{ key: "trend", label: "Market trend", max: 25 }, { key: "ema", label: "EMA 20/50/200", max: 15 }, { key: "vwap", label: "VWAP", max: 20 }, { key: "fvg", label: "Unmitigated FVG retest", max: 20 },
+    { key: "momentum", label: "Momentum (RSI 14 + MACD)", max: 10 }, { key: "volume", label: "Volume vs SMA 20", max: 5 }, { key: "adr", label: "ADR", max: 5 }],
+  confluence_factors: [{ key: "ema", label: "EMA trend", weight: 1 }, { key: "vwap", label: "VWAP", weight: 1 }, { key: "fvg", label: "Fair value gap", weight: 1 }, { key: "structure", label: "Market structure", weight: 1 }],
+  adr_periods: [5, 10, 20],
+}, o);
+
+/** The scored strategy on the latest candle: a bullish candidate that scores 100 and passes every gate (override for a refusal). */
+export const makeScored = (o?: DeepPartial<Scored>): Scored => merge<Scored>({
+  score: 90, min_score: 80, candidate: "BUY CE", direction: 1, passed: true, rejections: [], score_long: 90, score_short: 15, entry_tf: 5, confirm_tf: 15, ctx_tf: 0,
+  components: [
+    { key: "trend", label: "Market trend", max: 25, points: 25, earned: true, condition: "15-minute trend is bullish; 5-minute structure: higher highs and lows" },
+    { key: "ema", label: "EMA 20/50/200", max: 15, points: 15, earned: true, condition: "EMA 20 25,005.00, 50 24,990.00, 200 24,800.00; close 25,012.50 is above EMA 20" },
+    { key: "vwap", label: "VWAP", max: 20, points: 12, earned: false, condition: "Close 25,012.50 is above VWAP 24,998.00 (+14.50); no retest or rejection on this candle" },
+    { key: "fvg", label: "Unmitigated FVG retest", max: 20, points: 20, earned: true, condition: "bullish gap 25,000.00-25,008.00 mitigated, first return retested and closed out now" },
+    { key: "momentum", label: "Momentum (RSI 14 + MACD)", max: 10, points: 10, earned: true, condition: "RSI 61.2, MACD histogram +1.40" },
+    { key: "volume", label: "Volume vs SMA 20", max: 5, points: 5, earned: true, condition: "volume 1.35× its 20-bar average" },
+    { key: "adr", label: "ADR", max: 5, points: 5, earned: true, condition: "today's range has used 62% of the 10-day ADR (limit 100%)" },
+  ],
+  gates: [["trend", "Confirmation-timeframe trend agrees"], ["ema", "EMA 20/50(/200) aligned"], ["vwap", "VWAP aligned"], ["fvg", "Unmitigated FVG retested and closed out"],
+    ["momentum", "Momentum agrees (RSI or MACD)"], ["adr", "ADR not used up"], ["atr", "Enough volatility"], ["conflict", "No conflicting signal"], ["score", "Score at least the minimum"]]
+    .map(([key, label]) => ({ key, label, ok: true, text: "met" })),
+  note: "Fixed starting rules, not fitted to any result. The score is how many conditions are met, not a probability of winning.",
+}, o);
+
+/** The confluence strategy's factors on the latest candle: a bullish candidate that passes (override `passed`/`rejections` for a refusal). */
+export const makeConfluence = (o?: DeepPartial<Confluence>): Confluence => merge<Confluence>({
+  score: 87.5, min_score: 75, direction: 1, candidate: "BUY CE", passed: true, rejections: [],
+  factors: [
+    { key: "ema", label: "EMA trend", weight: 1, enabled: true, required: false, vote: 1, status: "bullish", confirmed: true, agrees: true,
+      condition: "EMA 9 above 21 above 50; close 25,012.50 is above EMA 21 24,990.00", values: { ema9: 25005, ema21: 24990, ema50: 24950 } },
+    { key: "vwap", label: "VWAP", weight: 1, enabled: true, required: false, vote: 0.5, status: "bullish", confirmed: false, agrees: true,
+      condition: "Close 25,012.50 is above VWAP 24,998.00 (+14.50); no retest or rejection on this candle", values: { vwap: 24998, distance: 14.5, retest: false, rejection: false } },
+    { key: "fvg", label: "Fair value gap", weight: 1, enabled: true, required: false, vote: 1, status: "bullish", confirmed: true, agrees: true,
+      condition: "bullish gap 25,000.00-25,008.00 mitigated and retested now",
+      values: { bullish: { state: "mitigated", lo: 25000, hi: 25008, age_bars: 3, retest: true, active: 1 }, bearish: null } },
+    { key: "structure", label: "Market structure", weight: 1, enabled: true, required: false, vote: 1, status: "bullish", confirmed: true, agrees: true,
+      condition: "Higher highs and higher lows (swing high 25,020.00, swing low 24,960.00)", values: { swing_hi: 25020, swing_lo: 24960, break_of_structure: 0 } },
+  ],
+  adr: { period: 10, filter: true, max_used: 100, ok: true, text: "Today's range 120.00 has used 62% of the 10-day ADR 193.50 (limit 100%).", range_today: 120,
+    rows: [{ period: 5, adr: 180, used: 67 }, { period: 10, adr: 193.5, used: 62 }, { period: 20, adr: 201, used: 60 }] },
+  htf: { on: true, trend15: 1, ok: true },
+  note: "Fixed starting rules, not fitted to any result. The score is how many enabled factors agree, not a probability of winning.",
 }, o);
 
 export const makeBiasStatus = (o?: DeepPartial<BiasStatus>): BiasStatus => merge<BiasStatus>({
@@ -404,3 +450,141 @@ export const makePmFeed = (o?: Partial<PmNewsFeed>): PmNewsFeed => ({
   method: "Sentiment, NIFTY direction, impact level, sectors and the reason it matters come from fixed keyword rules applied to the publisher's headline and summary.",
   ...o,
 });
+
+// ------------------------------------------------------------------ Trading Settings
+const P = (key: string, label: string, type: TsParam["type"], min: number, max: number, def: number | string | boolean, choices?: (number | string)[]): TsParam =>
+  ({ key, label, type, min, max, default: def, ...(choices ? { choices } : {}) });
+
+const CROSS: [string, string, number, number, string[]][] = [
+  ["ema_9_21", "EMA 9/21", 9, 21, ["ema"]], ["ema_5_20", "EMA 5/20", 5, 20, ["ema"]], ["ema_8_21", "EMA 8/21", 8, 21, ["ema"]], ["ema_20_50", "EMA 20/50", 20, 50, ["ema"]],
+  ["ema_9_21_vwap", "EMA 9/21 + VWAP", 9, 21, ["ema", "vwap"]], ["ema_9_21_rsi", "EMA 9/21 + RSI", 9, 21, ["ema", "rsi"]], ["ema_9_21_macd", "EMA 9/21 + MACD", 9, 21, ["ema", "macd"]],
+];
+const METHODS: [string, string, string[]][] = [
+  ["cross_9_21", "EMA 9/21 fresh crossover", ["ema"]], ["cross_5_20", "EMA 5/20 fresh crossover", ["ema"]], ["cross_8_21", "EMA 8/21 fresh crossover", ["ema"]],
+  ["cross_9_21_vwap", "EMA 9/21 crossover + VWAP side", ["ema", "vwap"]], ["continuation_9_21", "EMA 9/21 trend continuation", ["ema", "atr"]], ["pullback_9_21", "EMA 9/21 pullback and rejection", ["ema", "atr"]],
+  ["stack_20_50_200", "EMA 20/50/200 alignment", ["ema"]], ["rsi_divergence", "RSI divergence + price confirmation", ["rsi", "rsi_divergence"]], ["macd_cross", "MACD signal-line crossover", ["macd"]],
+  ["macd_hist_trend", "MACD histogram flip with 15m trend", ["macd"]], ["bb_breakout", "Bollinger breakout with volume", ["bollinger", "volume"]], ["bb_reversal", "Bollinger reversal", ["bollinger"]],
+  ["vwap_breakout", "VWAP breakout", ["vwap"]], ["vwap_retest", "VWAP retest", ["vwap", "atr"]], ["sr_breakout", "Previous-day high/low breakout", ["structure"]],
+  ["sr_retest", "Previous-day high/low breakout retest", ["structure", "atr"]], ["sr_rejection", "Previous-day high/low rejection", ["structure", "atr"]],
+  ["volume_momentum", "Volume-confirmed momentum candle", ["volume", "atr"]], ["atr_breakout", "ATR volatility breakout candle", ["atr"]], ["orb", "Opening range breakout", ["atr"]],
+  ["consolidation_breakout", "Consolidation breakout", ["atr"]], ["trend_reversal", "15m trend reversal", ["ema"]],
+];
+const IND: [string, string, TsParam[], string][] = [
+  ["ema", "EMA", [], "Periods are set per strategy."], ["vwap", "VWAP", [], "Session VWAP of the near-month NIFTY future."],
+  ["rsi", "RSI", [P("period", "Period", "int", 2, 50, 14), P("overbought", "Overbought", "float", 55, 95, 75), P("oversold", "Oversold", "float", 5, 45, 25)], ""],
+  ["macd", "MACD", [P("fast", "Fast", "int", 2, 50, 12), P("slow", "Slow", "int", 3, 100, 26), P("signal", "Signal", "int", 2, 50, 9)], ""],
+  ["bollinger", "Bollinger Bands", [P("period", "Period", "int", 5, 100, 20), P("std", "Standard deviations", "float", 0.5, 4, 2)], ""],
+  ["volume", "Volume / Volume SMA", [P("sma_period", "SMA period", "int", 5, 100, 20)], ""],
+  ["fvg", "Fair value gap (FVG)", [P("min_atr", "Smallest gap (× ATR)", "float", 0, 5, 0.1), P("max_age", "Gap tradable for (candles)", "int", 1, 200, 24)], ""],
+  ["adr", "Average daily range (ADR)", [P("period", "Sessions", "choice", 5, 20, 10, [5, 10, 20]), P("max_used", "No entry once used (%)", "float", 10, 1000, 100)], ""],
+  ["atr", "ATR", [P("period", "Period", "int", 2, 50, 14)], ""], ["rsi_divergence", "RSI divergence", [P("pivot", "Pivot confirmed after (bars)", "int", 1, 10, 3), P("decay", "Valid for (bars)", "int", 1, 30, 6)], "Needs RSI."],
+  ["structure", "Market structure / Support & resistance", [P("swing", "Swing pivot confirmed after (bars)", "int", 1, 10, 3)], ""],
+];
+const RULES: TsParam[] = [
+  P("min_score", "Minimum confidence / signal score", "float", 0, 100, 0), P("max_trades_per_day", "Maximum trades a day", "int", 1, 200, 6),
+  P("max_open_positions", "Maximum open positions", "int", 1, 1, 1), P("stop_mode", "Stop-loss method", "choice", 0, 0, "atr", ["atr", "pct", "points"]),
+  P("stop_atr", "Stop: delta × ATR multiple", "float", 0.1, 10, 1), P("stop_pct", "Stop: % of premium", "float", 1, 99, 30), P("stop_points", "Stop: premium points", "float", 0.5, 10000, 20),
+  P("target_rr", "Target (× the stop distance)", "float", 0.1, 20, 2), P("profit_target_net", "Net profit target per trade", "float", 0, 1e7, 0), P("risk_pct", "Risk per trade (% of virtual capital)", "float", 0.05, 100, 1),
+  P("trail_pct", "Trailing stop", "float", 0, 99, 0), P("trail_activate_pct", "Trail starts after", "float", 0, 1000, 10), P("start", "Trading starts", "time", 0, 0, "09:30"), P("end", "Trading ends", "time", 0, 0, "14:30"),
+  P("reentry_enabled", "Allow re-entry after an exit", "bool", 0, 1, true), P("cooldown_bars", "Cool-down after an exit (candles)", "int", 0, 20, 2),
+  P("daily_loss_pct", "Daily loss limit (% of capital)", "float", 0, 100, 3), P("daily_loss_rupees", "Daily loss limit (₹)", "float", 0, 1e9, 5000),
+];
+
+export const makeTsMeta = (): TsMeta => ({
+  strategies: [
+    ...CROSS.map(([key, label, f, s, requires]) => ({ key, label, kind: "crossover" as const, requires, requires_any: [], params: [P("fast", "Fast EMA", "int", 2, 200, f), P("slow", "Slow EMA", "int", 3, 400, s)], note: `${label} crossover.` })),
+    { key: "bias", label: "Bias votes (12 indicators)", kind: "bias", requires: [], requires_any: ["ema", "vwap", "rsi", "macd", "bollinger", "volume", "rsi_divergence", "structure"],
+      params: [P("min_confidence", "Minimum confidence (%)", "float", 0, 100, 70), P("trend_thr", "Trend needs ± score", "float", 0, 1, 0.25), P("confirm_thr", "Entry candle needs ± score", "float", 0, 1, 0.2)], note: "Weighted vote of every enabled indicator." },
+    { key: "confluence", label: "Confluence (FVG + VWAP + ADR + EMA + structure)", kind: "confluence", requires: [], requires_any: ["ema", "vwap", "fvg", "structure"],
+      params: [P("min_score", "Confirmation score needed (%)", "float", 0, 100, 75), P("htf", "Trend timeframe must not be against", "bool", 0, 1, true)], note: "Each factor counts only while its indicator is ON." },
+    { key: "scored", label: "Scored (structure + EMA + VWAP + FVG + ADR)", kind: "scored", requires: ["ema", "vwap", "rsi", "macd", "volume", "fvg", "adr", "atr", "structure"], requires_any: [],
+      params: [P("min_score", "Minimum score (of 100)", "float", 0, 100, 80), P("ctx_tf", "Context timeframe (0 = off)", "choice", 0, 60, 0, [0, 30, 60]), P("stop_min_pct", "Stop at least (% of premium)", "float", 0, 100, 5), P("stop_max_pct", "Stop at most (% of premium)", "float", 1, 100, 50)],
+      note: "Needs every indicator it scores." },
+    ...METHODS.map(([key, label, requires]) => ({ key: "m_" + key, label, kind: "method" as const, requires, requires_any: [], params: [], note: "Research entry method (fixed rules)." })),
+  ],
+  indicators: IND.map(([key, label, params, note]) => ({ key, label, params, note, depends_on: key === "rsi_divergence" ? ["rsi"] : [] })),
+  rules: RULES,
+  timeframes: { all: [1, 5, 15, 30], entry: [5, 15], trend: [15, 30], exit: ["entry", "trend"],
+    notes: { "1": "Cannot be used for entry, trend or exit confirmation in this engine.", "5": "Entry candle.", "15": "Entry candle or trend confirmation.", "30": "Trend confirmation." } },
+});
+
+export const makeTsConfig = (): TsConfig => {
+  const meta = makeTsMeta();
+  const on = new Set(["ema_9_21", "ema_5_20", "ema_8_21", "ema_20_50", "ema_9_21_vwap", "ema_9_21_rsi", "ema_9_21_macd", "bias", "confluence", "scored"]);
+  return {
+    strategies: Object.fromEntries(meta.strategies.map((s) => [s.key, { enabled: on.has(s.key), params: Object.fromEntries(s.params.map((p) => [p.key, p.default])) }])),
+    timeframes: { enabled: { "1": false, "5": true, "15": true, "30": true }, entry: 5, trend: 15, exit: "entry", trend_filter: true },
+    indicators: Object.fromEntries(meta.indicators.map((i) => [i.key, { enabled: true, params: Object.fromEntries(i.params.map((p) => [p.key, p.default])) }])),
+    rules: Object.fromEntries(meta.rules.map((p) => [p.key, p.default])),
+  };
+};
+
+export const makeTsSummary = (config: TsConfig = makeTsConfig(), over: Partial<TsSummary> = {}): TsSummary => {
+  const on = Object.keys(config.strategies).filter((k) => config.strategies[k].enabled);
+  return {
+    version: 3, saved_at: "2026-11-21T10:15:30", valid: true, error: null, strategies_on: on, strategies_active: on, strategies_blocked: {},
+    timeframes_enabled: [5, 15, 30], entry_tf: 5, trend_tf: 15, exit: "entry", indicators_on: Object.keys(config.indicators), indicators_off: [],
+    rules: { window: "09:30-14:30", max_trades_per_day: 6, risk_pct: 1, stop: "atr", target_rr: 2, daily_loss_pct: 3, reentry: true }, ...over,
+  };
+};
+
+export const makeTsState = (o: Partial<TsState> = {}): TsState => {
+  const config = o.config ?? makeTsConfig();
+  return { version: 3, saved_at: "2026-11-21T10:15:30", note: "saved", config, summary: makeTsSummary(config), warnings: [], error: null, meta: makeTsMeta(), defaults: makeTsConfig(), ...o };
+};
+
+// ------------------------------------------------------------------ daily range
+/** `n` weekdays ending on `end`, oldest first. Day k opens at 25,000 + 40k and has a range of 150 + 10 (k mod 7) points; every third day closes down. */
+export function makeRangeDays(n = 24, end = "2026-11-17", status: Partial<Record<number, DayStatus>> = {}): RangeDay[] {
+  const dates: string[] = [];
+  for (let d = new Date(end + "T00:00:00Z"); dates.length < n; d.setUTCDate(d.getUTCDate() - 1)) if (d.getUTCDay() % 6 !== 0) dates.unshift(d.toISOString().slice(0, 10));
+  const days: RangeDay[] = [];
+  dates.forEach((date, k) => {
+    const open = 25000 + 40 * k, range = 150 + 10 * (k % 7), up = k % 3 !== 0;
+    const close = up ? open + 60 : open - 50;
+    const st = status[k] ?? "complete";
+    const prev = [...days].reverse().find((x) => x.status === "complete");
+    const avg = (w: number) => {
+      const done = days.concat({ range } as RangeDay).filter((x, i, a) => i === a.length - 1 ? st === "complete" : x.status === "complete");
+      return st === "complete" && done.length >= w ? Math.round(done.slice(-w).reduce((a, x) => a + x.range, 0) / w * 100) / 100 : null;
+    };
+    days.push({
+      date, open, high: open + range - 40, low: open - 40, close, range, range_pct: Math.round(10000 * range / open) / 100,
+      prev_close: prev?.close ?? null, prev_date: prev?.date ?? null,
+      change: prev ? close - prev.close : null, change_pct: prev ? Math.round(10000 * (close - prev.close) / prev.close) / 100 : null,
+      avg10: avg(10), avg20: avg(20), avg50: avg(50), candles: st === "complete" ? 375 : 120, status: st, first: "09:15", last: st === "complete" ? "15:29" : "11:14",
+    });
+  });
+  return days;
+}
+
+/** The server's default window: the day after the same date a year earlier. */
+const oneYearBack = (end: string) => { const d = new Date(end + "T00:00:00Z"); d.setUTCFullYear(d.getUTCFullYear() - 1); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
+
+export const makeDailyRange = (o: Partial<DailyRange> & { days?: RangeDay[] } = {}): DailyRange => {
+  const days = o.days ?? makeRangeDays();
+  const done = days.filter((d) => d.status === "complete");
+  const widest = done.reduce((a, b) => (b.range > a.range ? b : a)), narrowest = done.reduce((a, b) => (b.range < a.range ? b : a));
+  const pick = (d: RangeDay) => ({ date: d.date, range: d.range, range_pct: d.range_pct, high: d.high, low: d.low });
+  const last = days[days.length - 1];
+  const hi = days.reduce((a, b) => (b.high > a.high ? b : a)), lo = days.reduce((a, b) => (b.low < a.low ? b : a));
+  const adr = done.reduce((a, d) => a + d.range, 0) / done.length;
+  return {
+    symbol: "NSE-NIFTY", window: { from: oneYearBack(last.date), to: last.date }, as_of: `${last.date}T${last.last}:00`,
+    counts: { days: days.length, complete: done.length, partial: days.filter((d) => d.status === "partial").length, in_progress: days.filter((d) => d.status === "in_progress").length },
+    days,
+    summary: {
+      high: { price: hi.high, date: hi.date }, low: { price: lo.low, date: lo.date }, current: { price: last.close, date: last.date, time: last.last, status: last.status },
+      adr: Math.round(adr * 100) / 100, adr_pct: 0.63, highest_range: pick(widest), lowest_range: pick(narrowest), median_range: 180,
+      bullish_days: done.filter((d) => d.close >= d.open).length, bearish_days: done.filter((d) => d.close < d.open).length,
+    },
+    analysis: {
+      windows: [10, 20, 50],
+      trend: { avg10: 180, avg50: 160, ratio: 1.125, label: "expanding", as_of: last.date, band: 0.1 },
+      current: { date: last.date, status: last.status, open: last.open, high: last.high, low: last.low, close: last.close, range: last.range, range_pct: last.range_pct, last: last.last,
+        adr: { "10": 180, "20": 175, "50": null }, utilization: { "10": 100 * last.range / 180, "20": 100 * last.range / 175, "50": null }, remaining: { "10": Math.max(0, 180 - last.range), "20": Math.max(0, 175 - last.range), "50": null } },
+    },
+    rules: { session_minutes: 375, range_pct_of: "open", change_pct_of: "previous complete close" },
+    ...o,
+  };
+};

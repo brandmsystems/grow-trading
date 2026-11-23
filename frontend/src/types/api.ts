@@ -417,6 +417,28 @@ export interface BiasIndicatorRow {
   key: string; label: string; weight: number; v5: number | null; v15: number | null; status5: VoteStatus; status15: VoteStatus;
 }
 export interface ContractCheck { check: string; ok: boolean | null; text: string }
+/** One factor of the confluence strategy (FVG + VWAP + ADR + EMA + market structure) on the latest closed candle. */
+export interface CfFactor {
+  key: "ema" | "vwap" | "fvg" | "structure"; label: string; weight: number; enabled: boolean; required: boolean;
+  vote: number | null; status: VoteStatus; confirmed: boolean | null; agrees: boolean | null; condition: string; values: Record<string, unknown>;
+}
+export interface FvgZone { state: "unfilled" | "mitigated" | "filled"; lo: number; hi: number; age_bars: number; retest: boolean; active: number }
+export interface Confluence {
+  score: number; min_score: number; direction: number; candidate: "BUY CE" | "BUY PE" | null; passed: boolean;
+  factors: CfFactor[]; rejections: string[];
+  adr: { period: number; filter: boolean; max_used: number; ok: boolean | null; text: string; range_today: number | null; rows: { period: number; adr: number | null; used: number | null }[] };
+  htf: { on: boolean; trend15: number; ok: boolean };
+  note: string;
+}
+/** The scored strategy (market structure + EMA + VWAP + FVG + ADR, points out of 100) on the latest closed candle. */
+export interface ScoredComponent { key: string; label: string; max: number; points: number; condition: string; earned: boolean }
+export interface ScoredGate { key: string; label: string; ok: boolean; text: string }
+export interface Scored {
+  score: number; min_score: number; candidate: "BUY CE" | "BUY PE" | null; direction: number; passed: boolean;
+  components: ScoredComponent[]; gates: ScoredGate[]; rejections: string[]; score_long: number | null; score_short: number | null;
+  entry_tf: number; confirm_tf: number; ctx_tf: number; note: string;
+}
+export interface RejectedSignal { bar_close: string; side: string; score: number; min_score: number; reasons: string[] }
 export interface BiasAnalysis {
   bar_close: string; close: number; bias: BiasLabel; confidence: number; combined: number | null;
   trend_5m: "Bullish" | "Bearish" | "Neutral"; trend_15m: "Bullish" | "Bearish" | "Neutral";
@@ -427,6 +449,8 @@ export interface BiasAnalysis {
   tf_primary: number; tf_confirm: number; values: Record<string, number | null>;
   indicators: BiasIndicatorRow[]; supports: string[]; against: string[]; hold_reasons: string[]; summary: string; note: string;
   instrument?: string; contract_checks?: ContractCheck[]; entry_premium_seen?: number;
+  /** Set when the confluence strategy produced the entry decision (or, from /api/bias/analysis, as a preview of its factors). */
+  strategy?: "confluence" | "scored"; entry_score?: number; bias_signal?: string; confluence?: Confluence; scored?: Scored;
 }
 export interface BiasHistoryItem {
   bar_close: string; close: number; bias: BiasLabel; confidence: number; signal: string; predicted: CandleDir;
@@ -442,23 +466,31 @@ export interface BiasSettings {
   entry_start: string; cutoff: string; exec_mode: "ITM5_BUY" | "ATM_BUY" | "ATM_SELL"; lots: number;
   /** Exit one trade when its NET profit (after charges and slippage) reaches this many rupees; 0 = off. */
   profit_target_net: number;
+  /** Confluence strategy: which engine decides entries, and its factors and filters. */
+  entry_strategy: "bias" | "confluence" | "scored" | "configured"; cf_factors: string[]; cf_require: string[]; cf_min_score: number; cf_adr_filter: boolean;
+  cf_adr_period: number; cf_adr_max_used: number; cf_fvg_min_atr: number; cf_fvg_max_age: number; cf_htf: boolean;
+  /** Scored strategy: minimum points, ADR, gap, optional context timeframe and the premium range the ATR stop must fall in. */
+  sc_min_score: number; sc_adr_period: number; sc_adr_max_used: number; sc_fvg_min_atr: number; sc_fvg_max_age: number; sc_ctx_tf: number;
+  sc_stop_min_pct: number; sc_stop_max_pct: number;
 }
 export interface BiasConfig {
   defaults: BiasSettings; running: boolean; settings: BiasSettings | null;
   indicators: { key: string; label: string; weight: number }[]; note: string;
+  confluence_factors?: { key: string; label: string; weight: number }[]; adr_periods?: number[];
+  scored_components?: { key: string; label: string; max: number }[]; presets?: { scored?: Partial<BiasSettings> };
 }
 export interface EngineEvent { ts: string; level: string; message: string }
 export type AutomationPhase = "ready" | "holding" | "exiting" | "waiting" | "paused" | "limit" | "halted";
 /** What the continuous automation is doing right now (from the engine). */
 export interface BiasAutomation {
-  phase: AutomationPhase; label: string; detail: string; paused: boolean; min_confidence: number; profit_target_net: number;
+  phase: AutomationPhase; label: string; detail: string; paused: boolean; min_confidence: number; strategy?: "bias" | "confluence" | "scored"; profit_target_net: number;
   target_hits: number; trades_today: number; no_entry_through: string | null;
 }
 export interface BiasStatus {
   running: boolean; state?: EngineState; halt_reason?: string | null; trade_mode?: "paper" | "replay"; day?: string | null; now?: string;
   position?: Position | null; realised_today?: number; events?: EngineEvent[]; next_eval?: string | null;
   nifty?: { price: number; ts: string } | null; conn_error?: string | null; session_id?: number | null; config?: Record<string, unknown>;
-  bias?: { latest: BiasAnalysis | null; history: BiasHistoryItem[]; trades_today: number; max_trades: number; remaining_trades: number; cooldown_until: string | null; automation?: BiasAutomation } | null;
+  bias?: { latest: BiasAnalysis | null; history: BiasHistoryItem[]; trades_today: number; max_trades: number; remaining_trades: number; cooldown_until: string | null; rejected?: RejectedSignal[]; automation?: BiasAutomation } | null;
 }
 export interface BiasAnalysisResponse {
   as_of_day: string; live: boolean; analysis: BiasAnalysis; futures: boolean; error: string | null;
@@ -471,13 +503,18 @@ export interface BiasPrediction {
 export interface BiasAccuracyRow { key: string; label: string; timeframe: string; correct: number; incorrect: number; neutral: number; n: number; accuracy: number | null }
 export interface BiasAccuracy { candles: number; rows: BiasAccuracyRow[]; timeframes?: [number, number]; from?: string; to?: string; note?: string }
 export interface BiasTrade extends LiveTrade {
-  action: string | null; confidence: number | null; supporting: string[];
+  action: string | null; confidence: number | null; supporting: string[]; strategy?: string;
   exit_detail?: { reason: string; exit_premium: number; best_premium: number | null; stop_at_exit: number | null; target: number | null;
     bias_at_exit: Partial<BiasAnalysis> } | null;
 }
 export interface BiasGroup { trades: number; wins: number; losses: number; win_rate: number | null; net: number; gross: number }
+/** Performance of one entry strategy on closed trades (never mixed with another strategy's). */
+export interface StrategyStats extends BiasGroup {
+  expectancy: number | null; profit_factor: number | null; max_drawdown: number; avg_win: number | null; avg_loss: number | null;
+}
 export interface BiasSummary extends BiasGroup {
   open: number; mode: string; note: string; target_hits?: number;
+  by_strategy?: Record<string, StrategyStats>;
   by_instrument: Record<string, BiasGroup>; by_exit: Record<string, BiasGroup>;
   by_confidence: Record<string, BiasGroup>; by_indicator: Record<string, BiasGroup>;
 }
@@ -532,3 +569,59 @@ export interface PmHistory {
   effectiveness: { group: string; trades: number; wins: number; win_pct: number | null; net: number }[];
 }
 export interface PmInput { kind: "fii_dii" | "event"; day?: string; title?: string; fii_net_cash?: number | null; dii_net_cash?: number | null; fii_index_fut_long?: number | null; fii_index_fut_short?: number | null; source?: string }
+
+// ------------------------------------------------------------------ Trading Settings (centrally managed strategy, timeframe, indicator and risk configuration)
+export interface TsParam { key: string; label: string; type: "int" | "float" | "bool" | "choice" | "time"; min: number; max: number; default: number | string | boolean; choices?: (number | string)[] }
+export interface TsStrategyMeta { key: string; label: string; kind: "crossover" | "bias" | "confluence" | "scored" | "method"; requires: string[]; requires_any: string[]; params: TsParam[]; note: string }
+export interface TsIndicatorMeta { key: string; label: string; params: TsParam[]; note: string; depends_on: string[] }
+export interface TsMeta {
+  strategies: TsStrategyMeta[]; indicators: TsIndicatorMeta[]; rules: TsParam[];
+  timeframes: { all: number[]; entry: number[]; trend: number[]; exit: string[]; notes: Record<string, string> };
+}
+export type TsValue = number | string | boolean;
+export interface TsConfig {
+  strategies: Record<string, { enabled: boolean; params: Record<string, TsValue> }>;
+  timeframes: { enabled: Record<string, boolean>; entry: number; trend: number; exit: "entry" | "trend"; trend_filter: boolean };
+  indicators: Record<string, { enabled: boolean; params: Record<string, TsValue> }>;
+  rules: Record<string, TsValue>;
+}
+export interface TsIssue { path: string; message: string }
+export interface TsSummary {
+  version: number; saved_at: string | null; valid: boolean; error: string | null; strategies_on: string[]; strategies_active: string[];
+  strategies_blocked: Record<string, string[]>; timeframes_enabled: number[]; entry_tf: number; trend_tf: number; exit: "entry" | "trend";
+  indicators_on: string[]; indicators_off: string[];
+  rules: { window: string; max_trades_per_day: number; risk_pct: number; stop: string; target_rr: number; daily_loss_pct: number; reentry: boolean };
+}
+export interface TsState { version: number; saved_at: string | null; note: string | null; config: TsConfig; summary: TsSummary; warnings: TsIssue[]; error: string | null; meta?: TsMeta; defaults?: TsConfig }
+export interface TsCheck { valid: boolean; errors: TsIssue[]; warnings: TsIssue[]; config: TsConfig; summary: TsSummary | null }
+
+// ------------------------------------------------------------------ daily range
+export type DayStatus = "complete" | "partial" | "in_progress";
+export interface RangeDay {
+  date: string; open: number; high: number; low: number; close: number; range: number; range_pct: number;
+  prev_close: number | null; prev_date: string | null; change: number | null; change_pct: number | null;
+  avg10: number | null; avg20: number | null; avg50: number | null;
+  candles: number; status: DayStatus; first: string; last: string;
+}
+export interface RangePick { date: string; range: number; range_pct: number; high: number; low: number }
+export interface RangeCurrent {
+  date: string; status: DayStatus; open: number; high: number; low: number; close: number; range: number; range_pct: number; last: string;
+  adr: Record<string, number | null>; utilization: Record<string, number | null>; remaining: Record<string, number | null>; note?: string;
+}
+export interface DailyRange {
+  symbol: string; window: { from: string; to: string } | null; as_of: string | null;
+  counts: { days: number; complete: number; partial: number; in_progress: number };
+  days: RangeDay[];
+  summary: {
+    high: { price: number; date: string }; low: { price: number; date: string };
+    current: { price: number; date: string; time: string; status: DayStatus } | null;
+    adr: number | null; adr_pct: number | null; highest_range: RangePick | null; lowest_range: RangePick | null;
+    median_range: number | null; bullish_days: number; bearish_days: number;
+  } | null;
+  analysis: {
+    windows: number[];
+    trend: { avg10: number; avg50: number; ratio: number | null; label: "expanding" | "contracting" | "steady" | null; as_of: string; band: number } | null;
+    current: RangeCurrent | null;
+  };
+  rules?: { session_minutes?: number; range_pct_of?: string; change_pct_of?: string };
+}

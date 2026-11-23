@@ -102,3 +102,111 @@ def test_continuous_automation_defaults_and_pause_need_a_running_engine(client, 
     assert seen[0]["profit_target_net"] == 2000 and seen[1]["profit_target_net"] == 1500 and seen[1]["bias_min_confidence"] == 70
     r = client.post("/api/bias/start", json={"config": {"profit_target_net": -5}})
     assert r.status_code == 200          # start is mocked here: validation is covered in the engine tests
+
+
+# ---------------------------------------------------------------- confluence strategy
+def test_config_lists_the_confluence_factors_and_the_default_strategy_is_still_bias(client):
+    d = client.get("/api/bias/config").get_json()["data"]
+    assert [f["key"] for f in d["confluence_factors"]] == ["ema", "vwap", "fvg", "structure"] and d["adr_periods"] == [5, 10, 20]
+    df = d["defaults"]
+    assert df["entry_strategy"] == "bias" and df["cf_factors"] == ["ema", "vwap", "fvg", "structure"] and df["cf_require"] == []
+    assert (df["cf_min_score"], df["cf_adr_filter"], df["cf_adr_period"], df["cf_adr_max_used"], df["cf_htf"]) == (75.0, True, 10, 100.0, True)
+
+
+def test_start_passes_the_confluence_settings_through_and_still_cannot_reach_live(client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(live_manager, "start", lambda cfg, confirm="", day=None, speed=120: seen.append(cfg) or {"state": "waiting"})
+    r = client.post("/api/bias/start", json={"config": {"entry_strategy": "confluence", "cf_factors": ["ema", "fvg"], "cf_require": ["fvg"],
+                                                         "cf_min_score": 80, "cf_adr_period": 20, "trade_mode": "live"}})
+    assert r.status_code == 200
+    cfg = seen[0]
+    assert cfg["entry_strategy"] == "confluence" and cfg["cf_factors"] == ["ema", "fvg"] and cfg["cf_adr_period"] == 20
+    assert cfg["trade_mode"] == "paper" and cfg["signal_mode"] == "bias"                              # the strategy cannot change the mode
+    assert client.post("/api/bias/start", json={"trade_mode": "live", "config": {"entry_strategy": "confluence"}}).status_code == 400
+    assert client.post("/api/bias/settings", json={"cf_min_score": 80}).status_code == 409           # needs a running engine
+
+
+def test_analysis_previews_the_confluence_factors_and_takes_the_settings_from_the_query(client, monkeypatch):
+    import pandas as pd
+    from app.api import bias as bias_api
+    from app.services.market_data import feed as live_feed
+    from tests.test_bias import candles
+    spot = candles(days=30, drift=0.12, seed=3, futures=True, vol=6.0)
+    fut = spot.copy()
+    fut["close"] += 9
+
+    class FakeFeed:
+        def now(self):
+            return pd.Timestamp("2026-11-11 15:30").to_pydatetime()
+
+        def candles(self, day):
+            return spot, fut, None
+    monkeypatch.setattr(live_feed, "feed", lambda: FakeFeed())
+    monkeypatch.setattr(bias_api.config, "load_keys", lambda: None)
+    bias_api._cache.update(key=None, at=0.0, value=None)
+
+    r = client.get("/api/bias/analysis")
+    assert r.status_code == 200
+    c = r.get_json()["data"]["analysis"]["confluence"]
+    assert [f["key"] for f in c["factors"]] == ["ema", "vwap", "fvg", "structure"] and all(f["enabled"] for f in c["factors"])
+    assert [x["period"] for x in c["adr"]["rows"]] == [5, 10, 20] and c["adr"]["period"] == 10 and c["adr"]["filter"] is True
+    assert all(f["condition"] for f in c["factors"]) and c["min_score"] == 75.0 and "probability" in c["note"]
+
+    r = client.get("/api/bias/analysis?cf_factors=ema,vwap&cf_require=vwap&cf_min_score=60&cf_adr_period=20&cf_adr_filter=false")
+    c = r.get_json()["data"]["analysis"]["confluence"]
+    assert [f["enabled"] for f in c["factors"]] == [True, True, False, False] and [f["required"] for f in c["factors"]] == [False, True, False, False]
+    assert c["min_score"] == 60 and c["adr"]["period"] == 20 and c["adr"]["filter"] is False
+    assert client.get("/api/bias/analysis?cf_adr_period=7").status_code == 400                         # a bad setting is a 400, not a crash
+    bias_api._cache.update(key=None, at=0.0, value=None)
+
+
+# ---------------------------------------------------------------- scored strategy
+def test_config_offers_the_scored_components_and_the_specified_risk_preset(client):
+    d = client.get("/api/bias/config").get_json()["data"]
+    assert [c["key"] for c in d["scored_components"]] == ["trend", "ema", "vwap", "fvg", "momentum", "volume", "adr"]
+    assert sum(c["max"] for c in d["scored_components"]) == 100
+    p = d["presets"]["scored"]
+    assert (p["risk_pct"], p["target_rr"], p["stop_mode"], p["daily_risk_pct"], p["max_trades_per_day"], p["sc_min_score"]) == (0.5, 2.0, "atr", 1.5, 5, 80.0)
+    assert (p["timeframe"], p["bias_confirm_tf"]) == (5, 15)
+    df = d["defaults"]
+    assert df["entry_strategy"] == "bias" and df["sc_min_score"] == 80.0 and df["max_trades_per_day"] == 20 and df["risk_pct"] == 1.0     # nothing changes unless the preset is used
+
+
+def test_start_passes_the_scored_settings_through_and_still_cannot_reach_live(client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(live_manager, "start", lambda cfg, confirm="", day=None, speed=120: seen.append(cfg) or {"state": "waiting"})
+    r = client.post("/api/bias/start", json={"config": {"entry_strategy": "scored", "sc_min_score": 85, "sc_ctx_tf": 30, "risk_pct": 0.5, "trade_mode": "live"}})
+    assert r.status_code == 200
+    assert seen[0]["entry_strategy"] == "scored" and seen[0]["sc_min_score"] == 85 and seen[0]["sc_ctx_tf"] == 30 and seen[0]["risk_pct"] == 0.5
+    assert seen[0]["trade_mode"] == "paper" and seen[0]["signal_mode"] == "bias"
+    assert client.post("/api/bias/start", json={"trade_mode": "live", "config": {"entry_strategy": "scored"}}).status_code == 400
+
+
+def test_analysis_previews_the_scored_strategy_only_when_asked_and_validates_its_settings(client, monkeypatch):
+    import pandas as pd
+    from app.api import bias as bias_api
+    from app.services.market_data import feed as live_feed
+    from tests.test_bias import candles
+    spot = candles(days=30, drift=0.12, seed=3, futures=True, vol=6.0)
+    fut = spot.copy()
+    fut["close"] += 9
+
+    class FakeFeed:
+        def now(self):
+            return pd.Timestamp("2026-11-11 15:30").to_pydatetime()
+
+        def candles(self, day):
+            return spot, fut, None
+    monkeypatch.setattr(live_feed, "feed", lambda: FakeFeed())
+    monkeypatch.setattr(bias_api.config, "load_keys", lambda: None)
+    bias_api._cache.update(key=None, at=0.0, value=None)
+
+    assert "scored" not in client.get("/api/bias/analysis").get_json()["data"]["analysis"]
+    r = client.get("/api/bias/analysis?entry_strategy=scored&sc_min_score=60&sc_adr_period=20&sc_ctx_tf=30&timeframe=15&bias_confirm_tf=30")
+    assert r.status_code == 200
+    s = r.get_json()["data"]["analysis"]["scored"]
+    assert [c["key"] for c in s["components"]] == ["trend", "ema", "vwap", "fvg", "momentum", "volume", "adr"]
+    assert s["min_score"] == 60 and (s["entry_tf"], s["confirm_tf"], s["ctx_tf"]) == (15, 30, 30) and any(g["key"] == "ctx" for g in s["gates"])
+    assert 0 <= s["score"] <= 100 and "probability" in s["note"] and all(g["text"] for g in s["gates"])
+    assert client.get("/api/bias/analysis?entry_strategy=scored&sc_adr_period=7").status_code == 400
+    bias_api._cache.update(key=None, at=0.0, value=None)

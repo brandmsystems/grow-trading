@@ -37,6 +37,7 @@
 | Scalping statistics and walk-forward (pure) | `backtest/scalping_stats.py` |
 | Performance reporting | `backtest/metrics.py`, `research.py` |
 
+4b. **Trading Settings:** one persisted configuration (`services/trading/trading_settings.py`, table `trading_settings`) that every entry passes through (`Engine._settings_gate`) and that the `configured` entry strategy applies live; see [TRADING_SETTINGS.md](TRADING_SETTINGS.md).
 4a. **Automated bias mode:** `strategy/bias.py` analyses the whole series in one pass (the engine uses the last row, the prediction log and the validation scripts use the same code); it is causal and paper/replay only. It is a separate signal mode of the same engine, so paper risk sizing, stops, charges, the daily loss limit and the 15:00 square-off are reused, not duplicated. See [AUTO_TRADING.md](AUTO_TRADING.md).
 4b. **Pre-market analysis:** `services/premarket/` (sources, pure scoring, service) builds one report per day from Yahoo Finance, Google News, stored NIFTY candles and hand-entered FII/DII figures; a background thread refreshes it from 08:30 IST and settles it after the close. The engine reads the stored result through `premarket.stamp()` only to log (or, if you choose, to skip opposed trades); it never creates an entry from it. See [PREMARKET.md](PREMARKET.md).
 4. **One source of trading rules:** the backtester, the live/paper engine and the live feed all call `strategy/rules.generate_legs`. A test replays days through the engine and requires the same trades as the backtest.

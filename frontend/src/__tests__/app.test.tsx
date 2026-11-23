@@ -18,6 +18,8 @@ const PAGES: { path: string; label: string; marker: RegExp | string; role?: "hea
   { path: "/scalping", label: "5-Minute Scalping", marker: "Verdict" },
   { path: "/data", label: "Market Data", marker: "Coverage by month" },
   { path: "/history", label: "Historical Charts", marker: "Range high" },
+  { path: "/range", label: "Daily Range", marker: "Range analysis" },
+  { path: "/trading-settings", label: "Trading Settings", marker: "Paper trading rules" },
   { path: "/account", label: "Account & Settings", marker: "Groww connection" },
 ];
 

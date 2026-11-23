@@ -15,6 +15,8 @@ export interface FakeChart {
   series: FakeSeries[];
   removed: boolean;
   fitted: number;
+  /** The crosshair-move callback the app registered; call it to simulate a hover (time in chart seconds, or none for leaving the chart). */
+  crosshair?: (p: { time?: number }) => void;
 }
 
 export const charts: FakeChart[] = [];
@@ -42,6 +44,8 @@ export function fakeCreateChart(_el: unknown, options: Record<string, unknown> =
     addLineSeries: (o?: Record<string, unknown>) => makeSeries(chart, "line", o),
     addHistogramSeries: (o?: Record<string, unknown>) => makeSeries(chart, "histogram", o),
     removeSeries: vi.fn(),
+    subscribeCrosshairMove: vi.fn((cb: (p: { time?: number }) => void) => { chart.crosshair = cb; }),
+    unsubscribeCrosshairMove: vi.fn(),
     priceScale: () => ({ applyOptions: vi.fn() }),
     timeScale: () => ({
       fitContent: vi.fn(() => { chart.fitted += 1; }),

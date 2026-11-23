@@ -21,7 +21,7 @@ export function Num({ label, k, s, set, step = 1, min = 0, max, unit }: {
   );
 }
 
-function Check({ label, on, onChange, hint }: { label: string; on: boolean; onChange: (v: boolean) => void; hint?: string }) {
+export function Check({ label, on, onChange, hint }: { label: string; on: boolean; onChange: (v: boolean) => void; hint?: string }) {
   return (
     <label className="flex items-start gap-2 text-sm" title={hint}>
       <input type="checkbox" className="mt-1" checked={on} onChange={(e) => onChange(e.target.checked)} />
@@ -30,7 +30,7 @@ function Check({ label, on, onChange, hint }: { label: string; on: boolean; onCh
   );
 }
 
-const toggle = (list: string[], k: string, on: boolean) => (on ? [...new Set([...list, k])] : list.filter((x) => x !== k));
+export const toggle = (list: string[], k: string, on: boolean) => (on ? [...new Set([...list, k])] : list.filter((x) => x !== k));
 const H = ({ children }: { children: string }) => <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-slate-500 first:mt-0">{children}</h3>;
 
 /** Every setting of the automated engine. While it runs, Apply changes the live engine at once (no restart). */

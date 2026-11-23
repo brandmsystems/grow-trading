@@ -53,12 +53,15 @@ from app.services.trading import charges as costs
 from app.database import db
 from app.services.options import sizing
 from app.services.strategy import bias as biasmod
+from app.services.strategy import configured
+from app.services.strategy import confluence
 from app.services.strategy import indicators as ind
 from app.services.strategy import signals
 from app.services.strategy import strategies
 from app.services.trading import paper_account
 from app.services import privacy
 from app.services.trading import stops
+from app.services.trading import trading_settings
 from app.services.trading.engine_config import EngineConfig   # re-exported: engine.EngineConfig is the public name
 from app.services.strategy import rules as st
 from app.services.market_data.live import Contract
@@ -111,6 +114,10 @@ class Engine:
         self._limit_val = 0.0
         self.bias_state: dict | None = None       # bias mode: the latest closed-candle analysis (for the dashboard)
         self.bias_history: deque = deque(maxlen=80)
+        self.rejected: deque = deque(maxlen=60)    # confluence / scored: near-miss candidates that were refused, with the reasons
+        self._settings_version: int | None = None  # Trading Settings version this engine last applied (entry strategy `configured`)
+        self.settings_error: str | None = None     # set while the saved Trading Settings are invalid: no entry is placed
+        self._ordered: set = set()                 # (signal candle, direction) already ordered today: never ordered twice
         self._cooldown_until: datetime | None = None
         self._last_entry_signal: datetime | None = None   # signal time of the latest entry today (one entry per signal episode)
         self.paused = False                       # bias mode: no new entries while paused (open positions are still managed)
@@ -287,6 +294,7 @@ class Engine:
             now = self.market.now()
             if self.day != now.date():
                 self._new_day(now)
+            self._sync_settings()
             if now.weekday() >= 5 or now.time() < MARKET_OPEN or now.time() >= MARKET_CLOSE:
                 if self.state not in ("halted", "error"):
                     self.state = "waiting"
@@ -323,6 +331,7 @@ class Engine:
 
     def _new_day(self, now: datetime):
         self.day = now.date()
+        self._ordered = set()
         self.halt_reason = None if self.state == "halted" else self.halt_reason
         if self.state == "halted":
             self.state = "waiting"
@@ -593,11 +602,100 @@ class Engine:
             self.log(f"NIFTY hit the stop {p['stop_ref']:.2f} (minute {at[11:16]}): exiting", "warn")
             self._exit("stop")
 
+    # ------------------------------------------------------------ Trading Settings (the centrally managed configuration)
+    def _sync_settings(self) -> None:
+        """Entry strategy `configured`: re-read the saved Trading Settings every tick and, when the version changed, apply them to this
+        engine's configuration (validated as a whole; a bad configuration changes nothing and blocks entries). No restart needed."""
+        if self.cfg.entry_strategy != "configured" or self.cfg.signal_mode != "bias":
+            return
+        res = trading_settings.current()
+        if res.error:
+            if self.settings_error != res.error:
+                self.log(f"Trading Settings are invalid or unreadable ({res.error}): no order will be placed until they are fixed", "error")
+            self.settings_error = f"the saved Trading Settings are invalid or unreadable ({res.error})"
+            return
+        if res.version == self._settings_version and not self.settings_error:
+            return
+        try:
+            new = dc_replace(self.cfg, **res.engine_overrides()).validate()
+        except ValueError as exc:
+            self.settings_error = f"Trading Settings version {res.version} cannot be applied: {exc}"
+            self.log(self.settings_error, "error")
+            return
+        old, self.cfg, self.settings_error = self.cfg, new, None
+        diff = [f"{k}: {getattr(old, k)} → {getattr(new, k)}" for k in res.engine_overrides()
+                if k != "ind" and getattr(old, k) != getattr(new, k)]
+        first = self._settings_version is None
+        self._settings_version = res.version
+        self._limit_day = None
+        self.log(f"Trading Settings version {res.version} {'loaded' if first else 'applied'}" + (": " + "; ".join(diff[:12]) if diff and not first else ""))
+        if self.session_id:
+            try:
+                with self.dbe.begin() as c:
+                    c.execute(text("UPDATE live_sessions SET config=CAST(:c AS JSONB) WHERE id=:i"), {"c": json.dumps(asdict(new)), "i": self.session_id})
+            except Exception:
+                log.warning("session configuration not updated", exc_info=True)
+
+    def _legacy_keys(self) -> list[str]:
+        """The registry strategy an engine trades when the signal does not name one (everything except the `configured` strategy)."""
+        m = self.cfg.signal_mode
+        if m in ("prediction", "scalp"):
+            return [self.cfg.strategy]
+        if m == "bias":
+            return [self.cfg.entry_strategy] if self.cfg.entry_strategy in ("bias", "confluence", "scored") else ["bias"]
+        return ["ema_9_21"]                       # the cross and trend modes always trade EMA 9/21
+
+    def _settings_gate(self, leg):
+        """(reason to refuse | None, settings, strategy keys). An order needs: valid saved settings, at least one strategy behind the signal,
+        every such strategy ON and not blocked by a disabled indicator, and an enabled timeframe. Applies to every mode."""
+        res = trading_settings.current()
+        keys = list((getattr(leg, "extra", None) or {}).get("strategy_keys") or self._legacy_keys())
+        if res.error:
+            return f"the saved Trading Settings are invalid or unreadable ({res.error}); no order is placed", res, keys
+        if self.settings_error:
+            return self.settings_error, res, keys
+        if not keys:
+            return "no enabled strategy is behind this signal", res, keys
+        for k in keys:
+            reg = trading_settings.STRATEGIES.get(k)
+            if reg is None:
+                return f"unknown strategy '{k}'", res, keys
+            if not res.strategy_enabled(k):
+                return f"{reg['label']} is switched OFF in Trading Settings", res, keys
+            if res.blockers(k):
+                return f"{reg['label']} is blocked: {'; '.join(res.blockers(k))}", res, keys
+        if not res.timeframe_enabled(self.cfg.timeframe):
+            return f"the {self.cfg.timeframe}-minute timeframe is disabled in Trading Settings", res, keys
+        return None, res, keys
+
+    def _with_settings(self, refs: dict | None, res, keys: list[str], leg) -> dict:
+        """The order's record of what it was placed under: strategy, timeframes, enabled indicators, settings version, and the entry reason."""
+        refs = dict(refs or {})
+        a = dict(refs.get("analysis") or {})
+        a["settings"] = {**res.snapshot(keys), "engine_timeframe": self.cfg.timeframe}
+        a.setdefault("strategy", keys[0] if keys else None)
+        if not a.get("summary"):
+            label = trading_settings.STRATEGIES.get(keys[0], {}).get("label", keys[0]) if keys else "signal"
+            a["summary"] = f"{label}: {'BUY CE' if leg.direction > 0 else 'BUY PE'} signal on the {self.cfg.timeframe}-minute candle closing {leg.entry_ts:%H:%M}"
+        refs["analysis"] = a
+        return refs
+
     def _try_entry(self, now: datetime, leg, refs: dict | None = None):
         dirn = "Bullish" if leg.direction > 0 else "Bearish"
         if self.state in ("halted", "error"):
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: engine halted ({self.halt_reason})", "warn")
             self._hold(leg, "engine halted", **(refs or {}))
+            return
+        why, res, keys = self._settings_gate(leg)
+        if why:
+            self.log(f"{dirn} signal at {leg.entry_ts:%H:%M}: NO ORDER. {why}", "warn")
+            self._hold(leg, f"trading settings: {why}", **(refs or {}))
+            return
+        refs = self._with_settings(refs, res, keys, leg)
+        okey = (pd.Timestamp(leg.entry_ts), leg.direction)
+        if okey in self._ordered:
+            self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: an order was already placed from this candle", "warn")
+            self._hold(leg, "an order was already placed from this signal", **(refs or {}))
             return
         if self.position:
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: position still open", "warn")
@@ -650,7 +748,10 @@ class Engine:
         if self.cfg.trade_mode == "live" and self.cfg.order_confirmation == "manual":
             self._propose(now, leg, c, side, qty, strike, typ, expiry, refs)
             return
+        n_before = self.trades_today
         self._execute_entry(leg, c, side, qty, strike, typ, expiry, refs)
+        if self.trades_today > n_before:
+            self._ordered.add(okey)
 
     def _premarket(self, direction: int) -> dict | None:
         """The stored pre-market report's view of this trade (agrees / opposes / no view), or None. Read-only information:
@@ -802,8 +903,15 @@ class Engine:
         try:
             p = biasmod.BiasParams.from_cfg(cfg)
             frame = biasmod.analyse(spot, fut, p)
+            cp = confluence.params_for(cfg)
+            if cp is not None:      # same bars and same rules path; only the entry decision comes from the confluence / scored strategy
+                frame = confluence.overlay(frame, spot, fut, cp)
             if not frame.empty:
                 frame = frame[frame["close_ts"] <= pd.Timestamp(bar_close)].reset_index(drop=True)
+            cres = cinfo = None
+            if cfg.entry_strategy == "configured" and not frame.empty:     # the strategies that are ON in Trading Settings decide
+                cres = trading_settings.current()
+                frame, cinfo = configured.evaluate(cres, spot, fut, frame, cfg, bar_close)
             today = frame[frame["day"] == self.day] if not frame.empty else frame
         except Exception as exc:
             self.processed_until = bar_close
@@ -821,7 +929,13 @@ class Engine:
         if pd.Timestamp(r["close_ts"]) != pd.Timestamp(bar_close):
             self.log(f"{cfg.timeframe}m candle closing {bar_close:%H:%M} is missing: no decision on this candle", "warn")
             return
-        expl = biasmod.explain(r, p)
+        def explain_row(row: pd.Series, last: bool = False) -> dict:
+            e = biasmod.explain(row, p)
+            if cinfo is not None:
+                return configured.explain(e, cinfo, cres) if last else e
+            return confluence.explain(row, cp, e) if cp is not None else e
+
+        expl = explain_row(r, True)
         self.last_atr = float(r["atr"]) if pd.notna(r["atr"]) and r["atr"] > 0 else None
         self.last_eval = {"bar_close": bar_close.isoformat(), "close": expl["close"], "ema9": round(float(r["ema9"]), 2),
                           "ema21": round(float(r["ema21"]), 2), "evaluated_at": now.isoformat()}
@@ -829,7 +943,7 @@ class Engine:
         if not self.bias_history:        # first analysis of this run: record the earlier candles of today too
             for i in range(len(today) - 1):
                 row = today.iloc[i]
-                self._store_prediction(row, biasmod.explain(row, p), backfilled=True)
+                self._store_prediction(row, explain_row(row), backfilled=True)
                 if i:
                     self._settle_prediction(today.iloc[i - 1], row, p)
             if len(today) >= 2:
@@ -839,6 +953,11 @@ class Engine:
             if outcome:
                 self.bias_history[0]["outcome"] = outcome
         self._store_prediction(r, expl)
+        blk = expl.get("scored") or expl.get("confluence") or {}
+        if cp is not None and expl["direction"] == 0 and blk.get("candidate") and expl["entry_score"] >= 0.8 * blk["min_score"]:
+            # a near miss (at least 80% of the minimum score) that was refused: kept for the dashboard with its reasons
+            self.rejected.appendleft({"bar_close": expl["bar_close"], "side": blk["candidate"], "score": expl["entry_score"],
+                                      "min_score": blk["min_score"], "reasons": blk.get("rejections", [])})
         self.bias_history.appendleft({"bar_close": expl["bar_close"], "close": expl["close"], "bias": expl["bias"],
                                       "confidence": expl["confidence"], "signal": expl["signal"],
                                       "predicted": expl["prediction"], "score_5m": expl["score_5m"],
@@ -846,7 +965,12 @@ class Engine:
         self.log(f"{bar_close:%H:%M} {expl['summary']}")
 
         d = int(r["direction"])
-        if self.position and cfg.bias_exit_opposite and d != 0 and d != self.position["direction"]:
+        opposite = d != 0 and bool(self.position) and d != self.position["direction"]
+        if self.position and cinfo is not None and cres.exit_role == "trend":
+            # exit confirmation on the trend timeframe: its score turning clearly against the position (not just any opposite entry signal)
+            s15 = r["s15"]
+            opposite = bool(pd.notna(s15) and abs(float(s15)) >= cfg.bias_trend_thr and (float(s15) > 0) != (self.position["direction"] > 0))
+        if self.position and cfg.bias_exit_opposite and opposite:
             self.log(f"{bar_close:%H:%M} the analysis now points the other way ({expl['signal']}): exiting; "
                      f"no reversal trade, the next candle gets a fresh analysis")
             self._exit("opposite_signal")
@@ -894,9 +1018,10 @@ class Engine:
         mode, side, typ = pick
         expl = {**expl, "instrument": f"{side} {typ}"}
         leg = st.Leg(day=self.day, direction=d, entry_ts=bar_close, signal_close=float(r["close"]),
-                     signal_bar_start=pd.Timestamp(r["start"]).to_pydatetime(), ordinal=self.trades_today + 1)
+                     signal_bar_start=pd.Timestamp(r["start"]).to_pydatetime(), ordinal=self.trades_today + 1,
+                     extra={"strategy_keys": list(cinfo["fired"])} if cinfo is not None else {})
         n_before = self.trades_today
-        self._try_entry(now, leg, refs={"exec_mode": mode, "action": f"{side} {typ}", "confidence": expl["confidence"],
+        self._try_entry(now, leg, refs={"exec_mode": mode, "action": f"{side} {typ}", "confidence": expl.get("entry_score", expl["confidence"]),
                                         "analysis": expl})
         if self.trades_today > n_before:
             self._last_entry_signal = bar_close
@@ -924,6 +1049,17 @@ class Engine:
             return f"the option premium is unavailable ({exc})"
         ok = prem >= cfg.min_premium
         add("premium", ok, f"premium {prem:.2f} {'≥' if ok else '<'} the minimum {cfg.min_premium:g}")
+        if cfg.entry_strategy == "scored" and prem > 0:
+            # option premium validation of the ATR stop, before anything is opened and the same in paper and replay: the stop the
+            # engine would use (the percentage stop when no delta is known, as replay does) must be a controlled, meaningful distance
+            lv = stops.stop_levels(cfg, side, prem, self.last_atr, lambda: self.market.option_delta(c))
+            if lv.error and not lv.invalid:
+                lv = stops.stop_levels(dc_replace(cfg, stop_mode="pct"), side, prem, self.last_atr, lambda: None)
+            if lv.invalid:
+                add("stop", False, lv.error)
+            elif lv.stop is not None:
+                add("stop", True, f"stop {lv.stop:.2f} is {100 * abs(prem - lv.stop) / prem:.1f}% of the premium "
+                                  f"(allowed {cfg.sc_stop_min_pct:g}% to {cfg.sc_stop_max_pct:g}%)")
         add("expiry", True, f"expiry {c.expiry:%d %b %Y} ({(c.expiry - self.day).days} day(s) away), lot size {c.lot_size}")
         try:
             q = self.market.option_quote(c) if hasattr(self.market, "option_quote") else {}
@@ -964,6 +1100,9 @@ class Engine:
         lv = stops.stop_levels(cfg, p["side"], float(p["entry_price"]), self.last_atr, lambda: self.market.option_delta(c))
         if lv.error:
             lv = stops.stop_levels(dc_replace(cfg, stop_mode="pct"), p["side"], float(p["entry_price"]), self.last_atr,
+                                   lambda: None)
+        if lv.stop is None:      # the position is already open: never leave it without a stop (the range check ran before the entry)
+            lv = stops.stop_levels(dc_replace(cfg, stop_mode="pct", entry_strategy="bias"), p["side"], float(p["entry_price"]), self.last_atr,
                                    lambda: None)
         p.update(stop_premium=lv.stop, target_premium=lv.target, levels_set=True)
         self._update_trade(p["id"], {"stop_premium": lv.stop, "target_premium": lv.target})
@@ -1033,7 +1172,10 @@ class Engine:
         "bias_exit_opposite", "bias_max_hold_min", "bias_cooldown_bars", "target_rr", "trail_pct", "trail_activate_pct",
         "sell_risk_pct", "min_premium", "min_oi", "max_spread_pct", "min_delta", "risk_pct", "daily_risk_pct",
         "max_daily_loss", "max_trades_per_day", "max_lots", "min_balance", "stop_mode", "stop_atr", "stop_pct",
-        "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net"})
+        "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net",
+        "entry_strategy", "cf_factors", "cf_require", "cf_min_score", "cf_adr_filter", "cf_adr_period", "cf_adr_max_used",
+        "cf_fvg_min_atr", "cf_fvg_max_age", "cf_htf", "sc_min_score", "sc_adr_period", "sc_adr_max_used", "sc_fvg_min_atr",
+        "sc_fvg_max_age", "sc_ctx_tf", "sc_stop_min_pct", "sc_stop_max_pct"})
 
     def update_settings(self, changes: dict) -> dict:
         """Apply new bias-mode settings to the running engine (no restart). The whole new configuration is validated
@@ -1346,13 +1488,17 @@ class Engine:
             phase, detail = "waiting", f"Cooling down after an opposite-signal exit until {self._cooldown_until:%H:%M}."
         else:
             phase = "ready"
-            detail = (f"Next analysis at {nxt:%H:%M}: enters if the bias confidence is at least {cfg.bias_min_confidence:g}% "
-                      f"and a valid, new signal exists." if nxt else "No further candle today.")
+            need = ("a strategy that is ON in Trading Settings signals" if cfg.entry_strategy == "configured" else
+                    f"the confluence confirmation score is at least {cfg.cf_min_score:g}%" if cfg.entry_strategy == "confluence"
+                    else f"the strategy score is at least {cfg.sc_min_score:g} of 100 and every gate is met" if cfg.entry_strategy == "scored"
+                    else f"the bias confidence is at least {cfg.bias_min_confidence:g}%")
+            detail = (f"Next analysis at {nxt:%H:%M}: enters if {need} and a valid, new signal exists." if nxt else "No further candle today.")
         labels = {"halted": "Halted", "exiting": "Exiting", "holding": "Holding a position", "paused": "Paused",
                   "limit": "Daily limit reached", "waiting": "Waiting",
                   "ready": "Ready for re-entry" if self.trades_today else "Ready for entry"}
         return {"phase": phase, "label": labels[phase], "detail": detail, "paused": self.paused,
-                "min_confidence": cfg.bias_min_confidence, "profit_target_net": cfg.profit_target_net,
+                "min_confidence": {"confluence": cfg.cf_min_score, "scored": cfg.sc_min_score}.get(cfg.entry_strategy, cfg.bias_min_confidence),
+                "strategy": cfg.entry_strategy, "profit_target_net": cfg.profit_target_net,
                 "target_hits": self.target_hits_today, "trades_today": self.trades_today,
                 "no_entry_through": self._no_entry_through.isoformat() if self._no_entry_through else None}
 
@@ -1388,6 +1534,8 @@ class Engine:
                 "day": self.day.isoformat() if self.day else None,
                 "next_eval": nxt.isoformat() if nxt else None,
                 "last_eval": self.last_eval, "position": pos, "pending_order": pend,
+                "settings": {"configured": self.cfg.entry_strategy == "configured", "applied_version": self._settings_version,
+                             "saved_version": trading_settings.current().version, "error": self.settings_error},
                 "trades_today": self.trades_today, "realised_today": round(self.realised_today, 2),
                 "nifty": {"price": self.last_spot["price"], "ts": self.last_spot["ts"].isoformat()} if self.last_spot else None,
                 "conn_error": self.conn_error,
@@ -1396,6 +1544,7 @@ class Engine:
                              "trades_today": self.trades_today, "max_trades": self.cfg.max_trades_per_day,
                              "remaining_trades": max(0, self.cfg.max_trades_per_day - self.trades_today),
                              "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None,
+                             "rejected": list(self.rejected)[:30],
                              "automation": self._automation(nxt)}}
                    if self.cfg.signal_mode == "bias" else {}),
             })

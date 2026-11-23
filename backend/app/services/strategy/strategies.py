@@ -63,19 +63,22 @@ def futures_bars(fut1m: pd.DataFrame, tf: int) -> pd.DataFrame:
                          "fut_volume": g["volume"].sum()}).reset_index()
 
 
-def prepare(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None, tf: int, key: str) -> pd.DataFrame:
-    """Signal bars with every indicator the strategies and the signal engine use."""
+def prepare(spot1m: pd.DataFrame, fut1m: pd.DataFrame | None, tf: int, key: str, ip=None, fast: int | None = None, slow: int | None = None) -> pd.DataFrame:
+    """Signal bars with every indicator the strategies and the signal engine use. `ip` (bias.IndParams) and the EMA periods `fast` /
+    `slow` override the long-standing values (Trading Settings); the defaults change nothing."""
     s = STRATEGIES[key]
+    rsi_p = getattr(ip, "rsi_period", 14)
+    macd_p = (getattr(ip, "macd_fast", 12), getattr(ip, "macd_slow", 26), getattr(ip, "macd_signal", 9))
     bars = st.resample(spot1m, tf)
     if bars.empty:
         for c in ("fast", "slow", "rsi", "macd_hist", "atr", "fut_close", "fut_vwap", "fut_volume", "bull_ok", "bear_ok"):
             bars[c] = pd.Series(dtype=float)
         return bars
-    bars["fast"] = ind.ema(bars["close"], s.fast)
-    bars["slow"] = ind.ema(bars["close"], s.slow)
-    bars["rsi"] = ind.rsi(bars["close"])
-    bars["macd_hist"] = ind.macd(bars["close"])[2]
-    bars["atr"] = ind.atr(bars)
+    bars["fast"] = ind.ema(bars["close"], fast or s.fast)
+    bars["slow"] = ind.ema(bars["close"], slow or s.slow)
+    bars["rsi"] = ind.rsi(bars["close"], rsi_p)
+    bars["macd_hist"] = ind.macd(bars["close"], *macd_p)[2]
+    bars["atr"] = ind.atr(bars, getattr(ip, "atr_period", 14))
     bars = bars.merge(futures_bars(fut1m, tf), on="start", how="left")
     if s.confirm == "vwap":
         bars["bull_ok"] = bars["fut_close"] > bars["fut_vwap"]

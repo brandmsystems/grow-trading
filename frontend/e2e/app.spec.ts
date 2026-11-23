@@ -4,7 +4,7 @@ const WIDTHS: [number, number][] = [[1920, 1080], [1440, 900], [1280, 800], [102
 const ROUTES: [string, string][] = [
   ["/", "Overview"], ["/live", "Live Trading"], ["/auto", "Automated Paper Trading"], ["/premarket", "Pre-Market Analysis"], ["/signals", "Trading Signals"], ["/options", "Options Analysis"],
   ["/backtest", "Backtesting"], ["/compare", "Strategy Comparison"], ["/scalping", "5-Minute Scalping"],
-  ["/data", "Market Data"], ["/history", "Historical Charts"], ["/account", "Account & Settings"],
+  ["/data", "Market Data"], ["/history", "Historical Charts"], ["/range", "Daily Range"], ["/trading-settings", "Trading Settings"], ["/account", "Account & Settings"],
 ];
 
 /** Collects everything that would show up as a red flag in the browser console. */

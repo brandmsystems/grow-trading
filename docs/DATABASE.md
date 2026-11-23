@@ -22,6 +22,7 @@
 | 0011_scalping | `scalp_runs` (settings, date range and summary JSON of each 5-minute scalping run), `scalp_trades` (trade list per run and configuration) |
 | 0012_scalp_paper | `live_trades.strategy`, `live_trades.scalp_config` (set for scalp-mode engine trades) |
 | 0019_bias_engine | `candle_bias` (one row per analysed candle: bias, confidence, scores, prediction, votes, analysis, and once settled the next close, actual move and outcome); `live_trades.action`, `confidence`, `analysis`, `exit_detail` added if missing (this database already had them) |
+| 0021_trading_settings | `trading_settings` (version, config JSONB, saved_at, note): the centrally managed Trading Settings, append-only so every order can be traced to the version it ran under. New table only; a verified `pg_dump` (`data/backups/pre_trading_settings_2026-11-21.dump`, 1,050 MB, git-ignored) was taken (note: the migration ran when the app was first started in the session, a few minutes before the dump; it only creates one empty table and the existing rows were unchanged: 28 trades) |
 | 0020_premarket | `premarket_reports` (one row per day: score, bias, report JSON, snapshots, and after the close what NIFTY did and the outcome) and `premarket_inputs` (FII/DII figures and events entered by hand). New tables only |
 
 ## Tables
@@ -42,6 +43,7 @@
 | `paper_stop_changes` | id | Paper stop-loss history per trade: time, old/new stop, old/new maximum loss, source (entry or user) |
 | `paper_accounts` | id | Virtual paper accounts: starting capital, start and close time. The active one has `closed_at` NULL; balance = capital + closed paper net P&L booked to it |
 | `live_events` | id | Engine event log |
+| `trading_settings` | version | Trading Settings: every saved configuration of strategies, timeframes, indicators and rules (JSONB), saved time and note. Append-only; the current one is the highest version |
 | `candle_bias` | id, unique (`trade_mode`, `scope`, `bar_close`) | Automated paper trading: the analysis and next-candle prediction of every closed candle, settled with the actual result. `scope` is the replay session id (0 for paper) so replays never overwrite each other |
 | `live_alerts` | id, unique `alert_key` | Notifications, stored once per signal |
 | `schema_migrations` | version | Applied migrations |

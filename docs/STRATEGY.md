@@ -49,6 +49,7 @@ An unconfirmed cross doesn't open a trade, but still exits an opposite one.
 - **Wilder RSI and ATR:** seeded with the simple mean of the first n values. Checked against Wilder's published example (70.46).
 - **MACD**
 - **Session VWAP:** cumulative from the first candle of each day.
+- **Fair value gap, ADR, market structure** (`fvg_zones`, `adr`, `swing_structure`, added 21 Nov, all causal): three-candle imbalance with unfilled / mitigated / filled status and a retest rule; average daily range of the previous 5, 10 and 20 sessions with today's range used; swing pivots confirmed 3 bars later, higher-high / higher-low state and break of structure. Used by the confluence and scored strategies, which also add VWAP retest and rejection (the scored one: 25 trend, 15 EMA, 20 VWAP, 20 unmitigated FVG retest, 10 momentum, 5 volume, 5 ADR, hard gates, minimum 80): [AUTO_TRADING.md](AUTO_TRADING.md#confluence-strategy-fvg--vwap--adr--ema--market-structure-21-nov-2026).
 
 ## Signal engine (`signals.py`)
 - **Levels:** entry reference = signal close; stop = 1 × ATR(14); target = 2 × ATR, so risk/reward is 2.

@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request
 
 from app.api.common import api_error, json_body
 from app.config import settings as config
-from app.services.strategy import bias
+from app.services.strategy import bias, confluence
 from app.services.trading import bias_report
 from app.services.trading import engine as le
 from app.services.trading import manager as live_manager
@@ -22,10 +22,17 @@ _FORM = ("timeframe", "bias_confirm_tf", "bias_indicators", "bias_min_confidence
          "bias_exit_opposite", "bias_max_hold_min", "bias_cooldown_bars", "target_rr", "trail_pct", "trail_activate_pct",
          "sell_risk_pct", "min_premium", "min_oi", "max_spread_pct", "min_delta", "risk_pct", "daily_risk_pct",
          "max_daily_loss", "max_trades_per_day", "max_lots", "min_balance", "stop_mode", "stop_atr", "stop_pct",
-         "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net")
+         "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net",
+         "entry_strategy", "cf_factors", "cf_require", "cf_min_score", "cf_adr_filter", "cf_adr_period", "cf_adr_max_used",
+         "cf_fvg_min_atr", "cf_fvg_max_age", "cf_htf", "sc_min_score", "sc_adr_period", "sc_adr_max_used", "sc_fvg_min_atr",
+         "sc_fvg_max_age", "sc_ctx_tf", "sc_stop_min_pct", "sc_stop_max_pct")
 DEFAULT_MAX_TRADES = 20      # the brief's default; the engine's own default (6) belongs to the older modes
 DEFAULT_MIN_CONFIDENCE = 70.0    # continuous automation: entry needs a bias confidence of at least this %
 DEFAULT_PROFIT_TARGET = 1500.0   # continuous automation: exit one trade at this net profit (₹, after charges)
+# The scored strategy's starting risk, as specified: 0.5% of virtual capital per trade, 2R target, ATR stop, 1.5% daily loss limit,
+# at most 5 trades, one open position, a 5-minute entry confirmed by the 15-minute trend. Offered as one click on the page, never forced.
+SCORED_PRESET = {"timeframe": 5, "bias_confirm_tf": 15, "risk_pct": 0.5, "target_rr": 2.0, "stop_mode": "atr", "stop_atr": 1.0,
+                 "daily_risk_pct": 1.5, "max_trades_per_day": 5, "profit_target_net": 0.0, "sc_min_score": 80.0}
 
 _cache: dict = {"key": None, "at": 0.0, "value": None}
 _cache_lock = threading.Lock()
@@ -40,6 +47,44 @@ def defaults() -> dict:
     d = asdict(le.EngineConfig(signal_mode="bias", trade_mode="paper", timeframe=5, max_trades_per_day=DEFAULT_MAX_TRADES))
     d.update(bias_min_confidence=DEFAULT_MIN_CONFIDENCE, profit_target_net=DEFAULT_PROFIT_TARGET)
     return {k: d[k] for k in _FORM}
+
+
+def _cf_params(eng) -> confluence.ConfluenceParams:
+    """Confluence settings for the analysis preview: the running engine's, else the defaults overridden by the query string."""
+    if eng:
+        return confluence.ConfluenceParams.from_cfg(eng.cfg)
+    cfg, a = le.EngineConfig(signal_mode="bias", timeframe=5), request.args
+    for name in ("cf_factors", "cf_require"):
+        if name in a:
+            setattr(cfg, name, [k for k in a[name].split(",") if k])
+    for name in ("cf_min_score", "cf_adr_max_used", "cf_fvg_min_atr"):
+        if name in a:
+            setattr(cfg, name, float(a[name]))
+    for name in ("cf_adr_period", "cf_fvg_max_age"):
+        if name in a:
+            setattr(cfg, name, int(a[name]))
+    for name in ("cf_adr_filter", "cf_htf"):
+        if name in a:
+            setattr(cfg, name, a[name].lower() in ("1", "true", "yes"))
+    return confluence.ConfluenceParams.from_cfg(cfg.validate())
+
+
+def _sc_params(eng):
+    """Scored-strategy parameters for the analysis preview: the running engine's if it runs that strategy, else (no engine) the
+    query string's when `entry_strategy=scored`; None when the scored strategy is not selected."""
+    if eng:
+        return confluence.params_for(eng.cfg) if eng.cfg.entry_strategy == "scored" else None
+    a = request.args
+    if a.get("entry_strategy") != "scored":
+        return None
+    cfg = le.EngineConfig(signal_mode="bias", timeframe=int(a.get("timeframe", 5)), bias_confirm_tf=int(a.get("bias_confirm_tf", 15)), entry_strategy="scored")
+    for name in ("sc_min_score", "sc_adr_max_used", "sc_fvg_min_atr", "sc_stop_min_pct", "sc_stop_max_pct"):
+        if name in a:
+            setattr(cfg, name, float(a[name]))
+    for name in ("sc_adr_period", "sc_fvg_max_age", "sc_ctx_tf"):
+        if name in a:
+            setattr(cfg, name, int(a[name]))
+    return confluence.params_for(cfg.validate())
 
 
 def _int(name, default):
@@ -57,6 +102,10 @@ def bias_config():
         "defaults": defaults(), "running": bool(eng),
         "settings": {k: getattr(eng.cfg, k) for k in _FORM} if eng else None,
         "indicators": [{"key": k, "label": v[0], "weight": v[1]} for k, v in bias.INDICATORS.items()],
+        "confluence_factors": [{"key": k, "label": v[0], "weight": v[1]} for k, v in confluence.FACTORS.items()],
+        "adr_periods": list(confluence.ADR_PERIODS),
+        "scored_components": [{"key": k, "label": v[0], "max": v[1]} for k, v in confluence.SC_COMPONENTS.items()],
+        "presets": {"scored": SCORED_PRESET},
         "note": "Weights and thresholds are fixed starting values, not fitted to any result. "
                 "Confidence means agreement between indicators, not a probability of winning."}})
 
@@ -86,7 +135,9 @@ def bias_analysis():
         f = live_feed.feed()
         day = f.now().date()
         with _cache_lock:
-            key = (day, tuple(params.enabled), params.min_confidence, params.trend_thr, params.confirm_thr, params.min_atr_pct, params.primary, params.higher)
+            cp, sp = _cf_params(eng), _sc_params(eng)
+            key = (day, tuple(params.enabled), params.min_confidence, params.trend_thr, params.confirm_thr, params.min_atr_pct, params.primary, params.higher,
+                   cp, sp)
             if _cache["key"] == key and _time.monotonic() - _cache["at"] < 15:
                 return jsonify({"ok": True, "data": _cache["value"]})
             spot, fut, err = f.candles(day)
@@ -97,14 +148,23 @@ def bias_analysis():
                 return api_error(RuntimeError("Not enough candles yet."), 409)
             last_day = frame["day"].iloc[-1]
             today = frame[frame["day"] == last_day]
-            data = {"as_of_day": last_day.isoformat(), "live": last_day == day, "analysis": bias.explain(today.iloc[-1], params),
+            # the confluence strategy's factors on the same candle (shown whether or not it is the active strategy)
+            cf_frame = confluence.overlay(frame, spot, fut, cp)
+            row = cf_frame[cf_frame["day"] == last_day].iloc[-1]
+            analysis = bias.explain(today.iloc[-1], params)
+            analysis["confluence"] = confluence.explain(row, cp, analysis)["confluence"]
+            if sp is not None:
+                srow = confluence.overlay(frame, spot, fut, sp)
+                srow = srow[srow["day"] == last_day].iloc[-1]
+                analysis["scored"] = confluence.explain(srow, sp, analysis)["scored"]
+            data = {"as_of_day": last_day.isoformat(), "live": last_day == day, "analysis": analysis,
                     "recent": [{"bar_close": r.close_ts.isoformat(), "close": round(float(r.close), 2), "bias": r.bias,
                                 "confidence": float(r.confidence), "predicted": r.predicted}
                                for r in today.tail(24).itertuples()],
                     "futures": fut is not None and len(fut) > 0, "error": err}
             _cache.update(key=key, at=_time.monotonic(), value=data)
         return jsonify({"ok": True, "data": data})
-    except config.KeysError as exc:
+    except (config.KeysError, ValueError) as exc:
         return api_error(exc, 400)
     except Exception as exc:
         return api_error(exc, 500)
