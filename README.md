@@ -127,6 +127,8 @@ Details, counts and rules: [docs/TESTING.md](docs/TESTING.md).
 
 | [docs/AUTO_TRADING.md](docs/AUTO_TRADING.md) | Automated multi-timeframe paper trading: indicators, bias, prediction log, trade rules, validation |
 | [docs/TRADING_SETTINGS.md](docs/TRADING_SETTINGS.md) | Trading Settings: strategy, timeframe, indicator and risk controls, how they drive paper orders, validation, storage, limits |
+| [docs/POSITION_TRADING.md](docs/POSITION_TRADING.md) | Position Trading: multi-day option ideas, score, contracts, backtest (negative result and data limits), separate paper account |
+| [docs/SCANNER.md](docs/SCANNER.md) | Continuous opportunity scanner, quality score, concurrent paper positions and risk limits |
 | [docs/PREMARKET.md](docs/PREMARKET.md) | Pre-market analysis: five factors, total score, conclusion, daily workflow, history, validation |
 | [docs/SCALPING.md](docs/SCALPING.md) | 5-minute options scalping analyzer, results and paper trading |
 

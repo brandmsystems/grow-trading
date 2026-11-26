@@ -41,6 +41,7 @@ import logging
 import threading
 import traceback
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import asdict, replace as dc_replace
 from datetime import date, datetime, time, timedelta
 
@@ -56,6 +57,7 @@ from app.services.strategy import bias as biasmod
 from app.services.strategy import configured
 from app.services.strategy import confluence
 from app.services.strategy import indicators as ind
+from app.services.strategy import scanner
 from app.services.strategy import signals
 from app.services.strategy import strategies
 from app.services.trading import paper_account
@@ -91,14 +93,15 @@ class Engine:
         self.halt_reason: str | None = None
         self.day: date | None = None
         self.processed_until: datetime | None = None
-        self.position: dict | None = None
+        self.book: list[dict] = []                 # every open position (several only for the scanner / configured entry strategies)
+        self._focus: dict | None = None            # the position the per-position code (stops, exits, retries) is working on
         self.trades_today = 0
         self.realised_today = 0.0
         self.last_eval: dict | None = None
         self.last_ltp: dict = {}
         self.last_ltp_at: dict = {}               # when each LTP was read (stale prices never trigger a stop)
         self.events: deque = deque(maxlen=300)
-        self.exit_failures = 0
+        self._xf_idle = 0                          # exit failures counted while no position is open (always 0 in practice)
         self.bars_today: list[dict] = []
         self.last_fill_today: datetime | None = None
         self.scorer: signals.Scorer | None = None
@@ -123,6 +126,67 @@ class Engine:
         self.paused = False                       # bias mode: no new entries while paused (open positions are still managed)
         self._no_entry_through: datetime | None = None    # bias mode: no entry on a candle closing at or before this (the candle that exited)
         self.target_hits_today = 0                # trades closed today by the net profit target
+        self.strat_entry: dict[str, datetime] = {}      # scanner: signal time of each strategy's latest entry today (one entry per signal episode)
+        self.strat_block: dict[str, datetime] = {}      # scanner: a strategy may not enter on a candle closing at or before this (its exit candle / cool-down)
+        self.scan_state: dict | None = None        # scanner: the latest candle's opportunities, scores and decisions (dashboard)
+        self.scan_rejected: deque = deque(maxlen=120)   # scanner: every refused signal with the exact reason
+        self.scan_candles = 0                      # scanner: closed candles scanned this run
+
+    # ------------------------------------------------------------ the position book
+    @property
+    def position(self) -> dict | None:
+        """The position the code is working on: the focused one inside `_on`, else the first open one. With
+        max_open_positions = 1 (every mode except the scanner) the book holds at most one, exactly as before."""
+        f = self._focus
+        if f is not None:
+            return f if any(x is f for x in self.book) else None
+        return self.book[0] if self.book else None
+
+    @position.setter
+    def position(self, value: dict | None) -> None:
+        if value is None:                      # the focused (or only) position left the book
+            t = self._focus if self._focus is not None else (self.book[0] if self.book else None)
+            self.book = [x for x in self.book if x is not t]
+        elif not any(x is value for x in self.book):
+            self.book.append(value)
+
+    @property
+    def exit_failures(self) -> int:
+        """Failed exit orders of the position being worked on (kept on the position, so each one retries and halts on its own)."""
+        p = self.position
+        return int(p.get("xf", 0)) if p else self._xf_idle
+
+    @exit_failures.setter
+    def exit_failures(self, n: int) -> None:
+        p = self.position
+        if p:
+            p["xf"] = int(n)
+        else:
+            self._xf_idle = int(n)
+
+    @contextmanager
+    def _on(self, p: dict):
+        """Run the existing single-position code (stop, target, trailing, time exit, retries) on one open position."""
+        prev, self._focus = self._focus, p
+        try:
+            yield
+        finally:
+            self._focus = prev
+
+    def _slots(self) -> int:
+        """Concurrent positions this run may hold: the setting for the scanner and configured entry strategies, one for every other mode
+        (their exit logic is written for a single position)."""
+        c = self.cfg
+        return c.max_open_positions if (c.signal_mode == "bias" and c.entry_strategy in ("scanner", "configured")) else 1
+
+    @staticmethod
+    def _strategy_of(p: dict) -> str | None:
+        return p.get("strategy") or (p.get("analysis") or {}).get("strategy")
+
+    def _open_risk(self, strategy: str | None = None) -> float:
+        """Sum of the open positions' maximum loss (₹); of one strategy's positions when `strategy` is given."""
+        return sum(float((p.get("risk") or {}).get("max_loss") or 0.0) for p in self.book
+                   if strategy is None or self._strategy_of(p) == strategy)
 
     # ------------------------------------------------------------ logging / persistence
     def log(self, msg: str, level: str = "info"):
@@ -145,6 +209,10 @@ class Engine:
                      {"signal_ts": pd.Timestamp(signal_ts).isoformat(), **data}, self.session_id, self.dbe)
 
     def _hold(self, leg, why: str, **extra) -> None:
+        if self.cfg.signal_mode == "bias" and self.cfg.entry_strategy == "scanner":
+            keys = (getattr(leg, "extra", None) or {}).get("strategy_keys") or []
+            self.scan_rejected.appendleft({"bar_close": pd.Timestamp(leg.entry_ts).isoformat(), "strategy": keys[0] if keys else None,
+                                           "direction": "Bullish" if leg.direction > 0 else "Bearish", "reason": why})
         extra = {k: v for k, v in extra.items() if k not in ("analysis", "exec_mode", "action", "confidence")}
         self._alert("HOLD", leg.entry_ts, direction="Bullish" if leg.direction > 0 else "Bearish",
                     nifty=round(leg.signal_close, 2), reason=why, **extra)
@@ -184,10 +252,9 @@ class Engine:
             if closed[-1]["exit_reason"] == "profit_target" and self.cfg.profit_target_net > 0:
                 self._last_entry_signal = None
         open_rows = [r for r in rows if r["status"] == "OPEN"]
-        self.position = None
-        if open_rows:
-            r = open_rows[-1]
-            self.position = {
+        self.book, self._focus = [], None
+        for r in (open_rows if self._slots() > 1 else open_rows[-1:]):
+            self.book.append({
                 "id": r["id"], "direction": 1 if r["direction"] == "Bullish" else -1, "side": r["side"],
                 "contract": Contract(r["trading_symbol"], r["groww_symbol"], r["expiry"], r["strike"],
                                      r["opt_type"], r["qty"]),
@@ -195,8 +262,23 @@ class Engine:
                 "signal_ts": r["signal_ts"], "entry_ref": r["signal_close"], "score": r.get("score"),
                 "stop_ref": r.get("stop_ref"), "target_ref": r.get("target_ref"), "atr_ref": r.get("atr_ref"),
                 "stop_premium": r.get("stop_premium"), "target_premium": r.get("target_premium"), "risk": r.get("risk"),
-            }
+                "analysis": r.get("analysis"), "action": r.get("action"), "confidence": r.get("confidence"),
+            })
             self.log(f"Resumed open {r['side']} position {r['trading_symbol']} x{r['qty']} from earlier", "warn")
+        # scanner: each strategy's latest entry and exit candle survive a restart, so no signal is traded twice and no exit candle re-enters
+        self.strat_entry, self.strat_block = {}, {}
+        if self.cfg.signal_mode == "bias" and self.cfg.entry_strategy == "scanner":
+            for r in rows:
+                k = r["analysis"].get("strategy") if isinstance(r.get("analysis"), dict) else None
+                if not k:
+                    continue
+                if r["signal_ts"] is not None:
+                    t = pd.Timestamp(r["signal_ts"]).to_pydatetime().replace(tzinfo=None)
+                    self.strat_entry[k] = max(self.strat_entry.get(k, t), t)
+                if r["status"] == "CLOSED" and r["exit_ts"] is not None:
+                    c = self._candle_close_after(pd.Timestamp(r["exit_ts"]).to_pydatetime().replace(tzinfo=None))
+                    if c and (k not in self.strat_block or c > self.strat_block[k]):
+                        self.strat_block[k] = c
         # stale OPEN trades from previous days can't be managed (MIS is auto squared off by the broker)
         with self.dbe.begin() as c:
             n = c.execute(text("UPDATE live_trades SET status='CLOSED', exit_reason='stale_previous_day' "
@@ -240,9 +322,11 @@ class Engine:
 
     def stop(self, square_off: bool = True, reason: str = "stopped by user"):
         with self._lock:
-            if square_off and self.position:
-                self._exit("manual_stop")
-                if self.position:
+            if square_off and self.book:
+                for p in list(self.book):
+                    with self._on(p):
+                        self._exit("manual_stop")
+                if self.book:
                     self.log("Engine stopped while a position is still open (the exit order failed or is unconfirmed): "
                              "check and close it in the broker app", "error")
             self._stop.set()
@@ -265,7 +349,7 @@ class Engine:
                 raise ValueError("Pause is available for the automated bias engine only.")
             if not self.paused:
                 self.paused = True
-                self.log("Automation paused: no new entries" + (" (the open position is still managed)" if self.position else ""))
+                self.log("Automation paused: no new entries" + (" (the open position is still managed)" if self.book else ""))
 
     def resume(self) -> None:
         with self._lock:
@@ -277,8 +361,10 @@ class Engine:
 
     def square_off_now(self):
         with self._lock:
-            if self.position:
-                self._exit("manual_square_off")
+            if self.book:
+                for p in list(self.book):
+                    with self._on(p):
+                        self._exit("manual_square_off")
             else:
                 self.log("Square-off requested: no open position")
 
@@ -312,18 +398,22 @@ class Engine:
                 self.log(f"Order {self.pending['side']} {self.pending['contract'].trading_symbol} was not confirmed "
                          f"in time: no order placed", "warn")
                 self.pending = None
-            if self.position and now.time() >= st.SQUARE_OFF:
-                self._exit("square_off")
-            if self.position and self.position.get("stop_ref") is not None:
-                self._check_refs(now)
-            if self.position and self.cfg.signal_mode == "scalp":
-                self._scalp_exits(now)
-            if self.position and self.exit_failures:
-                self._exit(self.position.get("pending_reason", "retry"))   # retry a failed exit
+            for p in list(self.book):          # every open position: the single-position rules, one position at a time
+                with self._on(p):
+                    if self.position and now.time() >= st.SQUARE_OFF:
+                        self._exit("square_off")
+                    if self.position and self.position.get("stop_ref") is not None:
+                        self._check_refs(now)
+                    if self.position and self.cfg.signal_mode == "scalp":
+                        self._scalp_exits(now)
+                    if self.position and self.exit_failures:
+                        self._exit(self.position.get("pending_reason", "retry"))   # retry a failed exit
             self._risk_check(now)
-            if self.position and self.cfg.signal_mode == "bias":
-                self._bias_exits(now)
-            self._premium_stop()
+            for p in list(self.book):
+                with self._on(p):
+                    if self.position and self.cfg.signal_mode == "bias":
+                        self._bias_exits(now)
+                    self._premium_stop()
 
             nxt = self._next_bar_close(self.processed_until)
             if nxt is not None and now >= nxt + timedelta(seconds=self.cfg.bar_grace_sec):
@@ -606,7 +696,7 @@ class Engine:
     def _sync_settings(self) -> None:
         """Entry strategy `configured`: re-read the saved Trading Settings every tick and, when the version changed, apply them to this
         engine's configuration (validated as a whole; a bad configuration changes nothing and blocks entries). No restart needed."""
-        if self.cfg.entry_strategy != "configured" or self.cfg.signal_mode != "bias":
+        if self.cfg.entry_strategy not in ("configured", "scanner") or self.cfg.signal_mode != "bias":
             return
         res = trading_settings.current()
         if res.error:
@@ -692,15 +782,24 @@ class Engine:
             self._hold(leg, f"trading settings: {why}", **(refs or {}))
             return
         refs = self._with_settings(refs, res, keys, leg)
-        okey = (pd.Timestamp(leg.entry_ts), leg.direction)
+        okey = (pd.Timestamp(leg.entry_ts), leg.direction, tuple(keys))
         if okey in self._ordered:
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: an order was already placed from this candle", "warn")
             self._hold(leg, "an order was already placed from this signal", **(refs or {}))
             return
-        if self.position:
-            self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: position still open", "warn")
-            self._hold(leg, "a position is already open", **(refs or {}))
+        if len(self.book) >= self._slots():
+            many = self._slots() > 1
+            self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: "
+                     + (f"{len(self.book)} positions open (maximum {self._slots()})" if many else "position still open"), "warn")
+            self._hold(leg, f"the maximum of {self._slots()} open positions is reached" if many else "a position is already open", **(refs or {}))
             return
+        if self._slots() > 1 and keys:
+            same = sum(1 for x in self.book if self._strategy_of(x) == keys[0])
+            if same >= self.cfg.max_strategy_positions:
+                self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} ignored: {keys[0]} already holds {same} position(s) "
+                         f"(maximum {self.cfg.max_strategy_positions} per strategy)", "warn")
+                self._hold(leg, f"this strategy already holds {same} position(s) (maximum {self.cfg.max_strategy_positions})", **(refs or {}))
+                return
         if (now - leg.entry_ts).total_seconds() > self.cfg.stale_entry_sec:
             self.log(f"{dirn} signal at {leg.entry_ts:%H:%M} skipped: stale ({int((now - leg.entry_ts).total_seconds())}s old)", "warn")
             return
@@ -731,6 +830,12 @@ class Engine:
                 self.log(f"{dirn} signal at {leg.entry_ts:%H:%M}: NO TRADE. {why}", "warn")
                 self._hold(leg, f"contract check: {why}")
                 return
+            if self.cfg.entry_strategy == "scanner":
+                why = self._scan_finalize(c, side, refs, keys[0] if keys else None)
+                if why:
+                    self.log(f"{dirn} signal at {leg.entry_ts:%H:%M}: NO TRADE. {why}", "warn")
+                    self._hold(leg, why)
+                    return
         if self.paper:
             risk = self._paper_risk(leg, c, side)
             if risk["decision"] != "TRADE":
@@ -775,7 +880,7 @@ class Engine:
     def _paper_risk(self, leg, c, side: str) -> dict:
         """Steps 1-10 of the paper risk rules: capital, risk %, premium, stop, risk per lot, lots, then
         the daily-loss, balance, lot and open-position checks. Returns the full calculation."""
-        acct = paper_account.state(self.day, self.cfg, eng=self.dbe)
+        acct = paper_account.state(self.day, self.cfg, positions=list(self.book) or None, mtm=self._book_mtm(), eng=self.dbe)
         base = {"account_id": acct["account_id"], "balance": acct["balance"],
                 "day_start_capital": acct["day_start_capital"], "daily_limit": acct["daily_limit"],
                 "pnl_today": acct["pnl_today"], "contract": c.trading_symbol, "signal_ts": leg.entry_ts.isoformat()}
@@ -814,7 +919,21 @@ class Engine:
             "remaining_daily_risk": within_daily,
             "open_positions": open_n < self.cfg.max_open_positions,
         }
+        key = ((getattr(leg, "extra", None) or {}).get("strategy_keys") or [None])[0]
+        if r["decision"] == "TRADE" and self._slots() > 1:
+            new_loss, cap = float(r["max_loss"]), float(acct["balance"])
+            tot, own = self._open_risk(), self._open_risk(key)
+            r["portfolio"] = {"open_risk": round(tot, 2), "new_risk": round(new_loss, 2), "strategy_open_risk": round(own, 2), "capital": round(cap, 2),
+                              "open_positions": len(self.book)}
+            r["checks"]["total_open_risk"] = not (self.cfg.max_open_risk_pct > 0 and tot + new_loss > cap * self.cfg.max_open_risk_pct / 100)
+            r["checks"]["strategy_open_risk"] = not (self.cfg.max_strategy_risk_pct > 0 and own + new_loss > cap * self.cfg.max_strategy_risk_pct / 100)
         problems = []
+        if not r["checks"].get("total_open_risk", True):
+            problems.append(f"Total open risk would be ₹{tot + new_loss:,.0f} (₹{tot:,.0f} open + ₹{new_loss:,.0f} new), above the limit of "
+                            f"{self.cfg.max_open_risk_pct:g}% of capital (₹{cap * self.cfg.max_open_risk_pct / 100:,.0f}).")
+        if not r["checks"].get("strategy_open_risk", True):
+            problems.append(f"This strategy's open risk would be ₹{own + new_loss:,.0f}, above its limit of {self.cfg.max_strategy_risk_pct:g}% "
+                            f"of capital (₹{cap * self.cfg.max_strategy_risk_pct / 100:,.0f}).")
         if acct["limit_reached"]:
             problems.append(f"Daily loss limit reached (today {acct['pnl_today']:,.2f} ≤ -{acct['daily_limit']:,.0f}).")
         if open_n >= self.cfg.max_open_positions:
@@ -909,7 +1028,7 @@ class Engine:
             if not frame.empty:
                 frame = frame[frame["close_ts"] <= pd.Timestamp(bar_close)].reset_index(drop=True)
             cres = cinfo = None
-            if cfg.entry_strategy == "configured" and not frame.empty:     # the strategies that are ON in Trading Settings decide
+            if cfg.entry_strategy in ("configured", "scanner") and not frame.empty:     # the strategies that are ON in Trading Settings decide
                 cres = trading_settings.current()
                 frame, cinfo = configured.evaluate(cres, spot, fut, frame, cfg, bar_close)
             today = frame[frame["day"] == self.day] if not frame.empty else frame
@@ -964,6 +1083,8 @@ class Engine:
                                       "score_15m": expl["score_15m"], "outcome": None})
         self.log(f"{bar_close:%H:%M} {expl['summary']}")
 
+        if cfg.entry_strategy == "scanner":
+            return self._scan_and_trade(now, bar_close, r, expl, cinfo)
         d = int(r["direction"])
         opposite = d != 0 and bool(self.position) and d != self.position["direction"]
         if self.position and cinfo is not None and cres.exit_role == "trend":
@@ -1025,6 +1146,119 @@ class Engine:
                                         "analysis": expl})
         if self.trades_today > n_before:
             self._last_entry_signal = bar_close
+
+    # ------------------------------------------------------------ continuous opportunity scanner (paper / replay only)
+    def _scan_reject(self, o: dict, bar_close, reason: str) -> None:
+        o["decision"], o["reasons"] = "REJECTED", [*o["reasons"], reason]
+        self.scan_rejected.appendleft({"bar_close": pd.Timestamp(bar_close).isoformat(), "strategy": o["strategy"],
+                                       "direction": "Bullish" if o["direction"] > 0 else "Bearish", "reason": reason,
+                                       "quality": o.get("quality")})
+
+    def _scan_and_trade(self, now: datetime, bar_close: datetime, r: pd.Series, expl: dict, cinfo: dict | None) -> None:
+        """One closed candle: look at every strategy on its own, rank the qualified opportunities by quality score and take each one
+        that every rule allows. Opposite-signal exits are per strategy. Nothing is forced: no candidate, no trade."""
+        cfg = self.cfg
+        self.scan_candles += 1
+        res = scanner.scan(cinfo, r, cfg, bar_close)
+        opps, by = res["opps"], res["by_key"]
+        if cfg.bias_exit_opposite:
+            for p in list(self.book):
+                o = by.get(self._strategy_of(p))
+                if o and o["direction"] and o["direction"] != p["direction"]:
+                    self.log(f"{bar_close:%H:%M} {o['label']} now points the other way: exiting its position")
+                    with self._on(p):
+                        self._exit("opposite_signal")
+                    self.strat_block[o["strategy"]] = max(self.strat_block.get(o["strategy"], bar_close),
+                                                          bar_close + timedelta(minutes=cfg.timeframe * cfg.bias_cooldown_bars))
+        cands = [o for o in opps if o["decision"] == "CANDIDATE"]
+        for o in cands:
+            o["action"] = {1: "BUY CE / SELL PE", -1: "BUY PE / SELL CE"}[o["direction"]]
+        t = bar_close.time()
+        if {o["direction"] for o in cands} == {1, -1}:
+            for o in cands:
+                self._scan_reject(o, bar_close, "strategies disagree on this candle (one says bullish, another bearish): no trade")
+            cands = []
+        for o in sorted(cands, key=scanner.rank_key):
+            k, d = o["strategy"], o["direction"]
+            floor = cfg.scan_min_quality
+            why = None
+            if self.paused:
+                why = "automation is paused (no new entries)"
+            elif not (_hm(cfg.entry_start) <= t <= _hm(cfg.cutoff)) or t >= st.SQUARE_OFF:
+                why = f"outside the entry window {cfg.entry_start}-{cfg.cutoff}"
+            elif not cfg.scan_allow_unvalidated and not o["evidence"]["status"] == "positive":
+                why = (f"{o['label']} has a {o['evidence']['label']} ({o['evidence']['note']}); it trades only when you allow strategies "
+                       f"without a validated positive result")
+            elif cfg.max_trades_per_day and self.trades_today >= cfg.max_trades_per_day:
+                why = f"daily trade limit ({cfg.max_trades_per_day}) reached"
+            elif self.strat_block.get(k) and bar_close <= self.strat_block[k]:
+                why = f"this strategy's last exit (or cool-down) closes this candle to it until {self.strat_block[k]:%H:%M}"
+            elif k in self.strat_entry and pd.Timestamp(self.strat_entry[k]) >= pd.Timestamp(o["episode_start"]):
+                why = f"this signal (running since {pd.Timestamp(o['episode_start']):%H:%M}) was already traded: waiting for a new one"
+            elif any(p["direction"] != d for p in self.book):
+                other = next(self._strategy_of(p) for p in self.book if p["direction"] != d)
+                why = f"opposite to the open position of {other} (no hedging against another strategy)"
+            elif o["quality"] + scanner.LATE_MAX < floor:
+                why = f"quality {o['quality']:g} of 100 cannot reach the minimum {floor:g} even with a perfect contract"
+            if why:
+                self._scan_reject(o, bar_close, why)
+                continue
+            pick = self._bias_pick(d)
+            if pick is None:
+                self._scan_reject(o, bar_close, f"{'CE' if d > 0 else 'PE'} trades are not enabled in your settings")
+                continue
+            mode, side, typ = pick
+            o["action"] = f"{side} {typ}"
+            analysis = {**expl, "strategy": k, "signal": "BUY CE" if d > 0 else "BUY PE", "direction": d, "instrument": f"{side} {typ}",
+                        "summary": f"SCANNER: {o['label']} {side} {typ} candidate, candle quality {o['quality']:g} of 100",
+                        "quality": {"total": o["quality"], "min": floor, "final": False, "components": o["components"]},
+                        "scanner": {"strategy": k, "episode_start": o["episode_start"], "evidence": o["evidence"], "rank_quality": o["quality"]}}
+            leg = st.Leg(day=self.day, direction=d, entry_ts=bar_close, signal_close=float(r["close"]),
+                         signal_bar_start=pd.Timestamp(r["start"]).to_pydatetime(), ordinal=self.trades_today + 1,
+                         extra={"strategy_keys": [k]})
+            n_before, seen = self.trades_today, len(self.scan_rejected)
+            self._try_entry(now, leg, refs={"exec_mode": mode, "action": f"{side} {typ}", "confidence": o["quality"], "analysis": analysis})
+            if self.trades_today > n_before:
+                o["decision"] = "ENTER"
+                self.strat_entry[k] = bar_close
+                o["reasons"] = [f"entered {side} {typ}"]
+            else:
+                o["decision"] = "REJECTED"
+                o["reasons"] = [self.scan_rejected[0]["reason"] if len(self.scan_rejected) > seen else "no order was placed (see the log)"]
+        self.scan_state = {
+            "bar_close": pd.Timestamp(bar_close).isoformat(), "scanned_at": now.isoformat(), "min_quality": cfg.scan_min_quality,
+            "decision": "BUY" if any(o["decision"] == "ENTER" for o in opps) else "HOLD",
+            "opportunities": [{**o, "components": o["components"]} for o in opps],
+            "open_positions": len(self.book), "max_open_positions": self._slots()}
+        taken = [o for o in opps if o["decision"] == "ENTER"]
+        self.log(f"{bar_close:%H:%M} scanner: {len([o for o in opps if o['state'] == 'signal'])} signal(s), {len(taken)} entered"
+                 + ("" if taken else " (HOLD)"))
+
+    def _scan_finalize(self, c, side: str, refs: dict, key: str | None) -> str | None:
+        """Scanner only, once the contract passed its checks: add the liquidity, Greeks and reward/risk components to the candle score
+        and refuse the order when the total is below the minimum. Returns the reason to refuse, or None."""
+        cfg = self.cfg
+        a = refs.get("analysis") or {}
+        q = a.get("quality") or {}
+        comps = list(q.get("components") or [])
+        comps += scanner.contract_components(a.get("contract_checks") or [], side)
+        prem = float(a.get("entry_premium_seen") or 0)
+        lv = stops.stop_levels(cfg, side, prem, self.last_atr, lambda: self.market.option_delta(c)) if prem else None
+        if lv is not None and lv.error and not lv.invalid:
+            lv = stops.stop_levels(dc_replace(cfg, stop_mode="pct"), side, prem, self.last_atr, lambda: None)
+        rr, note = scanner.reward_risk(side, prem, getattr(lv, "stop", None), getattr(lv, "target", None), c.lot_size, self.cost_cfg)
+        comps.append(scanner.reward_risk_component(rr, note))
+        total = scanner.total(comps)
+        a["quality"] = {"total": total, "min": cfg.scan_min_quality, "final": True, "components": comps,
+                        "note": "a count of sound conditions met, not a probability of winning"}
+        refs["analysis"] = a
+        refs["confidence"] = total
+        if total < cfg.scan_min_quality:
+            low = [f"{x['label']} {x['points']:g}/{x['max']:g}" for x in comps if x["points"] < x["max"] / 2]
+            return f"quality {total:g} of 100 is below the minimum {cfg.scan_min_quality:g} (weak: {', '.join(low) or 'none'})"
+        if rr is not None and rr <= 0:
+            return f"the target does not cover the costs ({note})"
+        return None
 
     def _bias_pick(self, d: int) -> tuple[str, str, str] | None:
         """(execution mode, BUY/SELL, CE/PE) for a direction, from the instruments you enabled. Buying is
@@ -1175,7 +1409,8 @@ class Engine:
         "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net",
         "entry_strategy", "cf_factors", "cf_require", "cf_min_score", "cf_adr_filter", "cf_adr_period", "cf_adr_max_used",
         "cf_fvg_min_atr", "cf_fvg_max_age", "cf_htf", "sc_min_score", "sc_adr_period", "sc_adr_max_used", "sc_fvg_min_atr",
-        "sc_fvg_max_age", "sc_ctx_tf", "sc_stop_min_pct", "sc_stop_max_pct"})
+        "sc_fvg_max_age", "sc_ctx_tf", "sc_stop_min_pct", "sc_stop_max_pct", "max_open_positions", "max_open_risk_pct",
+        "max_strategy_positions", "max_strategy_risk_pct", "scan_min_quality", "scan_allow_unvalidated"})
 
     def update_settings(self, changes: dict) -> dict:
         """Apply new bias-mode settings to the running engine (no restart). The whole new configuration is validated
@@ -1330,7 +1565,7 @@ class Engine:
         self.log(f"{dirn} crossover (bar closed {leg.entry_ts:%H:%M}, NIFTY {leg.signal_close:.2f}) → "
                  f"{side} {c.trading_symbol} x{qty}")
         try:
-            fill = self.broker.execute(c, side, qty, f"E{leg.entry_ts:%H%M}{self.day:%d%m}")
+            fill = self.broker.execute(c, side, qty, f"E{leg.entry_ts:%H%M}{self.day:%d%m}{c.trading_symbol[-9:]}{side[0]}")
         except OrderUnknown as exc:
             self._halt(f"Entry order unconfirmed: {exc}", error=True)
             return
@@ -1399,14 +1634,19 @@ class Engine:
         self.log(f"EXITED {p['contract'].trading_symbol} @ {fill['price']:.2f} ({reason}) · net {pnl['net']:+,.2f}")
         if self.cfg.signal_mode == "bias":
             # Never re-enter on the candle that exited: the next entry needs a candle that opened after this exit.
-            self._no_entry_through = self._candle_close_after(pd.Timestamp(fill["ts"]).to_pydatetime().replace(tzinfo=None))
+            closed_at = self._candle_close_after(pd.Timestamp(fill["ts"]).to_pydatetime().replace(tzinfo=None))
+            if self.cfg.entry_strategy == "scanner":
+                if self._strategy_of(p) and closed_at:
+                    self.strat_block[self._strategy_of(p)] = closed_at     # only the strategy that exited waits; the others are independent
+            else:
+                self._no_entry_through = closed_at
             if reason == "profit_target":
                 self.target_hits_today += 1
                 if self.cfg.profit_target_net > 0:
                     self._last_entry_signal = None      # a net profit-target exit releases the signal: the next candle may re-enter
                 self.log(f"Profit target hit: net {pnl['net']:+,.2f} (target ₹{self.cfg.profit_target_net:,.0f}). "
-                         f"Next entry: a new analysis on a candle closing after {self._no_entry_through:%H:%M}"
-                         if self._no_entry_through else f"Profit target hit: net {pnl['net']:+,.2f}")
+                         f"Next entry: a new analysis on a candle closing after {closed_at:%H:%M}"
+                         if closed_at else f"Profit target hit: net {pnl['net']:+,.2f}")
 
     def _pnl(self, p: dict, exit_price: float) -> dict:
         if self.broker.models_slippage:
@@ -1420,16 +1660,27 @@ class Engine:
                 "net": round(gross - ch["total"], 2)}
 
     def mtm(self) -> float | None:
-        p = self.position
-        if not p:
-            return 0.0
-        try:
-            ltp = self.market.option_ltp(p["contract"])
-        except Exception:
+        """Open P&L (net of charges) of every open position, None when any price is unavailable."""
+        total = 0.0
+        for p in self.book:
+            try:
+                ltp = self.market.option_ltp(p["contract"])
+            except Exception:
+                return None
+            self.last_ltp[p["contract"].trading_symbol] = ltp
+            self.last_ltp_at[p["contract"].trading_symbol] = self.market.now()
+            total += self._pnl(p, ltp)["net"]
+        return total
+
+    def _book_mtm(self) -> float | None:
+        """Open P&L from the latest prices already read (no network call), for the capital figures."""
+        if not self.book:
             return None
-        self.last_ltp[p["contract"].trading_symbol] = ltp
-        self.last_ltp_at[p["contract"].trading_symbol] = self.market.now()
-        return self._pnl(p, ltp)["net"]
+        tot = 0.0
+        for p in self.book:
+            ltp = self.last_ltp.get(p["contract"].trading_symbol)
+            tot += self._pnl(p, ltp)["net"] if ltp else 0.0
+        return tot
 
     def _daily_limit(self) -> float:
         """₹ daily loss limit. Paper: the smaller of max_daily_loss and daily_risk_pct of the day's starting capital."""
@@ -1441,15 +1692,16 @@ class Engine:
         return self._limit_val
 
     def _risk_check(self, now: datetime):
-        m = self.mtm() if self.position else 0.0      # also refreshes LTP for the UI
+        m = self.mtm() if self.book else 0.0      # also refreshes LTP for the UI
         limit = self._daily_limit()
         if m is None or not limit or self.state in ("halted", "error"):
             return
         total = self.realised_today + m
         if total <= -abs(limit):
             self.log(f"Daily loss limit hit ({total:,.2f} ≤ -{limit:,.0f}): squaring off", "warn")
-            if self.position:
-                self._exit("daily_loss_limit")
+            for p in list(self.book):
+                with self._on(p):
+                    self._exit("daily_loss_limit")
             self._halt("Daily loss limit reached: no more trades today")
 
     def _halt(self, reason: str, error: bool = False):
@@ -1464,6 +1716,18 @@ class Engine:
         later = next((c for c in self._bar_closes(self.day) if self._no_entry_through and c > self._no_entry_through), None) if self.day else None
         if self.state in ("halted", "error"):
             phase, detail = "halted", self.halt_reason or "The engine is halted: no new entries."
+        elif self.book and cfg.entry_strategy == "scanner":
+            n = len(self.book)
+            if any(p.get("xf") or p.get("pending_reason") or p.get("exiting") for p in self.book):
+                phase, detail = "exiting", "Closing a position; an exit is being retried or confirmed."
+            elif self.paused:
+                phase, detail = "paused", f"Paused: {n} open position(s) are managed, no new entry is taken."
+            elif n >= self._slots():
+                phase, detail = "holding", f"Holding {n} open paper position(s), the maximum of {self._slots()}: no new entry until one closes."
+            else:
+                phase = "scanning"
+                detail = (f"Holding {n} open paper position(s) and scanning every closed {cfg.timeframe}-minute candle for new qualified signals "
+                          f"(room for {self._slots() - n} more).")
         elif self.position:
             p = self.position
             if self.exit_failures or p.get("pending_reason") or p.get("exiting"):
@@ -1476,49 +1740,54 @@ class Engine:
             phase, detail = "paused", "Paused: the analysis keeps running but no new entry is taken."
         elif now.weekday() >= 5 or now.time() < MARKET_OPEN or now.time() >= MARKET_CLOSE:
             phase, detail = "waiting", "Market closed: waiting for the next session."
-        elif self.trades_today >= cfg.max_trades_per_day:
+        elif cfg.max_trades_per_day and self.trades_today >= cfg.max_trades_per_day:
             phase, detail = "limit", f"Daily trade limit ({cfg.max_trades_per_day}) reached: no new entries today."
         elif not (_hm(cfg.entry_start) <= now.time() <= _hm(cfg.cutoff)):
             phase, detail = "waiting", f"Outside the entry window {cfg.entry_start}-{cfg.cutoff}: no new entries."
-        elif self._no_entry_through and nxt is not None and nxt <= self._no_entry_through:
+        elif cfg.entry_strategy != "scanner" and self._no_entry_through and nxt is not None and nxt <= self._no_entry_through:
             phase = "waiting"
             detail = (f"Waiting for a new candle after the last exit (the {self._no_entry_through:%H:%M} candle contains it); "
                       f"earliest next entry on the {later:%H:%M} candle." if later else "No further candle today.")
-        elif self._cooldown_until and nxt is not None and nxt < self._cooldown_until:
+        elif cfg.entry_strategy != "scanner" and self._cooldown_until and nxt is not None and nxt < self._cooldown_until:
             phase, detail = "waiting", f"Cooling down after an opposite-signal exit until {self._cooldown_until:%H:%M}."
         else:
             phase = "ready"
-            need = ("a strategy that is ON in Trading Settings signals" if cfg.entry_strategy == "configured" else
+            need = (f"a strategy that is ON in Trading Settings signals with a quality score of at least {cfg.scan_min_quality:g} of 100" if cfg.entry_strategy == "scanner" else
+                    "a strategy that is ON in Trading Settings signals" if cfg.entry_strategy == "configured" else
                     f"the confluence confirmation score is at least {cfg.cf_min_score:g}%" if cfg.entry_strategy == "confluence"
                     else f"the strategy score is at least {cfg.sc_min_score:g} of 100 and every gate is met" if cfg.entry_strategy == "scored"
                     else f"the bias confidence is at least {cfg.bias_min_confidence:g}%")
             detail = (f"Next analysis at {nxt:%H:%M}: enters if {need} and a valid, new signal exists." if nxt else "No further candle today.")
-        labels = {"halted": "Halted", "exiting": "Exiting", "holding": "Holding a position", "paused": "Paused",
+        labels = {"halted": "Halted", "exiting": "Exiting", "holding": "Holding a position", "paused": "Paused", "scanning": "Scanning (positions open)",
                   "limit": "Daily limit reached", "waiting": "Waiting",
                   "ready": "Ready for re-entry" if self.trades_today else "Ready for entry"}
         return {"phase": phase, "label": labels[phase], "detail": detail, "paused": self.paused,
                 "min_confidence": {"confluence": cfg.cf_min_score, "scored": cfg.sc_min_score}.get(cfg.entry_strategy, cfg.bias_min_confidence),
                 "strategy": cfg.entry_strategy, "profit_target_net": cfg.profit_target_net,
-                "target_hits": self.target_hits_today, "trades_today": self.trades_today,
+                "target_hits": self.target_hits_today, "trades_today": self.trades_today, "open_positions": len(self.book),
+                "max_open_positions": self._slots(), "trade_cap": cfg.max_trades_per_day or None,
                 "no_entry_through": self._no_entry_through.isoformat() if self._no_entry_through else None}
 
     def status(self) -> dict:
         with self._lock:
-            pos = None
-            if self.position:
-                p = self.position
+            def view(p: dict) -> dict:
                 c = p["contract"]
                 ltp = self.last_ltp.get(c.trading_symbol)
-                pos = {"trading_symbol": c.trading_symbol, "side": p["side"],
-                       "direction": "Bullish" if p["direction"] > 0 else "Bearish",
-                       "qty": p["qty"], "strike": c.strike, "opt_type": c.opt_type, "expiry": c.expiry.isoformat(),
-                       "entry_price": p["entry_price"], "entry_ts": pd.Timestamp(p["entry_ts"]).isoformat(),
-                       "ltp": ltp, "mtm": self._pnl(p, ltp)["net"] if ltp else None,
-                       "exit_failures": self.exit_failures, "score": p.get("score"),
-                       "entry_reason": (p.get("analysis") or {}).get("summary"), "entry_confidence": p.get("confidence"),
-                       "action": p.get("action"),
-                       "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref"),
-                       **stops.position_levels(p)}
+                a = p.get("analysis") or {}
+                return {"id": p.get("id"), "trading_symbol": c.trading_symbol, "side": p["side"],
+                        "direction": "Bullish" if p["direction"] > 0 else "Bearish",
+                        "qty": p["qty"], "strike": c.strike, "opt_type": c.opt_type, "expiry": c.expiry.isoformat(),
+                        "entry_price": p["entry_price"], "entry_ts": pd.Timestamp(p["entry_ts"]).isoformat(),
+                        "ltp": ltp, "mtm": self._pnl(p, ltp)["net"] if ltp else None,
+                        "exit_failures": int(p.get("xf", 0)), "score": p.get("score"),
+                        "entry_reason": a.get("summary"), "entry_confidence": p.get("confidence"),
+                        "action": p.get("action"), "strategy": self._strategy_of(p),
+                        "quality": (a.get("quality") or {}).get("total"),
+                        "risk_amount": (p.get("risk") or {}).get("max_loss"),
+                        "stop_ref": p.get("stop_ref"), "target_ref": p.get("target_ref"),
+                        **stops.position_levels(p)}
+            pos = view(self.book[0]) if self.book else None
+            positions = [view(p) for p in self.book]
             pend = None
             if self.pending:
                 q = self.pending
@@ -1533,7 +1802,7 @@ class Engine:
                 "config": asdict(self.cfg), "now": self.market.now().isoformat(),
                 "day": self.day.isoformat() if self.day else None,
                 "next_eval": nxt.isoformat() if nxt else None,
-                "last_eval": self.last_eval, "position": pos, "pending_order": pend,
+                "last_eval": self.last_eval, "position": pos, "positions": positions, "pending_order": pend,
                 "settings": {"configured": self.cfg.entry_strategy == "configured", "applied_version": self._settings_version,
                              "saved_version": trading_settings.current().version, "error": self.settings_error},
                 "trades_today": self.trades_today, "realised_today": round(self.realised_today, 2),
@@ -1541,10 +1810,14 @@ class Engine:
                 "conn_error": self.conn_error,
                 "events": list(self.events)[:120], "bars": self.bars_today,
                 **({"bias": {"latest": self.bias_state, "history": list(self.bias_history)[:60],
-                             "trades_today": self.trades_today, "max_trades": self.cfg.max_trades_per_day,
-                             "remaining_trades": max(0, self.cfg.max_trades_per_day - self.trades_today),
+                             "trades_today": self.trades_today, "max_trades": self.cfg.max_trades_per_day or None,
+                             "remaining_trades": max(0, self.cfg.max_trades_per_day - self.trades_today) if self.cfg.max_trades_per_day else None,
                              "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None,
                              "rejected": list(self.rejected)[:30],
+                             **({"scan": {"state": self.scan_state, "rejected": list(self.scan_rejected)[:60], "candles_scanned": self.scan_candles,
+                                          "open_risk": round(self._open_risk(), 2), "open_positions": len(self.book),
+                                          "max_open_positions": self._slots()}}
+                                if self.cfg.entry_strategy == "scanner" else {}),
                              "automation": self._automation(nxt)}}
                    if self.cfg.signal_mode == "bias" else {}),
             })

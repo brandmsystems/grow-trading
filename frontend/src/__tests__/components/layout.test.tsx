@@ -18,8 +18,8 @@ const saved = () => JSON.parse(localStorage.getItem("gt-settings") ?? "{}");
 
 describe("navigation list", () => {
   it("has the thirteen pages once each, and exactly four flagged for the phone bottom bar", () => {
-    expect(NAV).toHaveLength(14);
-    expect(new Set(NAV.map((n) => n.to)).size).toBe(14);
+    expect(NAV).toHaveLength(16);
+    expect(new Set(NAV.map((n) => n.to)).size).toBe(16);
     expect(NAV.filter((n) => n.mobile).map((n) => n.short)).toEqual(["Overview", "Live", "Signals", "Backtest"]);
   });
 });

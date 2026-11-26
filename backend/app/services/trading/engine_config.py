@@ -24,7 +24,7 @@ class EngineConfig:
     lots: int = 1
     roll_on_expiry_day: bool = True
     max_daily_loss: float = 5000.0     # ₹, realised + MTM; 0 disables
-    max_trades_per_day: int = 6
+    max_trades_per_day: int = 6        # 0 = no count cap (the risk limits and the daily loss limit still apply)
     bar_grace_sec: int = 5             # wait after bar close before evaluating
     max_candle_wait_sec: int = 60      # wait for the bar's last 1m candle to appear
     stale_entry_sec: int = 180         # don't enter if the signal is older than this
@@ -40,7 +40,12 @@ class EngineConfig:
     # Paper trading only (live and replay use `lots` and are unaffected):
     risk_pct: float = 1.0              # risk per trade, % of available virtual capital
     daily_risk_pct: float = 3.0        # daily loss limit, % of the day's starting capital (0 = off)
-    max_open_positions: int = 1        # the engine holds one position at a time
+    max_open_positions: int = 1        # concurrent paper positions (1 = one at a time; the scanner entry strategy may hold several)
+    max_open_risk_pct: float = 0.0     # scanner: total open risk (sum of every open position's maximum loss) as % of capital (0 = off)
+    max_strategy_positions: int = 1    # scanner: concurrent positions one strategy may hold
+    max_strategy_risk_pct: float = 0.0 # scanner: open risk one strategy may hold, % of capital (0 = off)
+    scan_min_quality: float = 55.0     # scanner: the 0-100 strategy quality score needed for an entry (a count of conditions met, not a probability)
+    scan_allow_unvalidated: bool = False  # scanner: also trade strategies whose validated result is negative or missing (research use; paper only)
     max_lots: int = 10                 # cap per trade
     min_balance: float = 0.0           # ₹ that must stay available after an entry
     stop_mode: str = "atr"             # atr: premium - delta x stop_atr x NIFTY ATR | pct: premium x (1 - stop_pct %)
@@ -139,9 +144,15 @@ class EngineConfig:
             raise ValueError("risk per trade must be above 0% and at most 100%")
         if not 0 <= self.daily_risk_pct <= 100:
             raise ValueError("daily risk must be between 0% and 100%")
+        if self.signal_mode == "bias":
+            # Automated trading has no daily loss halt: a good entry is taken whenever it comes. The per-trade risk, open-risk caps
+            # and the 15:00 square-off still bound it. (Whatever a saved setting says, the limit is off here.)
+            self.daily_risk_pct, self.max_daily_loss = 0.0, 0.0
         self.max_open_positions, self.max_lots = int(self.max_open_positions), int(self.max_lots)
         if self.max_open_positions < 1 or self.max_lots < 1:
             raise ValueError("maximum open positions and maximum lots must be at least 1")
+        if self.max_open_positions > 20:
+            raise ValueError("maximum open positions can be at most 20")
         self.min_balance = float(self.min_balance)
         if self.min_balance < 0:
             raise ValueError("minimum balance can't be negative")
@@ -181,13 +192,22 @@ class EngineConfig:
         self.bias_max_hold_min, self.bias_cooldown_bars = int(self.bias_max_hold_min), int(self.bias_cooldown_bars)
         if not 0 <= self.bias_max_hold_min <= 375 or not 0 <= self.bias_cooldown_bars <= 20:
             raise ValueError("maximum holding time must be 0 to 375 minutes and the cooldown 0 to 20 candles")
-        if self.max_trades_per_day < 1:
-            raise ValueError("maximum trades per day must be at least 1")
+        if self.max_trades_per_day < 0:
+            raise ValueError("maximum trades per day can't be negative (0 = no count cap)")
+        self.max_strategy_positions = int(self.max_strategy_positions)
+        if not 1 <= self.max_strategy_positions <= 20:
+            raise ValueError("positions per strategy must be 1 to 20")
+        for name, lo, hi in (("max_open_risk_pct", 0, 100), ("max_strategy_risk_pct", 0, 100), ("scan_min_quality", 0, 100)):
+            v = float(getattr(self, name))
+            if not lo <= v <= hi:
+                raise ValueError(f"{name.replace('_', ' ')} must be between {lo:g} and {hi:g}")
+            setattr(self, name, v)
+        self.scan_allow_unvalidated = bool(self.scan_allow_unvalidated)
 
     def _validate_confluence(self) -> None:
         """The confluence strategy's settings (they are checked in every bias run, used only when entry_strategy is confluence)."""
-        if self.entry_strategy not in ("bias", "confluence", "scored", "configured"):
-            raise ValueError("entry strategy must be bias, confluence, scored or configured")
+        if self.entry_strategy not in ("bias", "confluence", "scored", "configured", "scanner"):
+            raise ValueError("entry strategy must be bias, confluence, scored, configured or scanner")
         known = set(bias.IndParams.__dataclass_fields__)
         self.ind = {k: v for k, v in dict(self.ind or {}).items() if k in known}
         self.cf_factors = [k for k in dict.fromkeys(self.cf_factors or []) if k in confluence.FACTORS]

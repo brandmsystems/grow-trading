@@ -10,6 +10,9 @@ if __name__ == "__main__":
     if os.environ.get("PREMARKET_SCHEDULER", "1") != "0":     # the daily pre-market report (08:30 IST on trading days)
         from app.services.premarket import service as premarket
         premarket.start_scheduler()
+    if os.environ.get("POSITION_SCHEDULER", "1") != "0":      # position trading: manage paper positions, record the daily decision (paper only)
+        from app.services.position import scheduler as position_scheduler
+        position_scheduler.start()
     # Werkzeug with threads serves both HTTP and the Socket.IO WebSocket (simple-websocket).
     # Local use only (127.0.0.1), hence allow_unsafe_werkzeug.
     socketio.run(app, host="127.0.0.1", port=PORT, debug=False, allow_unsafe_werkzeug=True)

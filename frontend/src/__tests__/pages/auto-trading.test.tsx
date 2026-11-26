@@ -335,27 +335,26 @@ describe("continuous automation: threshold, net profit target, phases, pause", (
   };
   const phase = (label: string, detail: string, over = {}) => ({ bias: { automation: { phase: "waiting", label, detail, ...over } } });
 
-  it("defaults to a 70% Market Bias threshold and a ₹1,500 net profit target, and sends both on start", async () => {
+  it("defaults to a 70% Market Bias threshold with no fixed profit target, and sends that on start", async () => {
     const api = mockApi();
     const { user } = page(api);
     expect(await screen.findByLabelText("Market Bias threshold")).toHaveValue(70);
-    expect(screen.getByLabelText("Net profit target per trade")).toHaveValue(1500);
+    expect(screen.queryByLabelText("Net profit target per trade")).not.toBeInTheDocument();
     expect(screen.getByText("Not running")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
-    expect(screen.getByText(/per trade, after brokerage, taxes and slippage; it is not a daily target/)).toBeInTheDocument();
+    expect(screen.getByText(/There is no fixed profit target: each trade is bought and sold by the strategy/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Start paper trading/ }));
     await waitFor(() => expect(api.callsTo("POST", "/api/bias/start")).toHaveLength(1));
-    expect((api.callsTo("POST", "/api/bias/start")[0].body as { config: Record<string, unknown> }).config).toMatchObject({ bias_min_confidence: 70, profit_target_net: 1500 });
+    expect((api.callsTo("POST", "/api/bias/start")[0].body as { config: Record<string, unknown> }).config).toMatchObject({ bias_min_confidence: 70, profit_target_net: 0 });
   });
 
-  it("starts with an edited threshold and target", async () => {
+  it("starts with an edited threshold", async () => {
     const api = mockApi();
     const { user } = page(api);
     fireEvent.change(await screen.findByLabelText("Market Bias threshold"), { target: { value: "75" } });
-    fireEvent.change(screen.getByLabelText("Net profit target per trade"), { target: { value: "2000" } });
     await user.click(screen.getByRole("button", { name: /Start paper trading/ }));
     await waitFor(() => expect(api.callsTo("POST", "/api/bias/start")).toHaveLength(1));
-    expect((api.callsTo("POST", "/api/bias/start")[0].body as { config: Record<string, unknown> }).config).toMatchObject({ bias_min_confidence: 75, profit_target_net: 2000 });
+    expect((api.callsTo("POST", "/api/bias/start")[0].body as { config: Record<string, unknown> }).config).toMatchObject({ bias_min_confidence: 75, profit_target_net: 0 });
   });
 
   it("takes the new 70% default over a 55% saved before this feature existed, but keeps a deliberate later choice", async () => {
@@ -368,7 +367,7 @@ describe("continuous automation: threshold, net profit target, phases, pause", (
     localStorage.setItem("gt.auto.settings", JSON.stringify({ bias_min_confidence: 80, profit_target_net: 1000 }));
     page();
     expect(await screen.findByLabelText("Market Bias threshold")).toHaveValue(80);
-    expect(screen.getByLabelText("Net profit target per trade")).toHaveValue(1000);
+    expect(screen.queryByLabelText("Net profit target per trade")).not.toBeInTheDocument();   // an old saved target is dropped
   });
 
   it("shows the current bias against the threshold and says whether it is eligible", async () => {
@@ -416,15 +415,14 @@ describe("continuous automation: threshold, net profit target, phases, pause", (
     expect(api.callsTo("POST", "/api/bias/pause")).toHaveLength(0);
   });
 
-  it("applies a changed target and threshold to the running engine at once", async () => {
+  it("applies a changed threshold to the running engine at once", async () => {
     const api = withEngine();
     const { user } = page(api);
-    fireEvent.change(await screen.findByLabelText("Net profit target per trade"), { target: { value: "1800" } });
-    fireEvent.change(screen.getByLabelText("Market Bias threshold"), { target: { value: "74" } });
-    await user.click(screen.getByRole("button", { name: "Apply threshold & target" }));
+    fireEvent.change(await screen.findByLabelText("Market Bias threshold"), { target: { value: "74" } });
+    await user.click(screen.getByRole("button", { name: "Apply threshold" }));
     await waitFor(() => expect(api.callsTo("POST", "/api/bias/settings")).toHaveLength(1));
     const sent = api.callsTo("POST", "/api/bias/settings")[0].body as Record<string, unknown>;
-    expect(sent).toMatchObject({ profit_target_net: 1800, bias_min_confidence: 74 });
+    expect(sent).toMatchObject({ profit_target_net: 0, bias_min_confidence: 74 });
     expect(api.callsTo("POST", "/api/bias/start")).toHaveLength(0);
   });
 

@@ -126,7 +126,8 @@ def evaluate(res: "ts.Resolved", spot: pd.DataFrame, fut: pd.DataFrame | None, b
             sc.append(float(sc_frame.loc[pd.DatetimeIndex(sc_frame["close_ts"]) == last, "sc_score"].iloc[0]))
         score = max(sc) if sc else None
     info = {"direction": d_last, "fired": fired, "conflict": bool(pos.iloc[-1] and neg.iloc[-1]) if last is not None else False, "score": score,
-            "strategies": rows, "active": active, "entry_tf": res.entry_tf, "trend_tf": res.trend_tf}
+            "strategies": rows, "active": active, "entry_tf": res.entry_tf, "trend_tf": res.trend_tf,
+            "series": {k: v[1] for k, v in final.items()}}      # each strategy's own signal per candle (the scanner reads its episodes)
     return out, info
 
 

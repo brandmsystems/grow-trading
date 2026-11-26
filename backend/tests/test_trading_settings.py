@@ -95,7 +95,7 @@ def test_invalid_values_are_errors_with_the_path_and_nothing_is_repaired_silentl
         ("indicators.macd.params.fast", 60, "between", "indicators.macd.params.fast"), ("indicators.rsi.params.period", 1, "between", "indicators.rsi.params.period"),
         ("indicators.rsi.params.period", 7.5, "whole number", "indicators.rsi.params.period"), ("indicators.bollinger.params.std", 9, "between", "indicators.bollinger.params.std"),
         ("indicators.adr.params.period", 7, "one of 5, 10, 20", "indicators.adr.params.period"), ("rules.risk_pct", 0, "between", "rules.risk_pct"),
-        ("rules.max_trades_per_day", 0, "between", "rules.max_trades_per_day"), ("rules.max_open_positions", 2, "between", "rules.max_open_positions"),
+        ("rules.max_trades_per_day", -1, "between", "rules.max_trades_per_day"), ("rules.max_open_positions", 21, "between", "rules.max_open_positions"),
         ("rules.stop_mode", "magic", "one of", "rules.stop_mode"), ("rules.start", "25:99", "", "rules.start"), ("rules.trail_pct", 150, "between", "rules.trail_pct"),
         ("rules.reentry_enabled", "yes", "true or false", "rules.reentry_enabled"), ("timeframes.entry", 1, "must be 5 or 15", "timeframes.entry"),
         ("timeframes.trend", 5, "must be 15 or 30", "timeframes.trend"), ("timeframes.exit", "never", "'entry' or 'trend'", "timeframes.exit"),
@@ -448,7 +448,7 @@ def test_api_save_validate_reset_conflict_and_invalid_cases(client):
     assert client.get("/api/trading-settings").get_json()["data"]["config"]["rules"]["risk_pct"] == 0.5
     r = client.put("/api/trading-settings", json={"config": d, "base_version": 0})                              # a stale page
     assert r.status_code == 409 and "changed elsewhere" in r.get_json()["error"]
-    r = client.put("/api/trading-settings", json={"config": doc(rules__risk_pct=0, rules__max_trades_per_day=0)})
+    r = client.put("/api/trading-settings", json={"config": doc(rules__risk_pct=0, rules__max_trades_per_day=-1)})
     j = r.get_json()
     assert r.status_code == 400 and not j["ok"] and len(j["errors"]) == 2 and j["errors"][0]["path"].startswith("rules.")
     assert client.get("/api/trading-settings").get_json()["data"]["version"] == 1                              # nothing stored by the invalid save

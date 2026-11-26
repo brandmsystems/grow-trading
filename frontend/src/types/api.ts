@@ -91,6 +91,8 @@ export interface Position {
   risk_amount?: number; risk_reward?: number | null; nifty_stop?: number | null; nifty_target?: number | null; stop_method?: string;
   // automated bias engine: why it was entered
   entry_reason?: string | null; entry_confidence?: number | null; action?: string | null;
+  // scanner: which strategy opened it and its final quality score
+  id?: number; strategy?: string | null; quality?: number | null;
 }
 
 export interface PendingOrder {
@@ -467,30 +469,43 @@ export interface BiasSettings {
   /** Exit one trade when its NET profit (after charges and slippage) reaches this many rupees; 0 = off. */
   profit_target_net: number;
   /** Confluence strategy: which engine decides entries, and its factors and filters. */
-  entry_strategy: "bias" | "confluence" | "scored" | "configured"; cf_factors: string[]; cf_require: string[]; cf_min_score: number; cf_adr_filter: boolean;
+  entry_strategy: "bias" | "confluence" | "scored" | "configured" | "scanner"; cf_factors: string[]; cf_require: string[]; cf_min_score: number; cf_adr_filter: boolean;
   cf_adr_period: number; cf_adr_max_used: number; cf_fvg_min_atr: number; cf_fvg_max_age: number; cf_htf: boolean;
   /** Scored strategy: minimum points, ADR, gap, optional context timeframe and the premium range the ATR stop must fall in. */
   sc_min_score: number; sc_adr_period: number; sc_adr_max_used: number; sc_fvg_min_atr: number; sc_fvg_max_age: number; sc_ctx_tf: number;
   sc_stop_min_pct: number; sc_stop_max_pct: number;
+  /** Scanner / concurrent positions: the portfolio limits (0 = off where noted) and the quality floor. max_trades_per_day 0 = no count cap. */
+  max_open_positions: number; max_open_risk_pct: number; max_strategy_positions: number; max_strategy_risk_pct: number;
+  scan_min_quality: number; scan_allow_unvalidated: boolean;
 }
+export interface ScanComponent { key: string; label: string; max: number; points: number; available: boolean; note: string }
+export interface ScanEvidence { status: "positive" | "insufficient" | "negative"; label: string; points: number; trades: number | null; oos_net: number | null; note: string }
+export interface ScanOpp {
+  strategy: string; label: string; kind: string; state: string; direction: number; action: string | null;
+  decision: "ENTER" | "REJECTED" | "HOLD" | "OFF" | "CANDIDATE"; reasons: string[]; quality: number | null; components: ScanComponent[]; evidence: ScanEvidence; episode_start: string | null;
+}
+export interface ScanState { bar_close: string; scanned_at: string; min_quality: number; decision: "BUY" | "HOLD"; opportunities: ScanOpp[]; open_positions: number; max_open_positions: number }
+export interface ScanRejected { bar_close: string; strategy: string | null; direction: string; reason: string; quality?: number | null }
+export interface ScanBlock { state: ScanState | null; rejected: ScanRejected[]; candles_scanned: number; open_risk: number; open_positions: number; max_open_positions: number }
 export interface BiasConfig {
   defaults: BiasSettings; running: boolean; settings: BiasSettings | null;
   indicators: { key: string; label: string; weight: number }[]; note: string;
   confluence_factors?: { key: string; label: string; weight: number }[]; adr_periods?: number[];
-  scored_components?: { key: string; label: string; max: number }[]; presets?: { scored?: Partial<BiasSettings> };
+  scored_components?: { key: string; label: string; max: number }[]; presets?: { scored?: Partial<BiasSettings>; scanner?: Partial<BiasSettings> };
+  scanner?: { strategies: { key: string; label: string; kind: string; evidence: ScanEvidence }[]; components: { key: string; label: string; max: number }[]; note: string };
 }
 export interface EngineEvent { ts: string; level: string; message: string }
-export type AutomationPhase = "ready" | "holding" | "exiting" | "waiting" | "paused" | "limit" | "halted";
+export type AutomationPhase = "ready" | "holding" | "exiting" | "waiting" | "paused" | "limit" | "halted" | "scanning";
 /** What the continuous automation is doing right now (from the engine). */
 export interface BiasAutomation {
-  phase: AutomationPhase; label: string; detail: string; paused: boolean; min_confidence: number; strategy?: "bias" | "confluence" | "scored"; profit_target_net: number;
-  target_hits: number; trades_today: number; no_entry_through: string | null;
+  phase: AutomationPhase; label: string; detail: string; paused: boolean; min_confidence: number; strategy?: "bias" | "confluence" | "scored" | "configured" | "scanner"; profit_target_net: number;
+  target_hits: number; trades_today: number; no_entry_through: string | null; open_positions?: number; max_open_positions?: number; trade_cap?: number | null;
 }
 export interface BiasStatus {
   running: boolean; state?: EngineState; halt_reason?: string | null; trade_mode?: "paper" | "replay"; day?: string | null; now?: string;
-  position?: Position | null; realised_today?: number; events?: EngineEvent[]; next_eval?: string | null;
+  position?: Position | null; positions?: Position[]; realised_today?: number; events?: EngineEvent[]; next_eval?: string | null;
   nifty?: { price: number; ts: string } | null; conn_error?: string | null; session_id?: number | null; config?: Record<string, unknown>;
-  bias?: { latest: BiasAnalysis | null; history: BiasHistoryItem[]; trades_today: number; max_trades: number; remaining_trades: number; cooldown_until: string | null; rejected?: RejectedSignal[]; automation?: BiasAutomation } | null;
+  bias?: { latest: BiasAnalysis | null; history: BiasHistoryItem[]; trades_today: number; max_trades: number | null; remaining_trades: number | null; cooldown_until: string | null; rejected?: RejectedSignal[]; automation?: BiasAutomation; scan?: ScanBlock } | null;
 }
 export interface BiasAnalysisResponse {
   as_of_day: string; live: boolean; analysis: BiasAnalysis; futures: boolean; error: string | null;
@@ -625,3 +640,45 @@ export interface DailyRange {
   };
   rules?: { session_minutes?: number; range_pct_of?: string; change_pct_of?: string };
 }
+
+// ---------------------------------------------------------------- position trading (paper only)
+export type PositionDecision = "STRONG BUY CE" | "BUY CE" | "STRONG BUY PE" | "BUY PE" | "HOLD" | "NO TRADE";
+export interface PosComponent { key: string; label: string; max: number; points: number; available: boolean; note: string }
+export interface PosEvidence { status: "positive" | "insufficient" | "negative" | "none"; label: string; note: string }
+export interface PosStrategyRow { key: string; label: string; enabled: boolean; signal: number; age_days: number | null; params: Record<string, number>; evidence: PosEvidence }
+export interface PosEstimate { available: boolean; iv?: number; delta?: number; theta_day?: number; theta_pct_day?: number; note?: string; why?: string }
+export interface PosCandidate { symbol: string; expiry: string; strike: number; typ: "CE" | "PE"; premium: number; volume: number | null; oi: number | null; dte: number; lot_size: number; quality: number; usable: boolean;
+  notes: string[]; reasons_unusable: string[]; estimate: PosEstimate; gap_pct: number | null; spread: { available: boolean; why: string } }
+export interface PosPlan {
+  entry: { premium: number; low: number; high: number; note: string }; stop_premium: number; target1: number; target2: number; trailing: string; invalidation: number | null; invalidation_note: string;
+  hold_days: number; planned_exit: string; expiry: string; time_exit: string; risk_reward: { net_at_target: number; net_at_stop: number; ratio: number | null };
+  lots: number; qty: number; max_loss: number | null; capital_required: number | null; warnings: string[]; backtested_rules: string;
+}
+export interface PosOpportunity {
+  direction: 1 | -1; type: "CE" | "PE"; strategies: string[]; strategy_labels: string[]; score: number; components: PosComponent[]; decision: PositionDecision; why: string;
+  contract: PosCandidate | null; plan: PosPlan | null; evidence: PosEvidence[]; gates: string[];
+}
+export interface PosSide { candle_score: number; contract_quality: number | null; total_without_levels: number; best: { symbol: string; expiry: string; strike: number; premium: number; dte: number; quality: number; notes: string[];
+  estimate: PosEstimate; gap_pct: number | null } | null; alternatives: { expiry: string; strike: number; premium: number; quality: number; usable: boolean; dte: number; reasons_unusable: string[] }[]; explanation: string[] }
+export interface PosContext { available: boolean; why?: string; bias?: string; note?: string; factors?: { key: string; label: string; score: number | null; available: boolean; summary: string }[] }
+export interface PosAnalysis {
+  asof: string; day: string | null; decision: PositionDecision; direction: number; score: number | null; reasons: string[]; note: string; paper_only: boolean; capital?: number;
+  market: { day: string; close: number; regime: { label: string; why: string }; timeframes: { weekly: string; daily: string; h4: string; h1: string }; values: Record<string, number | null> } | null;
+  strategies: PosStrategyRow[]; opportunities: PosOpportunity[]; comparison?: { CE: PosSide; PE: PosSide }; context?: PosContext; settings_version?: number; settings_error?: string | null;
+}
+export interface PosRisk { risk_pct: number; max_open_positions: number; max_portfolio_risk_pct: number; max_lots: number; hold_days: number; min_score: number }
+export interface PosSettings { strategies: Record<string, { enabled: boolean; params: Record<string, number> }>; risk: PosRisk; auto_enter: boolean }
+export interface PosConfig { settings: { version: number; config: PosSettings; error: string | null }; strategies: { key: string; label: string; params: Record<string, number>; doc: string }[];
+  risk_schema: Record<string, { type: string; min: number; max: number; default: number; label: string }>; note: string }
+export interface PosState { account_id: number; starting_capital: number; balance: number; invested: number; available: number; realised: number; open_pnl: number; equity: number; open_positions: number;
+  open_risk: number; open_risk_pct: number | null; exposure_pct: number | null; closed_trades: number; max_drawdown: number }
+export interface PosStats { trades: number; win_rate: number | null; net: number; gross: number; costs: number; expectancy: number | null; profit_factor: number | null; max_drawdown: number; avg_days: number | null }
+export interface PosPosition { id: number; strategy: string; direction: string; opt_type: string; strike: number; expiry: string; trading_symbol: string; lots: number; qty: number; decision_day: string; score: number | null;
+  entry_ts: string; entry_price: number; stop_premium: number; target1: number; target2: number | null; planned_exit: string | null; forced_exit: string | null; status: "OPEN" | "CLOSED"; last_price: number | null;
+  mtm?: number; exit_ts: string | null; exit_price: number | null; exit_reason: string | null; net: number | null; t1_hit: boolean; risk: { max_loss?: number; fill_basis?: string } | null }
+export interface PosDecisionRow { day: string; decided_at: string; decision: PositionDecision; direction: number; score: number | null; strategies: string[]; reasons: string[] }
+export interface PosCell extends PosStats { strategy: string; hold: number; periods: Record<"train" | "validation" | "out_of_sample", PosStats>; robust: boolean; by_year: Record<string, number>;
+  by_month: Record<string, number>; exit_reasons: Record<string, number>; unsimulatable: Record<string, number>; unsimulatable_n: number }
+export interface PosBacktest { cells: PosCell[]; pooled_by_hold: Record<string, PosStats>; meta: { generated_at: string; data_from: string; data_to: string; signals: number; stop_pct: number; target_pct: number; holds: number[];
+  periods: Record<string, string[]> }; evidence: Record<string, { status: string; trades: number; oos_trades: number; oos_net: number; note: string }> }
+export interface PosChart { tf: string; bars: { t: string; o: number; h: number; l: number; c: number; e20: number | null; e50: number | null; e100: number | null; e200: number | null }[] }

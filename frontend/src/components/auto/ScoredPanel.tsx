@@ -33,7 +33,7 @@ export function ScoredPanel({ a, s, set, running, onApply, busy, msg, periods = 
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 dark:text-slate-300">
           <Button disabled={!preset} onClick={() => preset && set(preset)}>Use the specified risk preset</Button>
-          <span>0.5% of capital per trade · ATR stop · 2R target · 1.5% daily loss limit · at most 5 trades · one position · {s.timeframe}m entries confirmed by the {s.bias_confirm_tf}m trend (change them under Settings). Currently: risk {s.risk_pct}%, target {s.target_rr}R, daily loss {s.daily_risk_pct}%, {s.max_trades_per_day} trades.</span>
+          <span>0.5% of capital per trade · ATR stop · 2R target · no daily loss limit · at most 5 trades · one position · {s.timeframe}m entries confirmed by the {s.bias_confirm_tf}m trend (change them under Settings). Currently: risk {s.risk_pct}%, target {s.target_rr}R, daily loss {s.daily_risk_pct}%, {s.max_trades_per_day} trades.</span>
         </div>
 
         {!c ? (

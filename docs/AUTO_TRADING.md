@@ -43,6 +43,9 @@ All of these on a closed candle, otherwise nothing happens (the daily limit is a
 ## Managing the position
 Stop-loss and target (target = `target_rr` x the stop distance, default 2), optional **trailing stop** (`trail_pct` from the best premium once the premium is `trail_activate_pct` in profit; it only ever tightens), **time exit** (`bias_max_hold_min`), **opposite-signal exit**, 15:00 square-off, daily loss limit, brokerage, taxes, STT, stamp duty, GST and slippage (`trading/charges.py`), gross and net P&L. Paper positions can be closed by hand, and the stop and target changed (stop changes are refused beyond the trade's risk amount; the target must stay on the profit side of the premium). Every stop change, trailing moves included, is recorded in `paper_stop_changes`.
 
+## Update (25 Nov 2026): no fixed profit target by default
+The Automated Paper Trading page no longer offers the net profit target and `GET /api/bias/config` now defaults `profit_target_net` to **0 (off)**. A trade is bought and sold by the strategy: it exits on the stop-loss, the risk-reward target (`target_rr`), the trailing stop if set, the analysis turning the other way, the holding-time limit, the daily loss limit or the 15:00 square-off. The engine still understands `profit_target_net` if an API caller sends it (the section below describes it); an old target saved in the browser is ignored. Entry and exit rules were not otherwise changed.
+
 ## Continuous automation: 70% bias, ₹1,500 net profit per trade (20 Nov 2026)
 Added to the same engine (no second engine). Paper and replay only; `trade_mode=live` is still refused. The page defaults are a **Market Bias threshold of 70%** and a **net profit target of ₹1,500 per trade** (`bias_min_confidence`, `profit_target_net`; the engine's own defaults stay 55 and 0 = off, only the Automated Paper Trading page and `GET /api/bias/config` carry 70 and 1,500).
 

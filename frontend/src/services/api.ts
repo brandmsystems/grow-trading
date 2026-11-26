@@ -3,7 +3,7 @@ import type {
   ApiErr, BiasAccuracy, BiasAnalysisResponse, BiasConfig, BiasPrediction, BiasSettings, BiasStatus, BiasSummary, BiasTrade,
   BiasTradeDetail, BtChart, DailyRange, BtMeta, BtParams, BtResult, Dashboard, DataOverview, EngineConfig, Envelope, Job,
   LiveTrade, LotSize, OptionChain, OptionsCoverage, PaperAccount, Research, RiskCalc, ScalpConfig, ScalpPaperTrade, ScalpRun,
-  ScalpTrade, SignalAnalysis, StopChange, PmHistory, PmInput, PmNewsFeed, PmReport, PmReportResponse, TsCheck, TsConfig, TsState,
+  ScalpTrade, SignalAnalysis, StopChange, PosAnalysis, PosBacktest, PosChart, PosConfig, PosDecisionRow, PosPosition, PosSettings, PosState, PosStats, PmHistory, PmInput, PmNewsFeed, PmReport, PmReportResponse, TsCheck, TsConfig, TsState,
 } from "../types/api";
 
 export class ApiError extends Error {
@@ -149,3 +149,17 @@ export const refreshPremarket = () => api<{ report: PmReport }>("/api/premarket/
 export const addPremarketInput = (body: PmInput) => api<{ report: PmReport }>("/api/premarket/input", { json: body });
 export const getPremarketNews = (refresh = false) => api<PmNewsFeed>(`/api/premarket/news?${qs({ refresh: refresh ? 1 : undefined })}`);
 export const getPremarketHistory = () => api<PmHistory>("/api/premarket/history");
+
+// ---------------------------------------------------------------- position trading (paper only)
+export const getPositionAnalysis = (refresh = false) => api<PosAnalysis>(`/api/position/analysis${refresh ? "?refresh=1" : ""}`);
+export const getPositionConfig = () => api<PosConfig>("/api/position/config");
+export const savePositionSettings = (config: PosSettings) => api<{ version: number }>("/api/position/settings", { method: "PUT", json: { config } });
+export const getPositionAccount = () => api<{ state: PosState; summary: { overall: PosStats; by_strategy: Record<string, PosStats> } }>("/api/position/account");
+export const resetPositionAccount = (capital: number) => api<unknown>("/api/position/account/reset", { json: { capital } });
+export const getPositions = () => api<PosPosition[]>("/api/position/positions");
+export const openPosition = (direction: 1 | -1) => api<{ id: number; entry_price: number; lots: number; qty: number; max_loss: number; fill_basis: string }>("/api/position/open", { json: { direction } });
+export const managePositions = () => api<{ id: number; reason?: string; note?: string }[]>("/api/position/manage", { json: {} });
+export const getPositionDecisions = () => api<PosDecisionRow[]>("/api/position/decisions");
+export const recordPositionDecision = () => api<{ recorded: boolean }>("/api/position/decide", { json: {} });
+export const getPositionBacktest = () => api<PosBacktest>("/api/position/backtest");
+export const getPositionChart = (tf: string) => api<PosChart>(`/api/position/chart?tf=${tf}`);

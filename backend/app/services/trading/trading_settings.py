@@ -104,22 +104,29 @@ def defaults() -> dict:
         "strategies": {k: {"enabled": k in DEFAULT_ON, "params": {p["key"]: p["default"] for p in v["params"]}} for k, v in STRATEGIES.items()},
         "timeframes": {"enabled": {"1": False, "5": True, "15": True, "30": True}, "entry": 5, "trend": 15, "exit": "entry", "trend_filter": True},
         "indicators": {k: {"enabled": True, "params": {p["key"]: p["default"] for p in v["params"]}} for k, v in INDICATORS.items()},
-        "rules": {"min_score": 0.0, "max_trades_per_day": 6, "max_open_positions": 1, "stop_mode": "atr", "stop_atr": 1.0, "stop_pct": 30.0, "stop_points": 20.0,
+        "rules": {"min_score": 0.0, "max_trades_per_day": 6, "max_open_positions": 1, "max_open_risk_pct": 3.0, "max_strategy_positions": 1,
+                  "max_strategy_risk_pct": 1.5, "scan_min_quality": 55.0, "scan_allow_unvalidated": False, "stop_mode": "atr", "stop_atr": 1.0, "stop_pct": 30.0, "stop_points": 20.0,
                   "target_rr": 2.0, "profit_target_net": 0.0, "risk_pct": 1.0, "trail_pct": 0.0, "trail_activate_pct": 10.0, "start": "09:30", "end": "14:30",
-                  "reentry_enabled": True, "cooldown_bars": 2, "daily_loss_pct": 3.0, "daily_loss_rupees": 5000.0},
+                  "reentry_enabled": True, "cooldown_bars": 2, "daily_loss_pct": 0.0, "daily_loss_rupees": 0.0},
     }
 
 
 RULE_SCHEMA = [
     _p("min_score", "Minimum confidence / signal score (floor, 0 = each strategy's own)", "float", 0, 100, 0.0),
-    _p("max_trades_per_day", "Maximum trades a day", "int", 1, 200, 6), _p("max_open_positions", "Maximum open positions (this engine holds one)", "int", 1, 1, 1),
+    _p("max_trades_per_day", "Maximum trades a day (0 = no count cap: the risk limits still apply)", "int", 0, 1000, 6),
+    _p("max_open_positions", "Maximum concurrent positions (several only for the scanner)", "int", 1, 20, 1),
+    _p("max_open_risk_pct", "Maximum total open risk (% of virtual capital, 0 = off)", "float", 0.0, 100.0, 3.0),
+    _p("max_strategy_positions", "Maximum concurrent positions per strategy", "int", 1, 20, 1),
+    _p("max_strategy_risk_pct", "Maximum open risk per strategy (% of virtual capital, 0 = off)", "float", 0.0, 100.0, 1.5),
+    _p("scan_min_quality", "Scanner: minimum quality score (of 100)", "float", 0.0, 100.0, 55.0),
+    _p("scan_allow_unvalidated", "Scanner: also trade strategies without a validated positive result (research use)", "bool", 0, 1, False),
     _p("stop_mode", "Stop-loss method", "choice", 0, 0, "atr", ["atr", "pct", "points"]), _p("stop_atr", "Stop: delta × ATR multiple", "float", 0.1, 10.0, 1.0),
     _p("stop_pct", "Stop: % of premium", "float", 1.0, 99.0, 30.0), _p("stop_points", "Stop: premium points", "float", 0.5, 10000.0, 20.0),
     _p("target_rr", "Target (× the stop distance)", "float", 0.1, 20.0, 2.0), _p("profit_target_net", "Net profit target per trade (₹, 0 = off)", "float", 0.0, 1e7, 0.0),
     _p("risk_pct", "Risk per trade (% of virtual capital)", "float", 0.05, 100.0, 1.0), _p("trail_pct", "Trailing stop (% from the best premium, 0 = off)", "float", 0.0, 99.0, 0.0),
     _p("trail_activate_pct", "Trail starts after (% in profit)", "float", 0.0, 1000.0, 10.0), _p("start", "Trading starts", "time", 0, 0, "09:30"), _p("end", "Trading ends", "time", 0, 0, "14:30"),
     _p("reentry_enabled", "Allow re-entry after an exit (off = one trade a day)", "bool", 0, 1, True), _p("cooldown_bars", "Cool-down after an exit (candles)", "int", 0, 20, 2),
-    _p("daily_loss_pct", "Daily loss limit (% of the day's starting capital, 0 = off)", "float", 0.0, 100.0, 3.0), _p("daily_loss_rupees", "Daily loss limit (₹, 0 = off)", "float", 0.0, 1e9, 5000.0),
+    _p("daily_loss_pct", "Daily loss limit (% of the day's starting capital, 0 = off)", "float", 0.0, 100.0, 0.0), _p("daily_loss_rupees", "Daily loss limit (₹, 0 = off)", "float", 0.0, 1e9, 0.0),
 ]
 
 
@@ -421,6 +428,8 @@ class Resolved:
         return {
             "timeframe": self.entry_tf, "bias_confirm_tf": self.trend_tf, "entry_start": rl["start"], "cutoff": rl["end"],
             "max_trades_per_day": 1 if not rl["reentry_enabled"] else rl["max_trades_per_day"], "max_open_positions": rl["max_open_positions"],
+            "max_open_risk_pct": rl["max_open_risk_pct"], "max_strategy_positions": rl["max_strategy_positions"], "max_strategy_risk_pct": rl["max_strategy_risk_pct"],
+            "scan_min_quality": rl["scan_min_quality"], "scan_allow_unvalidated": rl["scan_allow_unvalidated"],
             "risk_pct": rl["risk_pct"], "stop_mode": rl["stop_mode"], "stop_atr": rl["stop_atr"], "stop_pct": rl["stop_pct"], "stop_points": rl["stop_points"],
             "target_rr": rl["target_rr"], "profit_target_net": rl["profit_target_net"], "trail_pct": rl["trail_pct"], "trail_activate_pct": rl["trail_activate_pct"],
             "bias_cooldown_bars": rl["cooldown_bars"], "daily_risk_pct": rl["daily_loss_pct"], "max_daily_loss": rl["daily_loss_rupees"],

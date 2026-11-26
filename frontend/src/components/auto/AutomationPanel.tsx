@@ -5,7 +5,7 @@ import { Card, Pill, Stat, type Tone } from "../common/Card";
 import { Button } from "../common/Controls";
 import { Num } from "./AutoSettings";
 
-const TONE: Record<AutomationPhase, Tone> = { ready: "good", holding: "info", exiting: "warn", waiting: "neutral", paused: "warn", limit: "warn", halted: "bad" };
+const TONE: Record<AutomationPhase, Tone> = { ready: "good", holding: "info", exiting: "warn", waiting: "neutral", paused: "warn", limit: "warn", halted: "bad", scanning: "info" };
 const EXIT: Record<string, string> = {
   profit_target: "net profit target", stop_loss: "stop-loss", target: "risk-reward target", opposite_signal: "analysis turned the other way",
   time_exit: "holding-time limit", square_off: "15:00 square-off", daily_loss_limit: "daily loss limit", manual_stop: "engine stopped", manual_square_off: "closed manually",
@@ -48,12 +48,11 @@ export function AutomationPanel({ a, bias, s, set, running, onApply, busy, summa
         <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-4">
           {cf ? <Num label="Confirmation score threshold" unit="%" k="cf_min_score" s={s} set={set} step={5} max={100} />
             : <Num label="Market Bias threshold" unit="%" k="bias_min_confidence" s={s} set={set} step={1} max={100} />}
-          <Num label="Net profit target per trade" unit="₹, 0 = off" k="profit_target_net" s={s} set={set} step={100} />
-          <Button variant="primary" onClick={onApply} disabled={busy}>{running ? "Apply threshold & target" : "Save threshold & target"}</Button>
+          <Button variant="primary" onClick={onApply} disabled={busy}>{running ? "Apply threshold" : "Save threshold"}</Button>
           {msg && <span role="status" data-testid="automation-msg" className={`text-xs ${msg.ok ? "text-gain" : "text-red-600"}`}>{msg.text}</span>}
         </div>
         <p className="text-xs text-slate-500">
-          The ₹{s.profit_target_net.toLocaleString("en-IN")} target is per trade, after brokerage, taxes and slippage; it is not a daily target. The stop-loss, the daily loss limit, position sizing and the 15:00 square-off stay in force.
+          There is no fixed profit target: each trade is bought and sold by the strategy, so it exits on the stop-loss, the risk-reward target, the analysis turning the other way or the 15:00 square-off. The daily loss limit and position sizing stay in force.
           After any exit the next entry waits for a candle that opened after it. Agreement between indicators is not a probability of winning.
         </p>
 

@@ -93,7 +93,7 @@ def test_live_real_money_is_refused_for_bias_mode():
 def test_validation_messages():
     for over, msg in (({"bias_allow": []}, "choose at least one"), ({"bias_allow": ["BUY_XX"]}, "choose at least one"),
                       ({"bias_indicators": ["nope"]}, "at least one indicator"), ({"bias_min_confidence": 150}, "between"),
-                      ({"max_trades_per_day": 0}, "at least 1"), ({"trail_pct": 120}, "between"),
+                      ({"max_trades_per_day": -1}, "can.t be negative"), ({"trail_pct": 120}, "between"),
                       ({"timeframe": 30}, "must be 5 or 15"), ({"timeframe": 15, "bias_confirm_tf": 15}, "longer than the analysis"),
                       ({"bias_confirm_tf": 20}, "15, 30 or 60"), ({"timeframe": 15, "bias_confirm_tf": 45}, "15, 30 or 60")):
         with pytest.raises(ValueError, match=msg):
@@ -461,16 +461,13 @@ def test_profit_target_setting_validates_and_changes_without_restart():
     assert eng.cfg.profit_target_net == 1500
 
 
-def test_daily_loss_limit_stops_new_entries():
-    e, m = bare_engine({"max_daily_loss": 100, "profit_target_net": 1500})
+def test_bias_engine_has_no_daily_loss_halt():
+    e, m = bare_engine({"max_daily_loss": 100, "daily_risk_pct": 3, "profit_target_net": 1500})
+    assert e.cfg.max_daily_loss == 0 and e.cfg.daily_risk_pct == 0     # forced off in bias mode, whatever was asked
     e.position = None
     e.realised_today = -200.0
     e._risk_check(m.now())
-    assert e.state == "halted" and "loss limit" in e.halt_reason
-    leg = _st.Leg(day=m.t.date(), direction=1, entry_ts=m.t, signal_close=25000.0, signal_bar_start=m.t, ordinal=1)
-    e._try_entry(m.t, leg)
-    assert e.position is None and any("engine halted" in x["message"] for x in e.events)
-    assert q("SELECT count(*) AS n FROM live_trades WHERE status='OPEN'")[0]["n"] == 1      # only the fixture's own row
+    assert e.state != "halted" and not e.halt_reason
 
 
 def test_restart_recovery_keeps_the_target_the_exit_candle_and_the_release():
@@ -552,7 +549,7 @@ CF = {"entry_strategy": "confluence", "cf_min_score": 40, "cf_htf": False}
 
 
 def test_confluence_settings_validate_and_live_trading_stays_refused():
-    for over, msg in (({"entry_strategy": "magic"}, "bias, confluence, scored or configured"), ({"cf_factors": ["nope"], "entry_strategy": "confluence"}, "at least one confluence factor"),
+    for over, msg in (({"entry_strategy": "magic"}, "bias, confluence, scored, configured or scanner"), ({"cf_factors": ["nope"], "entry_strategy": "confluence"}, "at least one confluence factor"),
                       ({"cf_adr_period": 7}, "5, 10 or 20"), ({"cf_min_score": 120}, "between"), ({"cf_adr_max_used": 0}, "between"),
                       ({"cf_fvg_max_age": 0}, "1 to 200"), ({"cf_fvg_min_atr": -1}, "between")):
         with pytest.raises(ValueError, match=msg):
@@ -623,7 +620,7 @@ SC = {"entry_strategy": "scored", "sc_min_score": 30}
 
 
 def test_scored_settings_validate_and_live_trading_stays_refused():
-    for over, msg in (({"entry_strategy": "magic"}, "bias, confluence, scored or configured"), ({"sc_adr_period": 7}, "5, 10 or 20"), ({"sc_min_score": 120}, "between"),
+    for over, msg in (({"entry_strategy": "magic"}, "bias, confluence, scored, configured or scanner"), ({"sc_adr_period": 7}, "5, 10 or 20"), ({"sc_min_score": 120}, "between"),
                       ({"sc_ctx_tf": 45}, "0 \\(off\\), 30 or 60"), ({"sc_fvg_max_age": 0}, "1 to 200"), ({"sc_stop_min_pct": 60, "sc_stop_max_pct": 50}, "below the largest"),
                       ({"sc_stop_max_pct": 0}, "between"), ({"sc_adr_max_used": 5}, "between")):
         with pytest.raises(ValueError, match=msg):

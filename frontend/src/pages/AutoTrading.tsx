@@ -20,6 +20,7 @@ import { AutoSettings } from "../components/auto/AutoSettings";
 import { AutomationPanel } from "../components/auto/AutomationPanel";
 import { ConfluencePanel } from "../components/auto/ConfluencePanel";
 import { ScoredPanel } from "../components/auto/ScoredPanel";
+import { ScannerPanel } from "../components/auto/ScannerPanel";
 
 const STORE = "gt.auto.settings";
 /** The confluence settings an older server does not send yet: the page still works (bias strategy) instead of failing on a missing list. */
@@ -27,6 +28,7 @@ const CF_FALLBACK: Partial<BiasSettings> = {
   entry_strategy: "bias", cf_factors: ["ema", "vwap", "fvg", "structure"], cf_require: [], cf_min_score: 75, cf_adr_filter: true, cf_adr_period: 10,
   cf_adr_max_used: 100, cf_fvg_min_atr: 0.1, cf_fvg_max_age: 24, cf_htf: true,
   sc_min_score: 80, sc_adr_period: 10, sc_adr_max_used: 100, sc_fvg_min_atr: 0.1, sc_fvg_max_age: 24, sc_ctx_tf: 0, sc_stop_min_pct: 5, sc_stop_max_pct: 50,
+  max_open_positions: 1, max_open_risk_pct: 0, max_strategy_positions: 1, max_strategy_risk_pct: 0, scan_min_quality: 55, scan_allow_unvalidated: false,
 };
 /** What the analysis preview depends on (the scored settings and timeframes only count while that strategy is selected). */
 const cfOf = (x: Partial<BiasSettings>) => JSON.stringify([x.cf_factors, x.cf_require, x.cf_min_score, x.cf_adr_filter, x.cf_adr_period, x.cf_adr_max_used, x.cf_fvg_min_atr, x.cf_fvg_max_age, x.cf_htf,
@@ -39,6 +41,7 @@ function saved(): Partial<BiasSettings> {
     const v = JSON.parse(localStorage.getItem(STORE) ?? "{}") as Partial<BiasSettings>;
     // settings saved before the continuous automation existed: take the new 70% default instead of the old 55%
     if (!("profit_target_net" in v)) delete v.bias_min_confidence;
+    v.profit_target_net = 0;           // the fixed net profit target is no longer offered: exits follow the strategy
     return v;
   } catch { return {}; }
 }
@@ -65,9 +68,10 @@ function GroupTable({ title, rows }: { title: string; rows: Record<string, BiasG
 }
 
 const STRATEGY_LABEL: Record<string, string> = { bias: "Bias votes", confluence: "Confluence", scored: "Scored (structure + EMA + VWAP + FVG + ADR)" };
+const strategyName = (k: string, labels?: Record<string, string>) => labels?.[k] ?? STRATEGY_LABEL[k] ?? k;
 
 /** Performance of each entry strategy on its own trades: sample size, win rate, net expectancy per trade, profit factor, drawdown. */
-function StrategyTable({ rows }: { rows: Record<string, StrategyStats> }) {
+function StrategyTable({ rows, labels }: { rows: Record<string, StrategyStats>; labels?: Record<string, string> }) {
   const e = Object.entries(rows);
   if (!e.length) return null;
   return (
@@ -78,7 +82,7 @@ function StrategyTable({ rows }: { rows: Record<string, StrategyStats> }) {
           <tbody>
             {e.map(([k, g]) => (
               <tr key={k} className="border-t border-slate-100 dark:border-slate-800" data-testid={`strategy-${k}`}>
-                <td className="py-1">{STRATEGY_LABEL[k] ?? k}</td><td className="num text-right">{g.trades}</td>
+                <td className="py-1">{strategyName(k, labels)}</td><td className="num text-right">{g.trades}</td>
                 <td className="num text-right">{g.win_rate != null ? pct(g.win_rate, 0) : "—"}</td>
                 <td className={`num text-right ${pnlClass(g.expectancy)}`}>{g.expectancy != null ? inr(g.expectancy, true, 0) : "—"}</td>
                 <td className="num text-right">{g.profit_factor != null ? g.profit_factor.toFixed(2) : "—"}</td>
@@ -109,7 +113,7 @@ export default function AutoTrading() {
 
   const [s, setS] = useState<BiasSettings | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [msgFrom, setMsgFrom] = useState<"panel" | "settings" | "confluence" | "scored">("settings");   // the message shows beside the Apply button that was pressed
+  const [msgFrom, setMsgFrom] = useState<"panel" | "settings" | "confluence" | "scored" | "scanner">("settings");   // the message shows beside the Apply button that was pressed
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [replayDay, setReplayDay] = useState("");
@@ -137,16 +141,16 @@ export default function AutoTrading() {
   const latest = running ? st?.bias?.latest ?? null : idle.data?.analysis ?? null;
   const counters = useMemo(() => {
     const b = st?.bias;
-    const max = b?.max_trades ?? s?.max_trades_per_day ?? 20;
+    const max = b ? b.max_trades : s?.max_trades_per_day || null;          // null / 0 = no count cap
     const used = b?.trades_today ?? summary.data?.trades ?? 0;
-    return { used, max, left: b?.remaining_trades ?? Math.max(0, max - used) };
+    return { used, max, left: max ? b?.remaining_trades ?? Math.max(0, max - used) : null };
   }, [st, s, summary.data]);
 
   async function act(fn: () => Promise<unknown>) {
     setBusy(true); setErr(null);
     try { await fn(); await Promise.all([status.reload(), trades.reload(), summary.reload(), preds.reload()]); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
-  async function apply(from: "panel" | "settings" | "confluence" | "scored" = "settings") {
+  async function apply(from: "panel" | "settings" | "confluence" | "scored" | "scanner" = "settings") {
     if (!s) return;
     setMsgFrom(from);
     try { localStorage.setItem(STORE, JSON.stringify(s)); } catch { /* private window */ }
@@ -210,6 +214,11 @@ export default function AutoTrading() {
           msg={msgFrom === "scored" ? msg : null} periods={base?.adr_periods} preset={base?.presets?.scored} rejected={st?.bias?.rejected} />
       )}
 
+      {s && (s.entry_strategy === "scanner" || engineStrategy === "scanner") && (
+        <ScannerPanel scan={st?.bias?.scan} positions={st?.positions ?? []} s={s} set={set} cfg={base?.scanner} running={running} onApply={() => void apply("scanner")} busy={busy}
+          msg={msgFrom === "scanner" ? msg : null} tradesToday={counters.used} cap={counters.max} preset={base?.presets?.scanner} />
+      )}
+
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           {!running && idle.loading && !latest && <Card><Loading text="Reading candles…" /></Card>}
@@ -219,7 +228,7 @@ export default function AutoTrading() {
         <div className="space-y-4">
           <Card title="Today" bodyClass="px-4 pb-4">
             <div className="grid grid-cols-2 gap-3">
-              <Stat label="Trades today" value={`${counters.used} of ${counters.max}`} sub={`${counters.left} remaining · never forced`} />
+              <Stat label="Trades today" value={counters.max ? `${counters.used} of ${counters.max}` : `${counters.used}`} sub={counters.max ? `${counters.left} remaining · never forced` : "no count cap · risk limits apply · never forced"} />
               <Stat label="Net P&L" value={sm ? inr(sm.net, true) : "—"} className={pnlClass(sm?.net)} sub={sm ? `gross ${inr(sm.gross, true, 0)}` : undefined} />
               <Stat label="Wins / losses" value={sm ? `${sm.wins} / ${sm.losses}` : "—"} />
               <Stat label="Win rate" value={sm?.win_rate != null ? pct(sm.win_rate, 0) : "—"} sub={sm && sm.open ? `${sm.open} open` : undefined} />
@@ -245,7 +254,7 @@ export default function AutoTrading() {
               <GroupTable title="By exit reason" rows={sm.by_exit} />
               <GroupTable title="By confidence at entry" rows={sm.by_confidence} />
               <GroupTable title="By supporting strategy" rows={sm.by_indicator} />
-              {sm.by_strategy && <StrategyTable rows={sm.by_strategy} />}
+              {sm.by_strategy && <StrategyTable rows={sm.by_strategy} labels={Object.fromEntries((base?.scanner?.strategies ?? []).map((x) => [x.key, x.label]))} />}
             </div>
           )}
           {sm && <div className="mt-3"><Limitation>{sm.note}</Limitation></div>}

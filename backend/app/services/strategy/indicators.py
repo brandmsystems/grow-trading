@@ -187,3 +187,17 @@ def swing_structure(bars: pd.DataFrame, k: int = 3, decay: int = 6) -> pd.DataFr
     b = pd.Series(bos, index=bars.index)
     recent = b.where(b != 0).ffill(limit=decay - 1).fillna(0).astype(int)
     return pd.DataFrame({"swing_hi": sh, "swing_lo": sl, "struct": st_, "bos": b, "bos_recent": recent}, index=bars.index)
+
+
+def adx(bars: pd.DataFrame, n: int = 14) -> pd.DataFrame:
+    """Wilder's ADX with +DI / -DI (columns plus_di, minus_di, adx). Value at bar i uses bars <= i only."""
+    up, down = bars["high"].diff(), -bars["low"].diff()
+    plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=bars.index)
+    minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=bars.index)
+    prev = bars["close"].shift(1)
+    tr = pd.concat([bars["high"] - bars["low"], (bars["high"] - prev).abs(), (bars["low"] - prev).abs()], axis=1).max(axis=1)
+    atr_ = wilder(tr, n)
+    pdi = 100 * wilder(plus_dm, n) / atr_
+    mdi = 100 * wilder(minus_dm, n) / atr_
+    dx = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
+    return pd.DataFrame({"plus_di": pdi, "minus_di": mdi, "adx": wilder(dx.dropna(), n).reindex(bars.index)})

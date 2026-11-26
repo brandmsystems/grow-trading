@@ -7,6 +7,7 @@ import {
   makeBars, makeBtResult, makeScalpConfig, makeAccount, makeBtMeta, makeDailyRange, makeDashboard, makeDataOverview, makeJob, makeLotSizes, makeOptionChain, makeOptionsCoverage, makeResearch, makeRisk,
   makeScalpRun, makeSignalAnalysis, makeBiasAccuracy, makeBiasAnalysis, makeBiasConfig, makeBiasSummary, makeBiasTradeDetail, makePmFeed, makePmHistory, makePmReport, makeTsState, makeTsSummary,
 } from "./fixtures";
+import { makePosAnalysis, makePosBacktest, makePosChart, makePosConfig, makePosState, posStats } from "./positionFixtures";
 
 export interface ApiRequest { method: string; path: string; query: URLSearchParams; body: Record<string, unknown> | undefined }
 /** A value, or a function of the request (may return a Promise, e.g. one that never settles to test loading states). */
@@ -62,6 +63,18 @@ export function defaultRoutes(): Route[] {
     r("GET", "/api/signals", () => ok(makeSignalAnalysis())),
     r("GET", "/api/scalping/paper/trades", () => []),
     r("GET", "/api/scalping", () => ok(makeScalpRun())),
+    r("GET", "/api/position/analysis", () => makePosAnalysis()),
+    r("GET", "/api/position/config", () => makePosConfig()),
+    r("PUT", "/api/position/settings", () => ({ version: 1 })),
+    r("GET", "/api/position/account", () => ({ state: makePosState(), summary: { overall: posStats(), by_strategy: {} } })),
+    r("POST", "/api/position/account/reset", () => ({ id: 2 })),
+    r("GET", "/api/position/positions", () => []),
+    r("POST", "/api/position/open", () => ({ id: 1, entry_price: 312.5, lots: 2, qty: 130, max_loss: 14800, fill_basis: "last traded premium of the decision day" })),
+    r("POST", "/api/position/manage", () => []),
+    r("GET", "/api/position/decisions", () => []),
+    r("POST", "/api/position/decide", () => ({ recorded: true })),
+    r("GET", "/api/position/backtest", () => makePosBacktest()),
+    r("GET", "/api/position/chart", () => makePosChart()),
     r("GET", "/api/trading-settings", () => makeTsState()),
     r("PUT", "/api/trading-settings", (req: ApiRequest) => makeTsState({ version: 4, saved_at: "2026-11-21T11:00:00", config: (req.body as { config: never }).config })),
     r("POST", "/api/trading-settings/validate", (req: ApiRequest) => ({ valid: true, errors: [], warnings: [], config: (req.body as { config: never }).config, summary: makeTsSummary((req.body as { config: never }).config) })),

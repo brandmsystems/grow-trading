@@ -283,6 +283,7 @@ export const makeBiasConfig = (o?: DeepPartial<BiasConfig>): BiasConfig => merge
     entry_strategy: "bias", cf_factors: ["ema", "vwap", "fvg", "structure"], cf_require: [], cf_min_score: 75, cf_adr_filter: true, cf_adr_period: 10,
     cf_adr_max_used: 100, cf_fvg_min_atr: 0.1, cf_fvg_max_age: 24, cf_htf: true,
     sc_min_score: 80, sc_adr_period: 10, sc_adr_max_used: 100, sc_fvg_min_atr: 0.1, sc_fvg_max_age: 24, sc_ctx_tf: 0, sc_stop_min_pct: 5, sc_stop_max_pct: 50,
+    max_open_positions: 1, max_open_risk_pct: 0, max_strategy_positions: 1, max_strategy_risk_pct: 0, scan_min_quality: 55, scan_allow_unvalidated: false,
   },
   presets: { scored: { timeframe: 5, bias_confirm_tf: 15, risk_pct: 0.5, target_rr: 2, stop_mode: "atr", stop_atr: 1, daily_risk_pct: 1.5, max_trades_per_day: 5, profit_target_net: 0, sc_min_score: 80 } },
   scored_components: [{ key: "trend", label: "Market trend", max: 25 }, { key: "ema", label: "EMA 20/50/200", max: 15 }, { key: "vwap", label: "VWAP", max: 20 }, { key: "fvg", label: "Unmitigated FVG retest", max: 20 },

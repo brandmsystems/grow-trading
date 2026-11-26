@@ -36,7 +36,8 @@ export function ConfluencePanel({ a, s, set, running, onApply, busy, msg, period
       <select className={inputCls} value={s.entry_strategy} aria-label="Entry strategy" onChange={(e) => set({ entry_strategy: e.target.value as BiasSettings["entry_strategy"] })}>
         <option value="bias">Bias votes (12 indicators)</option><option value="confluence">Confluence: FVG + VWAP + ADR + EMA + structure</option>
         <option value="scored">Scored: structure + EMA + VWAP + FVG + ADR (points)</option>
-        <option value="configured">Configured: the strategies that are ON in Trading Settings</option></select></Field>
+        <option value="configured">Configured: the strategies that are ON in Trading Settings</option>
+        <option value="scanner">Scanner: every strategy that is ON, several positions, quality score</option></select></Field>
   );
   if (s.entry_strategy === "configured") {
     return (
@@ -46,6 +47,13 @@ export function ConfluencePanel({ a, s, set, running, onApply, busy, msg, period
           Signals come from every strategy that is ON in <Link to="/trading-settings" className="text-blue-700 underline dark:text-blue-400">Trading Settings</Link>; the timeframes, indicators,
           risk, stop, target, trading window and daily limits are read from there on every tick, so a change applies to the next candle without a restart. The per-strategy fields on this page
           do not apply in this mode.</p>
+      </Card>
+    );
+  }
+  if (s.entry_strategy === "scanner") {
+    return (
+      <Card title="Entry strategy" icon={<Layers size={16} className="text-violet-600" />} accent="strat" right="the scanner is selected: its panel is below">
+        <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-4">{strategySelect}</div>
       </Card>
     );
   }

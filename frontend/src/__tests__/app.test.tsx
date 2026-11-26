@@ -10,6 +10,7 @@ const PAGES: { path: string; label: string; marker: RegExp | string; role?: "hea
   { path: "/", label: "Overview", marker: "Recent notifications" },
   { path: "/live", label: "Live Trading", marker: "Trading Controls" },
   { path: "/auto", label: "Automated Paper Trading", marker: "Predictions vs actual" },
+  { path: "/position", label: "Position Trading", marker: "Refresh analysis" },
   { path: "/premarket", label: "Pre-Market Analysis", marker: "Final conclusion" },
   { path: "/signals", label: "Trading Signals", marker: "Latest live signal" },
   { path: "/options", label: "Options Analysis", marker: "Selected contract" },
@@ -19,6 +20,7 @@ const PAGES: { path: string; label: string; marker: RegExp | string; role?: "hea
   { path: "/data", label: "Market Data", marker: "Coverage by month" },
   { path: "/history", label: "Historical Charts", marker: "Range high" },
   { path: "/range", label: "Daily Range", marker: "Range analysis" },
+  { path: "/learn", label: "Options Trading Learning Centre", marker: "Start learning" },
   { path: "/trading-settings", label: "Trading Settings", marker: "Paper trading rules" },
   { path: "/account", label: "Account & Settings", marker: "Groww connection" },
 ];

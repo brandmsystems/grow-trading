@@ -44,10 +44,10 @@ def _closed(acct_id: int, eng) -> list[dict]:
             "AND status='CLOSED' AND net IS NOT NULL ORDER BY exit_ts, id"), {"a": acct_id}).mappings()]
 
 
-def state(day: date, cfg=None, position: dict | None = None, mtm: float | None = None, eng=None) -> dict:
+def state(day: date, cfg=None, position: dict | None = None, mtm: float | None = None, eng=None, positions: list | None = None) -> dict:
     """Balance, available capital and today's risk figures.
 
-    position: the open paper position (entry_price, qty, stop_premium, side) if any; mtm: its open P&L.
+    position: the open paper position (entry_price, qty, stop_premium, side) if any; positions: all open ones; mtm: their open P&L.
     cfg: the engine config (risk_pct, daily_risk_pct, max_daily_loss) or None for defaults.
     """
     eng = eng or db.engine()
@@ -72,11 +72,11 @@ def state(day: date, cfg=None, position: dict | None = None, mtm: float | None =
         else:
             break
     invested = open_risk = 0.0
-    if position:
-        invested = position["entry_price"] * position["qty"] if position.get("side", "BUY") == "BUY" else 0.0
+    for position in (positions or ([position] if position else [])):     # one position, or every open position of a multi-position engine
+        invested += position["entry_price"] * position["qty"] if position.get("side", "BUY") == "BUY" else 0.0
         if position.get("stop_premium") is not None:
             r = (position.get("risk") or {})
-            open_risk = float(r.get("max_loss") or 0.0)
+            open_risk += float(r.get("max_loss") or 0.0)
     risk_pct = getattr(cfg, "risk_pct", 1.0)
     daily_pct = getattr(cfg, "daily_risk_pct", 0.0)
     loss_cap = getattr(cfg, "max_daily_loss", 0.0)

@@ -20,7 +20,7 @@ def client(monkeypatch):
 
 def test_config_has_the_brief_defaults_and_every_indicator(client):
     d = client.get("/api/bias/config").get_json()["data"]
-    assert d["running"] is False and d["defaults"]["max_trades_per_day"] == 20
+    assert d["running"] is False and d["defaults"]["max_trades_per_day"] == 0
     assert (d["defaults"]["timeframe"], d["defaults"]["bias_confirm_tf"]) == (5, 15)
     assert d["defaults"]["bias_allow"] == ["BUY_CE", "BUY_PE"]          # writing is off until you switch it on
     assert [i["key"] for i in d["indicators"]] == d["defaults"]["bias_indicators"] and len(d["indicators"]) == 12
@@ -40,7 +40,7 @@ def test_start_is_paper_or_replay_only_and_never_reaches_live(client, monkeypatc
     cfg, confirm = seen[0]
     assert cfg["trade_mode"] == "paper" and cfg["signal_mode"] == "bias"                             # not overridable
     assert cfg["timeframe"] == 15                                                                      # the analysis interval is a setting
-    assert cfg["bias_min_confidence"] == 70 and cfg["max_trades_per_day"] == 20 and "bogus" not in cfg and confirm == ""
+    assert cfg["bias_min_confidence"] == 70 and cfg["max_trades_per_day"] == 0 and "bogus" not in cfg and confirm == ""
 
 
 def test_start_with_an_invalid_setting_is_a_400_not_a_crash(client):
@@ -93,13 +93,13 @@ def test_accuracy_tally_counts_calls_neutral_and_flat_correctly():
 
 def test_continuous_automation_defaults_and_pause_need_a_running_engine(client, monkeypatch):
     d = client.get("/api/bias/config").get_json()["data"]["defaults"]
-    assert d["bias_min_confidence"] == 70 and d["profit_target_net"] == 1500
+    assert d["bias_min_confidence"] == 70 and d["profit_target_net"] == 0
     assert client.post("/api/bias/pause").status_code == 409 and client.post("/api/bias/resume").status_code == 409
     seen = []
     monkeypatch.setattr(live_manager, "start", lambda cfg, confirm="", day=None, speed=120: seen.append(cfg) or {"state": "waiting"})
     client.post("/api/bias/start", json={"config": {"profit_target_net": 2000}})
     client.post("/api/bias/start", json={})
-    assert seen[0]["profit_target_net"] == 2000 and seen[1]["profit_target_net"] == 1500 and seen[1]["bias_min_confidence"] == 70
+    assert seen[0]["profit_target_net"] == 2000 and seen[1]["profit_target_net"] == 0 and seen[1]["bias_min_confidence"] == 70
     r = client.post("/api/bias/start", json={"config": {"profit_target_net": -5}})
     assert r.status_code == 200          # start is mocked here: validation is covered in the engine tests
 
@@ -166,10 +166,10 @@ def test_config_offers_the_scored_components_and_the_specified_risk_preset(clien
     assert [c["key"] for c in d["scored_components"]] == ["trend", "ema", "vwap", "fvg", "momentum", "volume", "adr"]
     assert sum(c["max"] for c in d["scored_components"]) == 100
     p = d["presets"]["scored"]
-    assert (p["risk_pct"], p["target_rr"], p["stop_mode"], p["daily_risk_pct"], p["max_trades_per_day"], p["sc_min_score"]) == (0.5, 2.0, "atr", 1.5, 5, 80.0)
+    assert (p["risk_pct"], p["target_rr"], p["stop_mode"], p["daily_risk_pct"], p["max_trades_per_day"], p["sc_min_score"]) == (0.5, 2.0, "atr", 0.0, 5, 80.0)
     assert (p["timeframe"], p["bias_confirm_tf"]) == (5, 15)
     df = d["defaults"]
-    assert df["entry_strategy"] == "bias" and df["sc_min_score"] == 80.0 and df["max_trades_per_day"] == 20 and df["risk_pct"] == 1.0     # nothing changes unless the preset is used
+    assert df["entry_strategy"] == "bias" and df["sc_min_score"] == 80.0 and df["max_trades_per_day"] == 0 and df["risk_pct"] == 1.0     # nothing changes unless the preset is used
 
 
 def test_start_passes_the_scored_settings_through_and_still_cannot_reach_live(client, monkeypatch):

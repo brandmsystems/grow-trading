@@ -11,10 +11,11 @@ from flask import Blueprint, jsonify, request
 
 from app.api.common import api_error, json_body
 from app.config import settings as config
-from app.services.strategy import bias, confluence
+from app.services.strategy import bias, confluence, evidence
 from app.services.trading import bias_report
 from app.services.trading import engine as le
 from app.services.trading import manager as live_manager
+from app.services.trading import trading_settings
 
 bp = Blueprint("bias", __name__)
 
@@ -25,14 +26,24 @@ _FORM = ("timeframe", "bias_confirm_tf", "bias_indicators", "bias_min_confidence
          "stop_points", "entry_start", "cutoff", "exec_mode", "lots", "premarket_mode", "profit_target_net",
          "entry_strategy", "cf_factors", "cf_require", "cf_min_score", "cf_adr_filter", "cf_adr_period", "cf_adr_max_used",
          "cf_fvg_min_atr", "cf_fvg_max_age", "cf_htf", "sc_min_score", "sc_adr_period", "sc_adr_max_used", "sc_fvg_min_atr",
-         "sc_fvg_max_age", "sc_ctx_tf", "sc_stop_min_pct", "sc_stop_max_pct")
-DEFAULT_MAX_TRADES = 20      # the brief's default; the engine's own default (6) belongs to the older modes
+         "sc_fvg_max_age", "sc_ctx_tf", "sc_stop_min_pct", "sc_stop_max_pct", "max_open_positions", "max_open_risk_pct", "max_strategy_positions",
+         "max_strategy_risk_pct", "scan_min_quality", "scan_allow_unvalidated")
+DEFAULT_MAX_TRADES = 0       # no fixed daily trade count: the risk limits, the daily loss limit and the 15:00 square-off bound the day (the engine's own default (6) belongs to the older modes)
 DEFAULT_MIN_CONFIDENCE = 70.0    # continuous automation: entry needs a bias confidence of at least this %
-DEFAULT_PROFIT_TARGET = 1500.0   # continuous automation: exit one trade at this net profit (₹, after charges)
-# The scored strategy's starting risk, as specified: 0.5% of virtual capital per trade, 2R target, ATR stop, 1.5% daily loss limit,
+DEFAULT_PROFIT_TARGET = 0.0      # no fixed profit target: a trade exits by the strategy (stop-loss, risk-reward target, opposite signal, 15:00 square-off)
+# The scored strategy's starting risk, as specified: 0.5% of virtual capital per trade, 2R target, ATR stop, no daily loss limit,
 # at most 5 trades, one open position, a 5-minute entry confirmed by the 15-minute trend. Offered as one click on the page, never forced.
 SCORED_PRESET = {"timeframe": 5, "bias_confirm_tf": 15, "risk_pct": 0.5, "target_rr": 2.0, "stop_mode": "atr", "stop_atr": 1.0,
-                 "daily_risk_pct": 1.5, "max_trades_per_day": 5, "profit_target_net": 0.0, "sc_min_score": 80.0}
+                 "daily_risk_pct": 0.0, "max_trades_per_day": 5, "profit_target_net": 0.0, "sc_min_score": 80.0}
+
+# The scanner (several strategies, several concurrent positions): one click on the page, never forced. Every limit is configurable.
+SCAN_COMPONENTS = (("trend", "Trend confirmation", 15), ("signal", "Entry signal quality", 15), ("vwap_ema", "VWAP / EMA alignment", 10),
+                   ("rsi_macd", "RSI / MACD confirmation", 10), ("volume", "Volume confirmation", 5), ("structure", "Market structure / support-resistance", 10),
+                   ("liquidity", "Option liquidity and spread", 10), ("greeks", "IV and Greeks validation", 5),
+                   ("evidence", "Historical out-of-sample result", 10), ("reward_risk", "Risk/reward after costs", 10))
+SCANNER_PRESET = {"entry_strategy": "scanner", "timeframe": 5, "bias_confirm_tf": 15, "max_open_positions": 3, "max_strategy_positions": 1,
+                  "max_open_risk_pct": 3.0, "max_strategy_risk_pct": 1.5, "scan_min_quality": 55.0, "max_trades_per_day": 0, "risk_pct": 0.5,
+                  "daily_risk_pct": 0.0, "max_daily_loss": 0.0}
 
 _cache: dict = {"key": None, "at": 0.0, "value": None}
 _cache_lock = threading.Lock()
@@ -45,7 +56,8 @@ def _engine():
 
 def defaults() -> dict:
     d = asdict(le.EngineConfig(signal_mode="bias", trade_mode="paper", timeframe=5, max_trades_per_day=DEFAULT_MAX_TRADES))
-    d.update(bias_min_confidence=DEFAULT_MIN_CONFIDENCE, profit_target_net=DEFAULT_PROFIT_TARGET)
+    d.update(bias_min_confidence=DEFAULT_MIN_CONFIDENCE, profit_target_net=DEFAULT_PROFIT_TARGET,
+             daily_risk_pct=0.0, max_daily_loss=0.0)      # no daily loss halt by default: a good entry is taken whenever it comes (set a limit to get one back)
     return {k: d[k] for k in _FORM}
 
 
@@ -105,7 +117,12 @@ def bias_config():
         "confluence_factors": [{"key": k, "label": v[0], "weight": v[1]} for k, v in confluence.FACTORS.items()],
         "adr_periods": list(confluence.ADR_PERIODS),
         "scored_components": [{"key": k, "label": v[0], "max": v[1]} for k, v in confluence.SC_COMPONENTS.items()],
-        "presets": {"scored": SCORED_PRESET},
+        "presets": {"scored": SCORED_PRESET, "scanner": SCANNER_PRESET},
+        "scanner": {"strategies": [{"key": k, "label": v["label"], "kind": v["kind"], "evidence": evidence.evidence_for(k)}
+                                   for k, v in trading_settings.STRATEGIES.items()],
+                    "components": [{"key": k, "label": lab, "max": mx} for k, lab, mx in SCAN_COMPONENTS],
+                    "note": "The quality score counts sound conditions met out of 100. It is not a probability of winning, and no strategy has shown "
+                            "an edge after costs: strategies with a negative or missing validated result trade only if you allow them."},
         "note": "Weights and thresholds are fixed starting values, not fitted to any result. "
                 "Confidence means agreement between indicators, not a probability of winning."}})
 
@@ -118,7 +135,7 @@ def bias_status():
     s = eng.status()
     return jsonify({"ok": True, "data": {"running": True, "state": s["state"], "halt_reason": s["halt_reason"],
                                          "trade_mode": s["config"]["trade_mode"], "day": s["day"], "now": s["now"],
-                                         "position": s["position"], "realised_today": s["realised_today"],
+                                         "position": s["position"], "positions": s["positions"], "realised_today": s["realised_today"],
                                          "bias": s.get("bias"), "events": s["events"][:40], "next_eval": s["next_eval"],
                                          "nifty": s["nifty"], "conn_error": s["conn_error"],
                                          "session_id": s["session_id"], "config": s["config"]}})
